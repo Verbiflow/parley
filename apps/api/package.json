@@ -1,0 +1,20 @@
+{
+  "name": "@parley/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Parley's HTTP app: OAuth 2.1 authorization server, the MCP endpoint, and (later) web pages and the session pool.",
+  "exports": { ".": "./src/app.ts" },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\"",
+    "dev": "node src/server.ts"
+  },
+  "dependencies": {
+    "@parley/auth": "*",
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "hono": "^4.6.14",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  }
+}
