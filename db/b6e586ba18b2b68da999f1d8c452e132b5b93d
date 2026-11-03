@@ -1,0 +1,45 @@
+packages/channels/src/index.ts
+  s_64fea0cc107945::t_8ba1cf11946045 1-16
+packages/channels/test/conformance.test.ts
+  s_64fea0cc107945::t_963b6c336aebf3 1-21
+apps/api/src/mcp/server.ts
+  s_64fea0cc107945::t_e257ef9ea45241 16-27
+  s_64fea0cc107945::t_7fc7d5597cae4d 15
+apps/api/package.json
+  s_64fea0cc107945::t_c945a0f2b01694 14
+packages/channels/src/fake.ts
+  s_64fea0cc107945::t_cff910f2864cfe 1-77
+packages/channels/package.json
+  s_64fea0cc107945::t_ba06c0b4d1fa31 1-15
+apps/api/test/channels.test.ts
+  s_64fea0cc107945::t_b99c645a12f012 1-48
+packages/channels/src/contract.ts
+  s_64fea0cc107945::t_2f5ecba03d0d4b 1-90
+packages/channels/src/conformance.ts
+  s_64fea0cc107945::t_ba82ac665e51a6 1-144
+packages/channels/src/registry.ts
+  s_64fea0cc107945::t_6106890e9d9f43 1-12
+apps/api/test/support.ts
+  s_64fea0cc107945::t_e124db92086f9c 30
+  s_64fea0cc107945::t_42831a9471bd95 6,13
+apps/api/src/context.ts
+  s_64fea0cc107945::t_d8903dd5f685d4 2,8-10,17,20,29
+package-lock.json
+  s_64fea0cc107945::t_7a90a2fefa6734 28,103-106,1460-1463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "dbb6e586ba18b2b68da999f1d8c452e132b5b93d",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
