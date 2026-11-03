@@ -8,7 +8,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm test --workspaces --if-present",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "migrate": "node scripts/migrate.ts",
+    "dev": "npm run dev -w @parley/api",
+    "try:whatsapp": "node scripts/try-whatsapp.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
