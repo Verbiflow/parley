@@ -1,0 +1,40 @@
+apps/api/src/server.ts
+  s_64fea0cc107945::t_b98c9fae14bb9f 1-12
+apps/api/src/oauth/store.ts
+  s_64fea0cc107945::t_c35aae628aefb6 1-73
+apps/api/test/oauth-mcp.test.ts
+  s_64fea0cc107945::t_4172440704df79 1-116
+packages/auth/migrations/0008_oauth.sql
+  s_64fea0cc107945::t_d5d30de485b06e 1-43
+apps/api/src/oauth/routes.ts
+  s_64fea0cc107945::t_ef2a8656158453 1-81,83-190
+  s_64fea0cc107945::t_2176e38b922c42 82
+apps/api/package.json
+  s_64fea0cc107945::t_b41802d9f8935a 1-20
+apps/api/test/support.ts
+  s_64fea0cc107945::t_0b197faa962b97 1-46
+apps/api/src/app.ts
+  s_64fea0cc107945::t_36b857a4b619ce 1-39
+apps/api/src/context.ts
+  s_64fea0cc107945::t_8547f31bcd479e 1-28
+apps/api/src/mcp/server.ts
+  s_64fea0cc107945::t_8c8c09018295b0 1-32
+package-lock.json
+  s_64fea0cc107945::t_0f00364da723f9 21-97,108-716,719-722,724-725,728-739,749-928,1018-1026,1066-1301,1311-1359,1381-1419,1438-1446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "685d19ca5469f6fc972ec289af2637f79c0935a0",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
