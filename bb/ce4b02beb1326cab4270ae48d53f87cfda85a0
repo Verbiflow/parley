@@ -1,0 +1,54 @@
+packages/channels/src/whatsapp/index.ts
+  s_64fea0cc107945::t_8e3f1c9e8aff2d 1-68
+apps/api/test/sessions.test.ts
+  s_64fea0cc107945::t_cddee7ab4c01d5 1-67
+packages/auth/migrations/0009_connections.sql
+  s_64fea0cc107945::t_7e362413ed9d6c 1-20
+packages/channels/src/whatsapp/auth-state.ts
+  s_64fea0cc107945::t_006380900b544e 1-36
+apps/api/src/mcp/server.ts
+  s_64fea0cc107945::t_6060349bc0e7bb 2,4,9-17,19-21,25,29-44,46-48,50-63,68,70-72,74-101
+apps/api/src/app.ts
+  s_64fea0cc107945::t_cd5139745cbc54 2,7
+  s_64fea0cc107945::t_8bab8ee015dd93 20-41
+  s_64fea0cc107945::t_9e44b9a9a8e09a 64-87
+apps/api/src/channels.ts
+  s_64fea0cc107945::t_9af9fc2044ab41 1-8
+apps/api/src/server.ts
+  s_64fea0cc107945::t_d8599235b2916e 5,7-8,11-13
+apps/api/src/sessions/store.ts
+  s_64fea0cc107945::t_2d2088ef60391c 1-54
+apps/api/src/context.ts
+  s_64fea0cc107945::t_44c8fe1c4d22a8 19,32
+  s_64fea0cc107945::t_e5459f48c42339 3
+packages/channels/package.json
+  s_64fea0cc107945::t_65a6412960a725 17
+  s_64fea0cc107945::t_e4b902e603ec29 10-11,15-16
+packages/channels/test/whatsapp-auth.test.ts
+  s_64fea0cc107945::t_73734d3240b481 1-27
+apps/api/src/sessions/actor.ts
+  s_64fea0cc107945::t_30a92e1e4f1e0c 65-75
+  s_64fea0cc107945::t_11aed2a4074470 35,37-39
+  s_64fea0cc107945::t_7467b27e399d0a 18-19,22
+  s_64fea0cc107945::t_09368f7d224f8f 1-17,20-21,23-34,36,40-64,76-169
+apps/api/package.json
+  s_64fea0cc107945::t_efe94f88dc7de6 19,21-23
+package-lock.json
+  s_64fea0cc107945::t_19895d46698cc9 31,33-35,38-109,122-718,780-865,887-934,948-959,993-1052,1099-1111,1141-1190,1262-1267,1285-1302,1312-1327,1348-1353,1397-1411,1545-1562,1584-1653,1681-1689,1751-1777,1799-1804,1825-1837,1854-1873,1898-1906,1940-1975,2005-2069,2072-2075,2078-2082,2085-2088,2148-2156,2182-2217,2227-2235,2344-2380,2390-2398,2438-2476,2494-2537,2554-2559,2588-2605,2615-2620,2637-2645,2652-2664,2710-2715,2722-2771,2865-2873,2892-2942,2952-2975,3021-3032,3072-3097,3104-3124,3134-3174,3204-3207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "bbce4b02beb1326cab4270ae48d53f87cfda85a0",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
