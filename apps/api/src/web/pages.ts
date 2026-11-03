@@ -84,7 +84,7 @@ export function landingPage(opts: { workos: boolean; dev: boolean }): string {
     <main class="signin">
       ${LOGO}
       <h1>Your messaging, ready for your agents.</h1>
-      <p class="sub">Link WhatsApp once. Your agents send and receive over MCP — you never hand them your phone.</p>
+      <p class="sub">Link WhatsApp once. Your agents send and receive over MCP. You never hand them your phone.</p>
       <div class="tiles">${["whatsapp", "telegram", "instagram", "linkedin"].map((id) => `<span class="tile">${channelMark(id, 22)}</span>`).join("")}</div>
       <section class="panel">${signin}${dev}</section>
     </main>`, { css: SIGNIN_CSS })
@@ -97,7 +97,7 @@ const SIGNIN_CSS = `
 .signin .sub{font-size:15px;line-height:23px;color:var(--muted);max-width:42ch;margin:0}
 .tiles{display:flex;gap:10px;margin-top:6px}
 .tile{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1)}
-.signin .panel{width:100%;max-width:340px;margin-top:10px;display:flex;flex-direction:column;gap:12px;padding:20px;border:1px solid var(--line-2);border-radius:14px;background:var(--bg-1);text-align:left}
+.signin .panel{width:100%;max-width:300px;margin-top:14px;display:flex;flex-direction:column;gap:12px;text-align:left}
 .dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
 .or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
 `
