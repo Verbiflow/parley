@@ -22,35 +22,51 @@ export const whatsappChannel: Channel = {
 
   async open({ state, emit }: OpenOptions): Promise<LiveConnection> {
     const auth = makeAuthState(state)
-    const sock = makeWASocket({
-      auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
-      logger: SILENT,
-      browser: ["Parley", "Chrome", "1.0"],
-      syncFullHistory: false,
-    })
+    let sock!: ReturnType<typeof makeWASocket>
+    let stopped = false
 
-    sock.ev.on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
+    const connect = () => {
+      sock = makeWASocket({
+        auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
+        logger: SILENT,
+        browser: ["Parley", "Chrome", "1.0"],
+        syncFullHistory: false,
+      })
 
-    sock.ev.on("connection.update", (u) => {
-      if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
-      if (u.connection === "open") emit({ type: "open", handle: sock.user?.id ?? "" })
-      if (u.connection === "close") {
-        const code = (u.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode
-        emit({ type: "closed", reason: code === DisconnectReason.loggedOut ? "logged out" : `closed (${code ?? "?"})` })
-      }
-    })
+      sock.ev.on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
 
-    sock.ev.on("messages.upsert", ({ messages }) => {
-      for (const m of messages) {
-        if (m.key.fromMe || !m.message) continue
-        const text = m.message.conversation ?? m.message.extendedTextMessage?.text ?? ""
-        const jid = m.key.remoteJid ?? ""
-        emit({
-          type: "message",
-          message: { id: m.key.id ?? crypto.randomUUID(), threadId: jid, from: m.key.participant ?? jid, text, at: new Date(Number(m.messageTimestamp) * 1000 || Date.now()).toISOString() },
-        })
-      }
-    })
+      sock.ev.on("connection.update", (u) => {
+        if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
+        if (u.connection === "open") emit({ type: "open", handle: sock.user?.id ?? "" })
+        if (u.connection === "close") {
+          if (stopped) return
+          const code = (u.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode
+          if (code === DisconnectReason.loggedOut) {
+            emit({ type: "closed", reason: "logged out" })
+            return
+          }
+          // A transient close: an unscanned QR timing out, WhatsApp's post-scan restart (515), or a dropped
+          // socket. Reconnect to re-arm the QR, finish linking, or come back online — reusing the saved creds.
+          setTimeout(() => {
+            if (!stopped) connect()
+          }, 1000)
+        }
+      })
+
+      sock.ev.on("messages.upsert", ({ messages }) => {
+        for (const m of messages) {
+          if (m.key.fromMe || !m.message) continue
+          const text = m.message.conversation ?? m.message.extendedTextMessage?.text ?? ""
+          const jid = m.key.remoteJid ?? ""
+          emit({
+            type: "message",
+            message: { id: m.key.id ?? crypto.randomUUID(), threadId: jid, from: m.key.participant ?? jid, text, at: new Date(Number(m.messageTimestamp) * 1000 || Date.now()).toISOString() },
+          })
+        }
+      })
+    }
+
+    connect()
 
     return {
       async send(to, content) {
@@ -58,9 +74,11 @@ export const whatsappChannel: Channel = {
         return { id: res?.key?.id ?? "" }
       },
       async logout() {
+        stopped = true
         await sock.logout().catch(() => {})
       },
       async close() {
+        stopped = true
         sock.end(undefined)
       },
     }

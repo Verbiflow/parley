@@ -3,6 +3,8 @@ import QRCode from "qrcode"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import type { AppContext } from "./context.ts"
 import { oauthRoutes } from "./oauth/routes.ts"
+import { webRoutes } from "./web/routes.ts"
+import { linkPage } from "./web/pages.ts"
 import { buildMcpServer } from "./mcp/server.ts"
 import { ConnectError } from "./sessions/actor.ts"
 
@@ -16,11 +18,13 @@ export function makeApp(ctx: AppContext): Hono {
 
   app.get("/health", (c) => c.json({ ok: true, env: ctx.config.env, version: ctx.config.version }))
   app.route("/", oauthRoutes(ctx))
+  app.route("/", webRoutes(ctx))
 
   // The link page: the user opens the link_url from `connect`, finishes linking (scans the QR), and watches it go
   // live. Access is the unguessable connection id (a capability URL); it needs no sign-in of its own.
   app.get("/link/:id/status", async (c) => {
     try {
+      await ctx.sessions.ensureLinking(c.req.param("id")).catch(() => {})
       const view = await ctx.sessions.linkView(c.req.param("id"))
       let qrSvg: string | undefined
       if (view.link?.method === "qr") qrSvg = await QRCode.toString(view.link.data, { type: "svg", margin: 1, width: 280 })
@@ -60,28 +64,4 @@ export function makeApp(ctx: AppContext): Hono {
   })
 
   return app
-}
-
-/** A tiny self-refreshing link page: shows the QR while linking, flips to "Connected" when the socket opens. */
-function linkPage(id: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Link a channel · Parley</title></head>
-<body style="font-family:system-ui;max-width:28rem;margin:3rem auto;text-align:center">
-<h1>Link your account</h1>
-<div id="body"><p>Loading…</p></div>
-<script>
-const id=${JSON.stringify(id)}
-async function tick(){
-  try{
-    const r=await fetch('/link/'+id+'/status'); const d=await r.json()
-    const b=document.getElementById('body')
-    if(d.status==='connected'){ b.innerHTML='<h2>✅ Connected</h2><p>You can close this tab.</p>'; return }
-    if(d.qr_svg){ b.innerHTML='<p>Scan this with '+(d.channel||'your app')+':</p>'+d.qr_svg }
-    else if(d.link_method){ b.innerHTML='<p>Linking ('+d.link_method+')…</p>' }
-    else { b.innerHTML='<p>Preparing the link…</p>' }
-  }catch(e){}
-  setTimeout(tick,2000)
-}
-tick()
-</script></body></html>`
 }
