@@ -1,7 +1,10 @@
 import { Hono } from "hono"
 import { z } from "zod"
 import { base64url, hashSecret, newSecret, pkceMatches, store } from "@parley/auth"
+import type { Context } from "hono"
 import type { AppContext } from "../context.ts"
+import { currentUserId, rememberNext } from "../web/session.ts"
+import { consentPage } from "../web/pages.ts"
 import { createAuthCode, createRefreshToken, claimAuthCode, getClient, registerClient, rotateRefreshToken } from "./store.ts"
 
 /**
@@ -9,8 +12,9 @@ import { createAuthCode, createRefreshToken, claimAuthCode, getClient, registerC
  * client registration + PKCE). Public clients only: no client secret, PKCE (S256) required. The access token is the
  * standard EdDSA connection token; refresh tokens rotate on use.
  *
- * Sign-in: locally a tiny dev form stands in for the upstream IdP (WorkOS/Google/GitHub), so the flow is exercisable
- * end to end without external services. Wiring WorkOS into `/authorize` is a later step.
+ * Sign-in: with WorkOS configured, `/authorize` uses the person's dashboard sign-in (sending them through WorkOS if
+ * they aren't signed in) and asks them to allow the agent. Without WorkOS (local dev, tests), a tiny email form stands
+ * in for the IdP so the flow is exercisable end to end without external services.
  */
 
 const AUTH_CODE_SECONDS = 600
@@ -70,41 +74,68 @@ export function oauthRoutes(ctx: AppContext): Hono {
   })
 
   // --- Authorization endpoint ------------------------------------------------
-  // GET renders the dev sign-in form (local only). The hidden fields carry the OAuth request forward.
-  app.get("/oauth/authorize", async (c) => {
-    const err = await validateAuthorize(ctx, c.req.query())
-    if (err) return c.json(err, 400)
-    if (!ctx.config.localProvider) return c.text("Sign-in is only wired for local dev in this build.", 501)
-    const q = c.req.query()
-    return c.html(signInForm(q))
-  })
+  const realSignIn = Boolean(ctx.config.workos)
+  const devSignIn = ctx.config.localProvider && !realSignIn
 
-  // POST from the dev form: sign in (upsert a local account by email) and issue the code.
-  app.post("/oauth/authorize", async (c) => {
-    if (!ctx.config.localProvider) return c.text("Sign-in is only wired for local dev in this build.", 501)
-    const form = Object.fromEntries((await c.req.formData()).entries()) as Record<string, string>
-    const err = await validateAuthorize(ctx, form)
-    if (err) return c.json(err, 400)
-    const email = (form.email ?? "").trim().toLowerCase()
-    if (!/^[^@\s]+@[^@\s]+$/.test(email)) return c.json({ error: "invalid_request", error_description: "a valid email is required" }, 400)
-
-    const account = await store.upsertAccount(ctx.sql, { subject: `local:${email}`, email, name: email.split("@")[0]!, signedInWith: "local" })
+  /** Issue a one-time code for `userId` and send the agent back to its redirect URI. */
+  async function approve(c: Context, form: Record<string, string>, userId: string): Promise<Response> {
     const code = newSecret("parley_sc")
-    const sessionId = crypto.randomUUID()
     await createAuthCode(ctx.sql, {
       codeHash: await hashSecret(code),
       clientId: form.client_id!,
-      userId: account.id,
+      userId,
       redirectUri: form.redirect_uri!,
       codeChallenge: form.code_challenge!,
       scope: form.scope ?? null,
-      sessionId,
+      sessionId: crypto.randomUUID(),
       expiresAt: new Date(Date.now() + AUTH_CODE_SECONDS * 1000),
     })
     const to = new URL(form.redirect_uri!)
     to.searchParams.set("code", code)
     if (form.state) to.searchParams.set("state", form.state)
     return c.redirect(to.toString(), 302)
+  }
+
+  // GET: signed in → "Allow <agent>?"; signed out → sign in first, then come back here. (Dev: the email form.)
+  app.get("/oauth/authorize", async (c) => {
+    const q = c.req.query()
+    const err = await validateAuthorize(ctx, q)
+    if (err) return c.json(err, 400)
+    if (realSignIn) {
+      const userId = await currentUserId(c, ctx)
+      if (!userId) {
+        const url = new URL(c.req.url)
+        rememberNext(c, ctx, url.pathname + url.search)
+        return c.redirect("/auth/start")
+      }
+      const [client, account] = await Promise.all([getClient(ctx.sql, q.client_id!), store.accountById(ctx.sql, userId)])
+      return c.html(consentPage({ clientName: client?.clientName ?? null, redirectUri: q.redirect_uri!, email: account?.email ?? "", fields: q }))
+    }
+    if (!devSignIn) return c.text("Sign-in isn't configured. Set WORKOS_CLIENT_ID and WORKOS_API_KEY.", 501)
+    return c.html(signInForm(q))
+  })
+
+  app.post("/oauth/authorize", async (c) => {
+    const form = Object.fromEntries((await c.req.formData()).entries()) as Record<string, string>
+    const err = await validateAuthorize(ctx, form)
+    if (err) return c.json(err, 400)
+    if (realSignIn) {
+      // The session cookie is SameSite=Lax, so a cross-site form can't post here as the signed-in person.
+      const userId = await currentUserId(c, ctx)
+      if (!userId) return c.text("Sign in first.", 401)
+      if (form.decision !== "allow") {
+        const to = new URL(form.redirect_uri!)
+        to.searchParams.set("error", "access_denied")
+        if (form.state) to.searchParams.set("state", form.state)
+        return c.redirect(to.toString(), 302)
+      }
+      return approve(c, form, userId)
+    }
+    if (!devSignIn) return c.text("Sign-in isn't configured.", 501)
+    const email = (form.email ?? "").trim().toLowerCase()
+    if (!/^[^@\s]+@[^@\s]+$/.test(email)) return c.json({ error: "invalid_request", error_description: "a valid email is required" }, 400)
+    const account = await store.upsertAccount(ctx.sql, { subject: `local:${email}`, email, name: email.split("@")[0]!, signedInWith: "local" })
+    return approve(c, form, account.id)
   })
 
   // --- Token endpoint --------------------------------------------------------

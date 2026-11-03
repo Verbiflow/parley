@@ -9,6 +9,7 @@ export type {
   LiveConnection,
   OpenOptions,
   InboundMessage,
+  Chat,
   OutboundContent,
   ChannelSimulator,
   ChannelFake,

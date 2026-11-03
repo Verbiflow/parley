@@ -1,6 +1,8 @@
 import { SignInKey, serverSeal, secrets, type IdentityConfig, type Sql, type SecretSeal } from "@parley/auth"
 import { channelById, type Channel, type ChannelEvent, type LinkMethod, type LiveConnection } from "@parley/channels"
+import type { InboundMessage } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, type Connection } from "./store.ts"
+import { upsertChats, touchChat, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -12,7 +14,17 @@ type Entry = {
   accountId: string
   link: { method: LinkMethod; data: string } | undefined
   loggingOut: boolean
+  /** Events are applied one at a time, in order, so a message never lands before its chat row exists. */
+  queue: Promise<void>
+  /**
+   * Until the person first picks chats, recent history is held here (not in the DB) so the chats they pick can be
+   * backfilled. Dropped once they've chosen. Bounded per chat and in total.
+   */
+  history: Map<string, InboundMessage[]> | undefined
 }
+
+const HISTORY_PER_CHAT = 50
+const HISTORY_CHATS = 300
 
 type StatusView = { status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }
 type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
@@ -32,8 +44,8 @@ export interface Coordinator {
 }
 
 export class ConnectError extends Error {
-  readonly code: "unknown_channel" | "not_found" | "forbidden" | "not_connected"
-  constructor(code: "unknown_channel" | "not_found" | "forbidden" | "not_connected", message: string) {
+  readonly code: "unknown_channel" | "not_found" | "forbidden" | "not_connected" | "not_synced"
+  constructor(code: "unknown_channel" | "not_found" | "forbidden" | "not_connected" | "not_synced", message: string) {
     super(message)
     this.name = "ConnectError"
     this.code = code
@@ -95,7 +107,8 @@ export class Sessions {
   async ensureLinking(connectionId: string): Promise<void> {
     if (this.#live.has(connectionId)) return
     const conn = await getConnection(this.ctx.sql, connectionId)
-    if (!conn || conn.status === "connected") return
+    // Only a link that's still pending (or was dropped mid-link) re-arms; a disconnected one stays disconnected.
+    if (!conn || (conn.status !== "linking" && conn.status !== "closed")) return
     if (this.ctx.coordinator && (await this.ctx.coordinator.ownerOf(connectionId))) return
     const channel = channelById(this.ctx.channels, conn.channel)
     if (!channel) return
@@ -118,6 +131,39 @@ export class Sessions {
     const routed = await this.#route(connectionId, { op: "logout", args: {} })
     if (routed.ok) return
     await this.#localLogout(connectionId)
+  }
+
+  /** Every chat on the connection (for the person choosing what to sync), or only synced ones (what agents see). */
+  async chats(accountId: string, connectionId: string, opts: { syncedOnly?: boolean } = {}): Promise<ChatRow[]> {
+    await this.#owned(accountId, connectionId)
+    return listChats(this.ctx.sql, connectionId, opts)
+  }
+
+  /** Set exactly which chats are synced. Newly synced chats are backfilled from held history; un-synced ones are wiped. */
+  async chooseChats(accountId: string, connectionId: string, chatIds: string[]): Promise<void> {
+    await this.#owned(accountId, connectionId)
+    const turnedOn = await setSyncedChats(this.ctx.sql, connectionId, chatIds)
+    const routed = await this.#route(connectionId, { op: "flushHistory", args: { chatIds: turnedOn } })
+    if (!routed.ok) await this.#flushHistory(connectionId, turnedOn)
+  }
+
+  /** Recent messages in a synced chat, oldest first. An unsynced chat reads as not found — agents can't see it. */
+  async messages(accountId: string, connectionId: string, chatId: string, opts: { limit: number; before?: string | undefined }): Promise<{ chat: ChatRow; messages: StoredMessage[] }> {
+    await this.#owned(accountId, connectionId)
+    const chat = await getChat(this.ctx.sql, connectionId, chatId)
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — the account holder chooses which chats are synced")
+    return { chat, messages: await readMessages(this.ctx.sql, connectionId, chatId, opts) }
+  }
+
+  /** Messages across all the account's synced chats on connected channels, newest first (see `inbox`). */
+  async inbox(accountId: string, opts: InboxFilter & { limit: number; before?: string | undefined }): Promise<InboxMessage[]> {
+    if (opts.connectionId) await this.#owned(accountId, opts.connectionId)
+    return inbox(this.ctx.sql, accountId, opts)
+  }
+
+  async inboxChats(accountId: string, opts: InboxFilter = {}): Promise<InboxChat[]> {
+    if (opts.connectionId) await this.#owned(accountId, opts.connectionId)
+    return inboxChats(this.ctx.sql, accountId, opts)
   }
 
   /** On boot, re-open live connections this worker will own (those nobody else holds). */
@@ -156,6 +202,9 @@ export class Sessions {
       case "logout":
         await this.#localLogout(connId)
         return null
+      case "flushHistory":
+        await this.#flushHistory(connId, (args.chatIds as string[]) ?? [])
+        return null
       default:
         throw new Error(`unknown op ${op}`)
     }
@@ -175,9 +224,13 @@ export class Sessions {
   }
 
   async #open(channel: Channel, connectionId: string, accountId: string, state: string | undefined): Promise<Entry> {
-    const entry: Entry = { live: undefined, channel: channel.id, accountId, link: undefined, loggingOut: false }
+    const chosen = await chatsChosen(this.ctx.sql, connectionId)
+    const entry: Entry = { live: undefined, channel: channel.id, accountId, link: undefined, loggingOut: false, queue: Promise.resolve(), history: chosen ? undefined : new Map() }
     this.#live.set(connectionId, entry)
-    const live = await channel.open({ connectionId, state, emit: (event) => void this.#onEvent(connectionId, event).catch(() => {}) })
+    const emit = (event: ChannelEvent) => {
+      entry.queue = entry.queue.then(() => this.#onEvent(connectionId, event)).catch(() => {})
+    }
+    const live = await channel.open({ connectionId, state, emit })
     entry.live = live
     await this.ctx.coordinator?.claim(connectionId)
     return entry
@@ -197,14 +250,41 @@ export class Sessions {
       case "state":
         await this.#saveCreds(entry.accountId, entry.channel, connectionId, event.state)
         break
-      case "message":
+      case "chats":
+        await upsertChats(this.ctx.sql, connectionId, event.chats)
         break
+      case "message": {
+        const m = event.message
+        await touchChat(this.ctx.sql, connectionId, m.threadId, m.at)
+        await saveMessages(this.ctx.sql, connectionId, [m])
+        if (entry.history) this.#hold(entry.history, m)
+        break
+      }
       case "closed":
         await setStatus(this.ctx.sql, connectionId, entry.loggingOut ? "logged_out" : "closed")
         this.#live.delete(connectionId)
         await this.ctx.coordinator?.release(connectionId)
         break
     }
+  }
+
+  #hold(history: Map<string, InboundMessage[]>, m: InboundMessage): void {
+    let list = history.get(m.threadId)
+    if (!list) {
+      if (history.size >= HISTORY_CHATS) return
+      history.set(m.threadId, (list = []))
+    }
+    list.push(m)
+    if (list.length > HISTORY_PER_CHAT) list.splice(0, list.length - HISTORY_PER_CHAT)
+  }
+
+  /** Write held history for the newly synced chats, then stop holding history (the person has made their choice). */
+  async #flushHistory(connectionId: string, chatIds: string[]): Promise<void> {
+    const entry = this.#live.get(connectionId)
+    if (!entry?.history) return
+    const held = chatIds.flatMap((id) => entry.history!.get(id) ?? [])
+    entry.history = undefined
+    await saveMessages(this.ctx.sql, connectionId, held)
   }
 
   async #localLogout(connectionId: string): Promise<void> {
