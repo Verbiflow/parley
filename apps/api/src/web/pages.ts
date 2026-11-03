@@ -5,7 +5,7 @@ import type { Availability, Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
   CHANNELS, LOGO, agentMark, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
-  mark, pageHead, section, shell, stamp, status, until, type Tone, type Viewer,
+  mark, pageHead, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
 export type { Viewer } from "./ui.ts"
@@ -373,7 +373,7 @@ export function connectionPage(opts: {
             <datalist id="tzs">${["UTC", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Madrid", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Africa/Lagos"].map((z) => `<option value="${z}">`).join("")}</datalist>
             <div><button class="btn line sm" type="submit">Save</button></div>
           </form>`)}
-        ${section("Network", network, `<a href="/app/network">manage</a>`)}
+        ${SHOW_NETWORK ? section("Network", network, `<a href="/app/network">manage</a>`) : ""}
       </div>
     </div>`,
   })
