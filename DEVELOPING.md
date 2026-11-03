@@ -41,6 +41,27 @@ npm run typecheck  # just the types
   dropped when the file finishes. Real Postgres, no mocks for the DB layer.
 - From Phase 3, every channel's `Fake` must pass the shared **conformance suite** — no real account needed in CI.
 
+## Try WhatsApp end to end
+
+With Node 24 + a local Postgres + Redis running:
+
+```sh
+createdb parley   # or: psql -c 'create database parley'
+export PARLEY_ENV=local
+export DATABASE_URL=postgres://postgres@127.0.0.1:5432/parley
+export PUBLIC_URL=http://127.0.0.1:8787
+
+npm run migrate            # apply the schema
+npm run dev                # start the API on :8787 (leave running)
+
+# in another terminal — drives the agent flow, prints a link URL to open:
+EMAIL=you@example.com npm run try:whatsapp -- +15551234567
+```
+
+`try:whatsapp` signs in over OAuth, calls the `connect` MCP tool, and prints a `link_url`. Open it in a browser,
+scan the QR from **WhatsApp → Linked devices → Link a device**, and the page flips to "Connected". If you passed a
+phone number, it then sends that number a test message. (The QR itself is verified in dev; linking needs your phone.)
+
 ## Configuration
 
 See `.env.example`. Locally, `PARLEY_ENV=local` supplies public test keys for `SIGN_IN_KEY` and
