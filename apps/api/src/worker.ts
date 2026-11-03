@@ -8,6 +8,7 @@ import type { AppContext } from "./context.ts"
 import { Transactor } from "./db/transactor.ts"
 import { LIMITS, type RateLimiter } from "./ratelimit.ts"
 import { Exits } from "./sessions/exits.ts"
+import { marketingPage } from "./web/pages.ts"
 import { RemoteSessions } from "./sessions/remote.ts"
 
 /**
@@ -64,9 +65,26 @@ function bindingLimiter(env: Env): RateLimiter {
 let config: IdentityConfig | undefined
 let exits: Exits | undefined
 
+/**
+ * The marketing site shares this Worker: `SITE_HOST` (itsparley.com) serves the landing page and sends every other
+ * path to the app; `www.` redirects to it. Neither touches the database.
+ */
+function site(url: URL, siteHost: string, appUrl: string): Response | undefined {
+  if (url.hostname === `www.${siteHost}`) return Response.redirect(`https://${siteHost}${url.pathname}${url.search}`, 301)
+  if (url.hostname !== siteHost) return undefined
+  if (url.pathname !== "/") return Response.redirect(`${appUrl}${url.pathname}${url.search}`, 302)
+  return new Response(marketingPage({ appUrl }), {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
     config ??= readConfig(Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === "string")) as NodeJS.ProcessEnv)
+    if (env.SITE_HOST) {
+      const page = site(new URL(request.url), String(env.SITE_HOST), config.publicUrl ?? "https://app.itsparley.com")
+      if (page) return page
+    }
     exits ??= new Exits(config)
     // Connections are per request (Workers can't share sockets across requests); Hyperdrive pools the real ones.
     const db = new RequestDatabase(env.HYPERDRIVE.connectionString)
