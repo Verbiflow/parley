@@ -25,5 +25,5 @@ tmp=$(mktemp /run/parley/env.XXXXXX)
   echo "WORKOS_API_KEY=$(get WORKOS_API_KEY)"
   echo "SESSIONS_SECRET=$(get SESSIONS_SECRET)"
 } > "$tmp"
-chown root:parley "$tmp"
+chown root:parley "$tmp" && chmod 640 "$tmp"   # mktemp creates 0600 regardless of umask
 mv "$tmp" /run/parley/env
