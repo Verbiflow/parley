@@ -5,7 +5,7 @@ import { migrate, RequestDatabase, readConfig, type IdentityConfig, type Sql } f
 import { MIGRATIONS } from "@parley/auth/migrate"
 import type { Channel } from "@parley/channels"
 import { makeApp } from "../src/app.ts"
-import { makeContext, type AppContext } from "../src/context.ts"
+import { makeContext, type NodeAppContext as AppContext } from "../src/context.ts"
 
 const ADMIN_URL = process.env.DATABASE_ADMIN_URL ?? "postgres://postgres@127.0.0.1:5432/postgres"
 export const REDIS_URL = process.env.REDIS_URL ?? "redis://127.0.0.1:6379"

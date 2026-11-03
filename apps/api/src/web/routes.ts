@@ -38,7 +38,9 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!workos) return c.text("WorkOS isn't configured. Set WORKOS_CLIENT_ID and WORKOS_API_KEY.", 501)
     const state = crypto.randomUUID()
     setCookie(c, "parley_oauth_state", state, { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 600, secure: (ctx.config.publicUrl ?? "").startsWith("https:") })
-    const url = workos.userManagement.getAuthorizationUrl({ provider: "authkit", redirectUri: redirectUri(ctx.config), clientId: ctx.config.workos!.clientId, state })
+    // Straight to Google (WorkOS's GoogleOAuth provider), not the hosted AuthKit page: one click, no email/SSO step,
+    // and the person never sees an authkit.app URL. Google must be enabled in the WorkOS environment.
+    const url = workos.userManagement.getAuthorizationUrl({ provider: "GoogleOAuth", redirectUri: redirectUri(ctx.config), clientId: ctx.config.workos!.clientId, state })
     return c.redirect(url)
   })
 

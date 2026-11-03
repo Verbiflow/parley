@@ -11,8 +11,14 @@ import { ConnectError } from "./sessions/actor.ts"
 import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
 import { LIMITS } from "./ratelimit.ts"
 
-/** The caller's address: the first hop a proxy in front of us reports, else the socket's peer. */
+/**
+ * The caller's address. Behind Cloudflare (production) that's `cf-connecting-ip`, which Cloudflare sets itself — the
+ * first `x-forwarded-for` hop is whatever the client claims, so trusting it would let anyone rotate past the rate
+ * limits. Elsewhere: the first hop a proxy in front of us reports, else the socket's peer.
+ */
 function clientIp(c: Context): string {
+  const cf = c.req.header("cf-connecting-ip")
+  if (cf) return cf
   const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
   if (forwarded) return forwarded
   try {
@@ -98,7 +104,8 @@ export function makeApp(ctx: AppContext): Hono {
     if (c.req.method === "POST") {
       const body = await c.req.raw.clone().json().catch(() => undefined)
       const calls = (Array.isArray(body) ? body : [body]).filter((m) => m?.method === "tools/call").map((m) => String(m.params?.name ?? ""))
-      void recordAgentUse(ctx.sql, userId, sessionId, calls.at(-1) || null).catch(() => {})
+      // Awaited (one small write): on the edge the request's DB connection closes once the response is sent.
+      await recordAgentUse(ctx.sql, userId, sessionId, calls.at(-1) || null).catch(() => {})
     }
 
     // Stateless: a fresh server + transport per request, so there's no cross-request state to leak.

@@ -1,0 +1,114 @@
+name: CI / Deploy
+
+# Every PR and push: typecheck, the full test suite (real Postgres + Redis), and a Worker bundle check.
+# Pushes to main then deploy production: the EC2 sessions service first (it runs migrations and serves the RPC the
+# Worker calls), then the Cloudflare Worker at app.itsparley.com.
+#
+# Credentials only exist in the `production` environment (main branch only). AWS is reached with GitHub OIDC — the
+# role `parley-github-deploy` trusts only `repo:Verbiflow/parley:environment:production` — so there are no AWS keys
+# in GitHub, and fork PRs never see any secret.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_ADMIN_URL: postgres://postgres@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - name: Worker bundles for Cloudflare (no Node-only code on the edge)
+        working-directory: apps/api
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker"
+      - name: Edge bundle must not contain Baileys or Redis
+        run: "! grep -q -i -E 'whiskeysockets|ioredis' \"$RUNNER_TEMP/worker/worker.js\""
+
+  deploy-sessions:
+    name: Deploy sessions service (EC2)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: parley-deploy-${{ github.run_id }}
+      - run: deploy/deploy-sessions.sh
+
+  deploy-worker:
+    name: Deploy Worker (app.itsparley.com)
+    needs: deploy-sessions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://app.itsparley.com
+    concurrency:
+      group: deploy-production-worker
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: wrangler deploy
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --var "PARLEY_VERSION:${GITHUB_SHA::12}"
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 20); do
+            v=$(curl -fsS https://app.itsparley.com/health | jq -r .version) && [ "$v" = "${GITHUB_SHA::12}" ] && break
+            sleep 3
+          done
+          curl -fsS https://app.itsparley.com/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST https://app.itsparley.com/mcp)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' https://app.itsparley.com/link/00000000-0000-4000-8000-000000000000)" = 404

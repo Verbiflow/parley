@@ -5,6 +5,7 @@ import makeWASocket, {
 import { proxyAgent } from "@parley/proxies"
 import { SendFailure, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
+import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
 // Baileys wants a pino-like logger; we keep it silent. Cast once, here.
 const SILENT: any = { level: "silent", child: () => SILENT, trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {} }
@@ -63,8 +64,8 @@ function textOf(m: WAMessage): string | undefined {
  * (via the auth-state round-trip test; the live link is validated manually, since it needs a phone).
  */
 export const whatsappChannel: Channel = {
-  id: "whatsapp",
-  capabilities: { linkMethod: "qr", media: false, groups: true, threads: true, presence: false },
+  id: WHATSAPP_ID,
+  capabilities: WHATSAPP_CAPABILITIES,
 
   async open({ state, proxy, emit }: OpenOptions): Promise<LiveConnection> {
     // One agent for the WebSocket and one for media/HTTPS fetches, so nothing leaves from the server's own IP.

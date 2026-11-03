@@ -66,9 +66,13 @@ function outcome(m: Outbound): string {
 
 // ---- Signed out ---------------------------------------------------------------------------------------------------
 
+/** Google's "G" mark, for the sign-in button (sign-in goes straight to Google; see /auth/start). */
+const GOOGLE_G = `<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true" style="margin-right:8px;vertical-align:-3px"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-10l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>`
+
+/** The app's signed-out page (app.itsparley.com): one centered panel, straight to Google. */
 export function landingPage(opts: { workos: boolean; dev: boolean }): string {
   const signin = opts.workos
-    ? `<a class="btn lg block" href="/auth/start">Sign in to continue <span class="ar">${icon("arrow", 14)}</span></a>`
+    ? `<a class="btn lg block" href="/auth/start">${GOOGLE_G}Continue with Google</a>`
     : `<div class="note warn"><div class="grow"><b>Sign-in isn't configured</b><p>Set <code>WORKOS_CLIENT_ID</code> and <code>WORKOS_API_KEY</code>.</p></div></div>`
   const dev = opts.dev
     ? `<form method="post" action="/auth/dev" class="dev">
@@ -76,16 +80,42 @@ export function landingPage(opts: { workos: boolean; dev: boolean }): string {
          <label class="field"><span>Email</span><input class="input" name="email" type="email" placeholder="you@example.com" required autocomplete="email"></label>
          <button class="btn line lg block" type="submit">Continue with dev login</button></form>`
     : ""
+  return shell("Sign in · Parley", `
+    <main class="signin">
+      ${LOGO}
+      <h1>Your messaging, ready for your agents.</h1>
+      <p class="sub">Link WhatsApp once. Your agents send and receive over MCP. You never hand them your phone.</p>
+      <div class="tiles">${["whatsapp", "telegram", "instagram", "linkedin"].map((id) => `<span class="tile">${channelMark(id, 22)}</span>`).join("")}</div>
+      <section class="panel">${signin}${dev}</section>
+    </main>`, { css: SIGNIN_CSS })
+}
+
+const SIGNIN_CSS = `
+.signin{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem 1.5rem;gap:14px}
+.signin .logo{font-size:15px}
+.signin h1{font-size:30px;line-height:36px;font-weight:400;letter-spacing:-.035em;margin:10px 0 0;max-width:17ch}
+.signin .sub{font-size:15px;line-height:23px;color:var(--muted);max-width:42ch;margin:0}
+.tiles{display:flex;gap:10px;margin-top:6px}
+.tile{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1)}
+.signin .panel{width:100%;max-width:300px;margin-top:14px;display:flex;flex-direction:column;gap:12px;text-align:left}
+.dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+.or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+`
+
+/** The marketing site (itsparley.com). Signing in happens on the app (`appUrl`), so this page only links there. */
+export function marketingPage(opts: { appUrl: string }): string {
+  const app = esc(opts.appUrl)
   const ch = (id: string) => `<span class="ich">${channelMark(id, 17)}${CHANNELS[id]!.name}</span>`
   const j = (k: string, v: string) => `  <span class="k">"${k}"</span>: ${v}`
   const s = (v: string) => `<span class="s">"${v}"</span>`
   return shell("Parley — messaging infrastructure for agents", `
-    <header class="lt"><div class="lt-in">${LOGO}<nav><a href="#how">How it works</a><a href="https://github.com/Verbiflow/parley">GitHub ${icon("external", 12)}</a></nav></div></header>
+    <header class="lt"><div class="lt-in">${LOGO}<nav><a href="#how">How it works</a><a href="https://github.com/Verbiflow/parley">GitHub ${icon("external", 12)}</a><a class="open" href="${app}">Open app</a></nav></div></header>
     <main class="land">
       <section class="hero">
         <p class="label">messaging infrastructure for ai agents</p>
         <h1>Give your agents a phone number.</h1>
         <p class="lede">One MCP server for ${ch("whatsapp")} today, with ${ch("telegram")}, ${ch("instagram")} and ${ch("linkedin")} next. Agents read the chats you choose and send from your own account, paced to look like you.</p>
+        <a class="btn lg cta" href="${app}">Open app <span class="ar">${icon("arrow", 14)}</span></a>
         <div class="console" id="how">
           <div class="c-bar"><span></span><span></span><span></span><em>mcp · tools/call</em></div>
           <pre><span class="arrow">→</span> <span class="fn">send_message</span>
@@ -110,14 +140,6 @@ ${j("note", s("Queued for 09:24 London: outside the account's active hours."))}
           <li><span class="label">network</span>Each account sends from one stable IP in its own country.</li>
         </ul>
       </section>
-      <aside class="auth">
-        <div class="panel">
-          <p class="label">sign in</p>
-          <h2>Welcome to Parley</h2>
-          <p class="muted">Use your work account. Signing in for the first time creates your workspace.</p>
-          ${signin}${dev}
-        </div>
-      </aside>
     </main>`, { css: LANDING_CSS })
 }
 
@@ -126,7 +148,9 @@ const LANDING_CSS = `
 .lt-in{max-width:1200px;margin:0 auto;height:56px;padding:0 28px;display:flex;align-items:center;justify-content:space-between}
 .lt nav{display:flex;gap:24px;font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .lt nav a{display:inline-flex;align-items:center;gap:6px}.lt nav a:hover{color:var(--text)}
-.land{max-width:1200px;margin:0 auto;padding:72px 28px 96px;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:72px;align-items:start}
+.land{max-width:1200px;margin:0 auto;padding:72px 28px 96px}
+.cta{margin-top:28px}
+.lt nav a.open{color:var(--text);border:1px solid var(--line-3);border-radius:999px;padding:6px 12px}
 .hero h1{font-size:60px;line-height:62px;font-weight:400;letter-spacing:-.045em;margin:18px 0 22px;max-width:13ch}
 .lede{font-size:17px;line-height:30px;color:var(--muted);max-width:52ch}
 .ich{display:inline-flex;align-items:center;gap:6px;color:var(--text);white-space:nowrap}
@@ -139,13 +163,7 @@ const LANDING_CSS = `
 .facts{list-style:none;margin:40px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;max-width:720px}
 .facts li{font-size:13.5px;line-height:21px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
 .facts .label{display:block;margin-bottom:6px;color:var(--text-2)}
-.auth{position:sticky;top:40px}
-.panel{display:flex;flex-direction:column;gap:14px;padding:28px;border:1px solid var(--line-2);border-radius:14px;background:var(--bg-1)}
-.panel h2{margin:0;font-size:24px;line-height:30px;font-weight:400;letter-spacing:-.03em}
-.panel > p.muted{font-size:13.5px;margin-bottom:8px}
-.dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
-.or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
-@media (max-width:980px){.land{grid-template-columns:1fr;gap:40px;padding-top:40px}.hero h1{font-size:42px;line-height:46px}.facts{grid-template-columns:1fr}.auth{position:static}}
+@media (max-width:980px){.land{padding-top:40px}.hero h1{font-size:42px;line-height:46px}.facts{grid-template-columns:1fr}}
 `
 
 // ---- Overview -----------------------------------------------------------------------------------------------------

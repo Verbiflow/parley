@@ -1,18 +1,24 @@
 import { RequestDatabase, type Sql, type IdentityConfig, tokenKeys, type TokenKeys } from "@parley/auth"
 import { CHANNELS, type Channel } from "@parley/channels"
 import { Transactor } from "./db/transactor.ts"
-import { memoryLimiter, redisLimiter, type RateLimiter } from "./ratelimit.ts"
-import { Sessions } from "./sessions/actor.ts"
+import { memoryLimiter, type RateLimiter } from "./ratelimit.ts"
+import { redisLimiter } from "./ratelimit-redis.ts"
+import { Sessions, type SessionsApi } from "./sessions/actor.ts"
 import { RedisCoordinator } from "./sessions/coordinator.ts"
 import { Exits } from "./sessions/exits.ts"
 
-/** How long an MCP access token lives before the client must refresh it. */
-export const ACCESS_TOKEN_SECONDS = 3600
+import { ACCESS_TOKEN_SECONDS } from "./access.ts"
+
+export { ACCESS_TOKEN_SECONDS }
 
 /**
  * What the HTTP app, the OAuth server and the MCP endpoint all share: parsed config, one database handle, the token
  * keys, and the registered channels. Everything that lists or dispatches channels reads `channels`, so adding a
  * channel to the registry surfaces it everywhere with no further edits.
+ *
+ * `sessions` is the session pool's API: the pool itself (`Sessions`) when it runs in this process — locally, in
+ * tests, on a single box — or `RemoteSessions` on the edge Worker (`worker.ts` builds that context itself, so this
+ * module's Redis/Node imports never reach the edge bundle; it imports only the `AppContext` type).
  */
 export type AppContext = {
   config: IdentityConfig
@@ -22,13 +28,16 @@ export type AppContext = {
   tx: Transactor
   accessTokenKeys: Promise<TokenKeys>
   channels: Channel[]
-  sessions: Sessions
+  sessions: SessionsApi
   exits: Exits
   limiter: RateLimiter
   close(): Promise<void>
 }
 
-export function makeContext(config: IdentityConfig, db?: RequestDatabase, channels: Channel[] = CHANNELS, opts: { limiter?: RateLimiter } = {}): AppContext {
+/** The in-process context: the session pool lives here, so callers can start it and re-open connections. */
+export type NodeAppContext = AppContext & { sessions: Sessions }
+
+export function makeContext(config: IdentityConfig, db?: RequestDatabase, channels: Channel[] = CHANNELS, opts: { limiter?: RateLimiter } = {}): NodeAppContext {
   if (!config.databaseUrl && !db) throw new Error("DATABASE_URL is required")
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required for the outbox")
   const database = db ?? new RequestDatabase(config.databaseUrl)
