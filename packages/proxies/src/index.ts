@@ -1,7 +1,3 @@
-import type { Agent } from "node:https"
-import { HttpsProxyAgent } from "https-proxy-agent"
-import { SocksProxyAgent } from "socks-proxy-agent"
-
 /**
  * Where a connection's traffic leaves the internet from, ordered by how slowly platforms act against it: mobile
  * carrier IPs are shared by thousands of real people; datacenter ranges are the first thing anti-abuse systems flag.
@@ -111,12 +107,4 @@ export function parseProxyUrl(raw: string): Endpoint {
     username: url.username ? decodeURIComponent(url.username) : undefined,
     password: url.password ? decodeURIComponent(url.password) : undefined,
   }
-}
-
-/** The Node agent a socket (a WebSocket, an HTTPS fetch) connects through to leave from this exit. */
-export function proxyAgent(url: string): Agent {
-  const { protocol } = parseProxyUrl(url)
-  // Both tunnel TLS; they're typed as plain http agents, which is what socket libraries' `https.Agent` slots accept.
-  const agent = protocol === "socks5" ? new SocksProxyAgent(url.replace(/^socks5:/, "socks5h:")) : new HttpsProxyAgent(url)
-  return agent as unknown as Agent
 }

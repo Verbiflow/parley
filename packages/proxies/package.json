@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Egress proxies for channel sessions: provider presets, gateway sticky-session templates, proxy URLs, and the Node agent a socket connects through.",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": "./src/agent.ts"
+  },
   "scripts": {
     "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
   },

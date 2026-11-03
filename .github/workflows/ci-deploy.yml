@@ -54,8 +54,8 @@ jobs:
       - name: Worker bundles for Cloudflare (no Node-only code on the edge)
         working-directory: apps/api
         run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker"
-      - name: Edge bundle must not contain Baileys or Redis
-        run: "! grep -q -i -E 'whiskeysockets|ioredis' \"$RUNNER_TEMP/worker/worker.js\""
+      - name: Edge bundle must not contain Baileys, Redis or the proxy socket agents
+        run: "! grep -q -i -E 'whiskeysockets|ioredis|https-proxy-agent|socks-proxy-agent' \"$RUNNER_TEMP/worker/worker.js\""
 
   deploy-sessions:
     name: Deploy sessions service (EC2)

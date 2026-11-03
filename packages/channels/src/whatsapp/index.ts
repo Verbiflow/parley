@@ -2,7 +2,7 @@ import makeWASocket, {
   DisconnectReason, makeCacheableSignalKeyStore, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
   type WAMessage, type Contact,
 } from "@whiskeysockets/baileys"
-import { proxyAgent } from "@parley/proxies"
+import { proxyAgent } from "@parley/proxies/agent"
 import { SendFailure, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
