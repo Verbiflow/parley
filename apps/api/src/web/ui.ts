@@ -22,6 +22,7 @@ const ICON = {
   trash: `<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>`,
   plus: `<path d="M5 12h14"/><path d="M12 5v14"/>`,
   chevronDown: `<path d="m6 9 6 6 6-6"/>`,
+  plug: `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
   external: `<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>`,
 }
 export type IconName = keyof typeof ICON
@@ -71,6 +72,14 @@ export function agentMark(clientName: string | null, size = 24): string {
   if (!brand) return glyph(name, size)
   const mono = ["#000000", "#191919", "#18181B", "#0B100F"].includes(brand.hex)
   return `<span class="glyph brand" style="width:${size}px;height:${size}px;${mono ? "" : `color:${brand.hex}`}" title="${esc(brand.title)}"><svg viewBox="0 0 24 24" width="${Math.round(size * 0.58)}" height="${Math.round(size * 0.58)}" fill="currentColor" aria-hidden="true"><path d="${brand.path}"/></svg></span>`
+}
+
+/** A bare agent-app mark (no tile) for inline use, e.g. in tabs. Monochrome brands take the text color. */
+export function brandMark(title: string, size = 14): string {
+  const brand = AGENT_BRANDS.find((b) => b.title === title)
+  if (!brand) return icon("plug", size)
+  const mono = ["#000000", "#191919", "#18181B", "#0B100F"].includes(brand.hex)
+  return `<svg class="cm" viewBox="0 0 24 24" width="${size}" height="${size}" fill="${mono ? "currentColor" : brand.hex}" aria-hidden="true"><path d="${brand.path}"/></svg>`
 }
 
 /** Parley's mark: a chat bubble whose tail forms the stem of a "P". */
@@ -225,6 +234,11 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .sec-h .label{color:var(--text-2)}
 .sec-h .aside{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:10px}
 .sec-h .aside a{color:var(--text-2)}.sec-h .aside a:hover{color:var(--text)}
+.sec-h .label{display:inline-flex;align-items:center}
+.fold > summary{cursor:pointer;list-style:none;user-select:none}.fold > summary::-webkit-details-marker{display:none}
+.fold > summary:hover .label{color:var(--text)}
+.fold .chev{display:inline-flex;color:var(--muted);transition:transform .2s var(--ease)}.fold:not([open]) .chev{transform:rotate(-90deg)}
+.fold:not([open]) > summary{border-bottom-color:var(--line)}
 .sec-note{font-size:13px;color:var(--muted);padding:12px 0 0;max-width:70ch}
 
 .strip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -353,8 +367,12 @@ export function pageHead(opts: { title: string; sub?: string; crumb?: { href: st
     <h1>${opts.lead ?? ""}${esc(opts.title)}</h1>${opts.sub ? `<p class="sub">${opts.sub}</p>` : ""}</div>${opts.actions ? `<div class="acts">${opts.actions}</div>` : ""}</header>`
 }
 
-export const section = (label: string, body: string, aside = "", note = "") =>
-  `<section class="sec"><div class="sec-h"><span class="label">${esc(label)}</span>${aside ? `<span class="aside">${aside}</span>` : ""}</div>${note ? `<p class="sec-note">${note}</p>` : ""}${body}</section>`
+/** A section that folds: the header is the toggle (native <details>, works without JS). */
+export const foldSection = (label: string, body: string, opts: { aside?: string; note?: string; open?: boolean; lead?: string } = {}) =>
+  `<details class="sec fold"${opts.open ? " open" : ""}><summary class="sec-h"><span class="label">${opts.lead ?? ""}${esc(label)}</span><span class="aside">${opts.aside ?? ""}<span class="chev">${icon("chevronDown", 14)}</span></span></summary>${opts.note ? `<p class="sec-note">${opts.note}</p>` : ""}${body}</details>`
+
+export const section = (label: string, body: string, aside = "", note = "", lead = "") =>
+  `<section class="sec"><div class="sec-h"><span class="label">${lead}${esc(label)}</span>${aside ? `<span class="aside">${aside}</span>` : ""}</div>${note ? `<p class="sec-note">${note}</p>` : ""}${body}</section>`
 
 export const empty = (title: string, text: string, action = "") =>
   `<div class="empty"><b>${esc(title)}</b>${text}${action ? `<div style="margin-top:14px">${action}</div>` : ""}</div>`
