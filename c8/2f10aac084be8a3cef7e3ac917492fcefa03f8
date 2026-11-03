@@ -1,0 +1,25 @@
+deploy/deploy-sessions.sh
+  s_adf2bae2cc84bd::t_368b18622c0b05 51,54-56
+  s_adf2bae2cc84bd::t_e03e492470ac38 16
+deploy/README.md
+  s_adf2bae2cc84bd::t_f15a7043335bab 33-42
+.github/workflows/ci-deploy.yml
+  s_adf2bae2cc84bd::t_8f57557b2fdd97 1-61,63-114
+  s_adf2bae2cc84bd::t_b0a5cadb5ca351 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c82f10aac084be8a3cef7e3ac917492fcefa03f8",
+  "prompts": {},
+  "sessions": {
+    "s_adf2bae2cc84bd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b4e75c10-9180-459d-91da-f3365c519912",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
