@@ -1,0 +1,37 @@
+apps/api/src/sessions/coordinator.ts
+  s_64fea0cc107945::t_78d10737e914b6 1-104
+apps/api/package.json
+  s_64fea0cc107945::t_5d97603f7b5ec2 18
+apps/api/src/server.ts
+  s_64fea0cc107945::t_c1404b0d53b384 7,12
+apps/api/src/context.ts
+  s_64fea0cc107945::t_09276272dac929 4,33
+apps/api/test/support.ts
+  s_64fea0cc107945::t_b21d1596df1497 4,11,28-31,44-46,49
+  s_64fea0cc107945::t_4a52cd7e2d1b6c 13-14,27,32-33,38,40-43,50,59
+  s_64fea0cc107945::t_cb2b86d2ccbade 15,34,36-37,39,48,54-55
+  s_64fea0cc107945::t_c26a4f660c4d02 47
+apps/api/test/cluster.test.ts
+  s_64fea0cc107945::t_407ff82537900c 1-72
+apps/api/src/sessions/actor.ts
+  s_64fea0cc107945::t_35ebcaab325724 17-33,44-46,51,53,57-59,70,72-74,81-82,85-87,92-93,101-104,107,111-114,118-147,150-153,166,189,194-203
+  s_64fea0cc107945::t_5026e4d7dbc8f7 204
+package-lock.json
+  s_64fea0cc107945::t_d81bac239269c2 30,698-703,1168-1176,1319-1327,1905-1926,2644-2664,2951-2956
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5a077a234d0da10fb405814e9cb63e8abf18bf2c",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
