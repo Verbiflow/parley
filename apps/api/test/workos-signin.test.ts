@@ -24,7 +24,7 @@ async function authorizeUrl(): Promise<{ url: string; verifier: string; clientId
 
 test("no dev login: the landing page has no email form and /auth/dev is gone", async () => {
   const html = await (await fetch(`${base}/`)).text()
-  assert.match(html, /Sign in to continue/)
+  assert.match(html, /Continue with Google/)
   assert.doesNotMatch(html, /dev login|name="email"/)
   assert.equal((await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email: "x@y.z" }) })).status, 404)
 })

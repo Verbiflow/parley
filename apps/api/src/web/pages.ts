@@ -66,9 +66,12 @@ function outcome(m: Outbound): string {
 
 // ---- Signed out ---------------------------------------------------------------------------------------------------
 
+/** Google's "G" mark, for the sign-in button (sign-in goes straight to Google; see /auth/start). */
+const GOOGLE_G = `<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true" style="margin-right:8px;vertical-align:-3px"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-10l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>`
+
 export function landingPage(opts: { workos: boolean; dev: boolean }): string {
   const signin = opts.workos
-    ? `<a class="btn lg block" href="/auth/start">Sign in to continue <span class="ar">${icon("arrow", 14)}</span></a>`
+    ? `<a class="btn lg block" href="/auth/start">${GOOGLE_G}Continue with Google</a>`
     : `<div class="note warn"><div class="grow"><b>Sign-in isn't configured</b><p>Set <code>WORKOS_CLIENT_ID</code> and <code>WORKOS_API_KEY</code>.</p></div></div>`
   const dev = opts.dev
     ? `<form method="post" action="/auth/dev" class="dev">
