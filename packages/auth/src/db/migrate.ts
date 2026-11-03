@@ -2,7 +2,9 @@ import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Client } from "pg"
 
-export const MIGRATIONS = join(import.meta.dirname, "../../migrations")
+// Guarded so this module can load where there's no filesystem (the edge Worker bundles @parley/auth); migrations
+// only ever run from Node.
+export const MIGRATIONS = typeof import.meta.dirname === "string" ? join(import.meta.dirname, "../../migrations") : ""
 const NAME = /^\d{4}_[a-z0-9_]+\.sql$/
 /** Any number, so two migrators never interleave; each takes it for its whole run. */
 const LOCK = 7_262_001

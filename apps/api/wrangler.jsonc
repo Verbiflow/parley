@@ -15,8 +15,8 @@
     "PUBLIC_URL": "https://app.itsparley.com"
   },
   // Postgres: Hyperdrive → Workers VPC service `parley-db` → Cloudflare Tunnel → private RDS.
-  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "HYPERDRIVE_ID" }],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2b6f68bccc8945f7ba79eed9cfbe7d0b" }],
   // Live channel ops: Workers VPC service `parley-sessions` → Cloudflare Tunnel → EC2 127.0.0.1:8790.
-  "vpc_services": [{ "binding": "SESSIONS", "service_id": "SESSIONS_VPC_SERVICE_ID" }]
+  "vpc_services": [{ "binding": "SESSIONS", "service_id": "01a1a394-5089-7371-b9fb-d873d5c19b82" }]
   // Secrets (wrangler secret put): SIGN_IN_KEY, CONNECTION_SIGNING_KEY, WORKOS_CLIENT_ID, WORKOS_API_KEY, SESSIONS_SECRET
 }
