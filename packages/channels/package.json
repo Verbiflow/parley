@@ -7,9 +7,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./fake": "./src/fake.ts",
-    "./conformance": "./src/conformance.ts"
+    "./conformance": "./src/conformance.ts",
+    "./whatsapp": "./src/whatsapp/index.ts"
   },
   "scripts": {
     "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0"
   }
 }

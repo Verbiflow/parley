@@ -1,5 +1,6 @@
 import { RequestDatabase, type Sql, type IdentityConfig, tokenKeys, type TokenKeys } from "@parley/auth"
 import { CHANNELS, type Channel } from "@parley/channels"
+import { Sessions } from "./sessions/actor.ts"
 
 /** How long an MCP access token lives before the client must refresh it. */
 export const ACCESS_TOKEN_SECONDS = 3600
@@ -15,6 +16,7 @@ export type AppContext = {
   sql: Sql
   accessTokenKeys: Promise<TokenKeys>
   channels: Channel[]
+  sessions: Sessions
 }
 
 export function makeContext(config: IdentityConfig, db?: RequestDatabase, channels: Channel[] = CHANNELS): AppContext {
@@ -27,5 +29,6 @@ export function makeContext(config: IdentityConfig, db?: RequestDatabase, channe
     sql: database.query,
     accessTokenKeys: tokenKeys(accessTokenConfig, config.env),
     channels,
+    sessions: new Sessions({ sql: database.query, channels, config }),
   }
 }
