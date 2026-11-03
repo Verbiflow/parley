@@ -70,6 +70,7 @@ cd apps/api && npx wrangler tail
 | Worker | `parley-app` (custom domain `app.itsparley.com`) |
 | Hyperdrive | `parley-prod` → VPC service `parley-db` |
 | VPC service (HTTP) | `parley-sessions` → tunnel → `127.0.0.1:8790` |
+| Rate limits | Worker bindings `RL_MCP` / `RL_SIGNIN` / `RL_DASHBOARD` (keep in step with `LIMITS` in `src/ratelimit.ts`) |
 | Tunnel | `parley-prod` |
 | EC2 | `parley-sessions` (SG `parley-sessions`, role `parley-sessions-ec2`) |
 | RDS | `parley-prod` (SG `parley-db`, params `parley-pg16`, subnets `parley-prod`) |
