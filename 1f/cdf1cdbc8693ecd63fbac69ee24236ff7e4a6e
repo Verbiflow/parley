@@ -1,0 +1,67 @@
+packages/auth/test/auth.test.ts
+  s_64fea0cc107945::t_62799225511d66 1-109
+packages/auth/migrations/0003_device_security.sql
+  s_64fea0cc107945::t_9e83b949733886 1-35
+packages/auth/migrations/0006_secrets.sql
+  s_64fea0cc107945::t_e2299ec7b9b071 1-25
+packages/auth/src/identity/sealing.ts
+  s_64fea0cc107945::t_218754b1b98bf0 1-62
+packages/auth/src/identity/store.ts
+  s_64fea0cc107945::t_0e7fa102be71cd 1-175
+packages/auth/migrations/0007_proof_accounts.sql
+  s_64fea0cc107945::t_d3e3f6ae713cd9 1-21
+DEVELOPING.md
+  s_64fea0cc107945::t_b6bf895b9d644f 1-48
+packages/auth/package.json
+  s_64fea0cc107945::t_16cf27c11df21a 1-20
+packages/auth/src/secrets/store.ts
+  s_64fea0cc107945::t_89b634c42567f7 1-84
+packages/auth/src/db/migrate.ts
+  s_64fea0cc107945::t_76272f0e201ccf 1-54
+packages/auth/migrations/0004_credential_rotation.sql
+  s_64fea0cc107945::t_da55b1da37128f 1-21
+packages/auth/src/index.ts
+  s_64fea0cc107945::t_55eaf9c5caacc8 1-13
+packages/auth/src/secrets/seal.ts
+  s_64fea0cc107945::t_66c900e1a26ebd 1-37
+packages/auth/src/db/database.ts
+  s_64fea0cc107945::t_4fca52dcef7d56 1-57
+packages/auth/test/database.ts
+  s_64fea0cc107945::t_68e4fbc74046c0 1-41
+packages/auth/migrations/0001_identity.sql
+  s_64fea0cc107945::t_08c399359667ad 1-94
+package.json
+  s_64fea0cc107945::t_7591ad2fccbf1a 1-18
+packages/auth/migrations/0002_account_sign_in.sql
+  s_64fea0cc107945::t_5570eb77d7b8d7 1-6
+packages/auth/src/config.ts
+  s_64fea0cc107945::t_c3564cce031d47 1-104
+packages/auth/src/identity/credentials.ts
+  s_64fea0cc107945::t_4de0fb9fff2cc5 1-49
+tsconfig.json
+  s_64fea0cc107945::t_d68745e83d81bc 1-22
+packages/auth/migrations/0005_browser_sessions.sql
+  s_64fea0cc107945::t_84c9f903b71790 1-20
+packages/auth/src/identity/tokens.ts
+  s_64fea0cc107945::t_e76cf3d2985048 1-113
+.env.example
+  s_64fea0cc107945::t_00bcb951c4fd8a 1-23
+package-lock.json
+  s_64fea0cc107945::t_ffe59c028b1620 1-242
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1fcdf1cdbc8693ecd63fbac69ee24236ff7e4a6e",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
