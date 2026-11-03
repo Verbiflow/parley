@@ -13,7 +13,7 @@ INSTANCE_ID=$(aws ec2 describe-instances --region $REGION --filters Name=tag:Nam
 
 if [[ -n "$(git status --porcelain)" ]]; then echo "commit your changes first (deploys ship HEAD)" >&2; exit 1; fi
 SHA=$(git rev-parse --short=12 HEAD)
-TARBALL=$(mktemp -t parley-release).tgz
+TARBALL="$(mktemp -d)/release-$SHA.tgz"
 git archive --format=tar.gz -o "$TARBALL" HEAD
 aws s3 cp --region $REGION --only-show-errors "$TARBALL" "s3://$BUCKET/releases/$SHA.tgz"
 rm -f "$TARBALL"
@@ -48,6 +48,9 @@ CMD_ID=$(aws ssm send-command --region $REGION --instance-ids "$INSTANCE_ID" --d
   --parameters "$(jq -n --arg s "$SCRIPT" '{commands: [$s], executionTimeout: ["900"]}')" \
   --query Command.CommandId --output text)
 echo "deploying $SHA to $INSTANCE_ID (ssm $CMD_ID)…"
-aws ssm wait command-executed --region $REGION --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
+aws ssm wait command-executed --region $REGION --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" 2>/dev/null || true
 aws ssm get-command-invocation --region $REGION --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
   --query '[Status,StandardOutputContent,StandardErrorContent]' --output text
+STATUS=$(aws ssm get-command-invocation --region $REGION --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query Status --output text)
+[[ "$STATUS" == "Success" ]] || { echo "deploy $SHA failed on $INSTANCE_ID: $STATUS" >&2; exit 1; }
+echo "deployed $SHA"

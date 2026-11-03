@@ -30,6 +30,16 @@ RDS-managed master secret) and Cloudflare Worker secrets — never in the repo o
 
 ## Deploy
 
+**Normally: merge to `main`.** `.github/workflows/ci-deploy.yml` runs typecheck + tests (Postgres 16 + Redis) + a
+Worker bundle check on every PR, and on `main` deploys the sessions service, then the Worker, then smoke-tests
+`/health` (which reports the deployed commit). Re-run a deploy from the Actions tab (`workflow_dispatch` on `main`).
+
+CI credentials live only in the GitHub `production` environment (deployable from `main` only):
+`vars.AWS_DEPLOY_ROLE_ARN` (OIDC role `parley-github-deploy`, trusts only this repo's `production` environment; can
+upload releases and run SSM on the Parley box, nothing else), `vars.CLOUDFLARE_ACCOUNT_ID`, `secrets.CLOUDFLARE_API_TOKEN`.
+
+By hand (same steps the workflow runs):
+
 ```sh
 # Sessions service (EC2) — ships committed HEAD, runs migrations, restarts, health-checks
 AWS_PROFILE=flage-prod deploy/deploy-sessions.sh
