@@ -87,6 +87,22 @@ export class Sessions {
     return { status: conn.status, channel: conn.channel, link: this.#live.get(connectionId)?.link }
   }
 
+  /**
+   * Make sure a connection that isn't connected is actively arming a QR. Opening the link page calls this, so a
+   * connection left in `linking`/`closed` — e.g. after a server restart dropped its socket — gets a fresh QR instead
+   * of waiting forever. No-op if it's already live on this worker, owned elsewhere, or already connected.
+   */
+  async ensureLinking(connectionId: string): Promise<void> {
+    if (this.#live.has(connectionId)) return
+    const conn = await getConnection(this.ctx.sql, connectionId)
+    if (!conn || conn.status === "connected") return
+    if (this.ctx.coordinator && (await this.ctx.coordinator.ownerOf(connectionId))) return
+    const channel = channelById(this.ctx.channels, conn.channel)
+    if (!channel) return
+    await setStatus(this.ctx.sql, connectionId, "linking")
+    await this.#open(channel, connectionId, conn.accountId, undefined)
+  }
+
   async send(accountId: string, connectionId: string, to: string, text: string): Promise<{ id: string }> {
     await this.#owned(accountId, connectionId)
     const routed = await this.#route(connectionId, { op: "send", args: { to, text } })
