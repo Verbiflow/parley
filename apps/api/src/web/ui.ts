@@ -320,6 +320,9 @@ export function avatar(u: Viewer, size = 26): string {
   return glyph(u.name || u.email, size, true)
 }
 
+/** Network (proxy providers) is hidden from the console for now; /app/network still works. Flip to bring it back. */
+export const SHOW_NETWORK = false
+
 export type Section = "overview" | "outbox" | "agents" | "network" | "settings"
 
 /** The signed-in frame: a top bar (mark, workspace, tabs, theme, account) over the page. */
@@ -332,7 +335,7 @@ export function appShell(opts: { title: string; active: Section; user: Viewer; c
   return shell(`${opts.title} · Parley`, `
     <header class="top"><div class="top-in">
       <div class="ws"><a href="/app">${LOGO}</a><span class="sl">/</span><span class="wn">${esc(user.name)}</span></div>
-      <nav class="tabs">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${tab("network", "/app/network", "Network")}${tab("settings", "/app/settings", "Settings")}</nav>
+      <nav class="tabs">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
       <div class="right">
         <button class="icon-btn" type="button" data-theme-toggle title="Toggle theme" aria-label="Toggle theme"><span class="th-l">${icon("sun", 15)}</span><span class="th-d">${icon("moon", 15)}</span></button>
         <details class="me"><summary aria-label="Account">${avatar(user, 26)}</summary>
