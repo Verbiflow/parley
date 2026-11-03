@@ -13,6 +13,19 @@ export function buildMcpServer(ctx: AppContext): McpServer {
   const server = new McpServer({ name: "parley", version: ctx.config.version })
 
   server.registerTool(
+    "list_channels",
+    {
+      title: "List channels",
+      description: "List the messaging channels Parley supports, with each channel's capabilities (how you link it, whether it has media/groups/threads).",
+      inputSchema: {},
+    },
+    async () => {
+      const channels = ctx.channels.map((c) => ({ id: c.id, capabilities: c.capabilities }))
+      return { content: [{ type: "text", text: JSON.stringify({ channels }) }] }
+    }
+  )
+
+  server.registerTool(
     "list_connections",
     {
       title: "List connections",

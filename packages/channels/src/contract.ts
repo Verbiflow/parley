@@ -1,0 +1,90 @@
+/**
+ * The one seam every messaging integration implements. WhatsApp is the first `Channel`; Telegram/Instagram/LinkedIn
+ * are added later as new modules that fill this same interface and get listed in the registry — nothing in the API,
+ * MCP, session pool, or web UI branches per channel. Those layers read `capabilities` (declared, not hard-coded) and
+ * dispatch by `connection.channel`.
+ */
+
+/** How a user links their account. The link UI renders from this; it never special-cases a channel. */
+export type LinkMethod = "qr" | "oauth" | "code" | "cookies"
+
+export type Capabilities = {
+  linkMethod: LinkMethod
+  /** Can it send/receive media (not just text)? */
+  media: boolean
+  /** Does it have group conversations? */
+  groups: boolean
+  /** Does it model threads/conversations distinctly? */
+  threads: boolean
+  /** Does it report presence/typing? */
+  presence: boolean
+}
+
+export type InboundMessage = { id: string; threadId: string; from: string; text: string; at: string }
+export type OutboundContent = { text: string }
+
+/** What a live connection tells the host (the session actor) as it runs. */
+export type ChannelEvent =
+  /** The user must act to finish linking: scan this QR / open this OAuth URL / enter this code. */
+  | { type: "link"; method: LinkMethod; data: string }
+  /** Linked and live. `handle` is the account's own address on the channel (e.g. its phone number). */
+  | { type: "open"; handle: string }
+  /** Opaque channel session state to persist. The host seals it (AES-256-GCM) before storing in Postgres. */
+  | { type: "state"; state: string }
+  /** An inbound message arrived. */
+  | { type: "message"; message: InboundMessage }
+  /** The connection closed. `reason` is for logs/UI, not control flow. */
+  | { type: "closed"; reason: string }
+
+export type Emit = (event: ChannelEvent) => void
+
+/** A live connection the host holds (one per connected account, multiplexed many-per-worker). */
+export interface LiveConnection {
+  send(to: string, content: OutboundContent): Promise<{ id: string }>
+  /** Unlink the account on the channel; the saved state becomes useless afterward. */
+  logout(): Promise<void>
+  /** Drop the connection locally (e.g. idle eviction) without unlinking. */
+  close(): Promise<void>
+}
+
+export type OpenOptions = {
+  connectionId: string
+  /** Previously-saved opaque state (session creds). Undefined for a fresh link. */
+  state?: string | undefined
+  emit: Emit
+}
+
+/** A channel connector. One module per integration implements this and is added to the registry. */
+export interface Channel {
+  readonly id: string
+  readonly capabilities: Capabilities
+  /**
+   * Begin a connection. With no `state`, the channel drives a fresh link (emitting a `link` event, then `open` +
+   * `state` once the user completes it). With `state`, it reconnects live with no link step. Returns the live
+   * connection handle; lifecycle after that is reported through `emit`.
+   */
+  open(opts: OpenOptions): Promise<LiveConnection>
+}
+
+// ---- Testing surface --------------------------------------------------------
+
+/**
+ * A channel's Fake pairs the `Channel` with a simulator of the outside world (the user scanning, inbound messages
+ * arriving, a provider failure). The conformance suite drives any channel through its simulator, so every
+ * integration is held to the same contract in CI with no real account.
+ */
+export interface ChannelSimulator {
+  /** Simulate the user completing the link (scanning the QR / authorizing). */
+  completeLink(connectionId: string): void
+  /** Simulate an inbound message. */
+  deliver(connectionId: string, message: { threadId: string; from: string; text: string }): void
+  /** Make the next `open(connectionId)` fail. */
+  failNextOpen(connectionId: string): void
+  /** What was sent on a connection, for assertions. */
+  sent(connectionId: string): Array<{ to: string; content: OutboundContent }>
+}
+
+export interface ChannelFake {
+  channel: Channel
+  simulator: ChannelSimulator
+}
