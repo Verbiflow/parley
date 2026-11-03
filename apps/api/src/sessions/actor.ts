@@ -14,6 +14,23 @@ type Entry = {
   loggingOut: boolean
 }
 
+type StatusView = { status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }
+type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
+
+/**
+ * Cross-worker coordinator: tracks which worker holds each connection and routes commands to it. Optional — without
+ * one, the pool is single-process (fine for one box). `RedisCoordinator` implements this.
+ */
+export interface Coordinator {
+  readonly workerId: string
+  start(handler: (req: { connId: string; op: string; args: Record<string, unknown> }) => Promise<unknown>): Promise<void>
+  claim(connId: string): Promise<void>
+  release(connId: string): Promise<void>
+  ownerOf(connId: string): Promise<string | undefined>
+  callOwner(owner: string, req: { connId: string; op: string; args: Record<string, unknown> }): Promise<unknown>
+  close(): Promise<void>
+}
+
 export class ConnectError extends Error {
   readonly code: "unknown_channel" | "not_found" | "forbidden" | "not_connected"
   constructor(code: "unknown_channel" | "not_found" | "forbidden" | "not_connected", message: string) {
@@ -24,25 +41,24 @@ export class ConnectError extends Error {
 }
 
 /**
- * The session pool: it holds every account's live channel connections in memory and is the one place the channel
- * event stream is turned into persistent state. Channel-agnostic — it dispatches to `channelById(ctx.channels, …)`
- * and knows nothing about WhatsApp specifically. (Phase 4 is a single in-process pool; the Redis registry that lets a
- * fleet of workers share this role is the next phase.)
+ * The session pool: holds every account's live channel connections in memory and is the one place the channel event
+ * stream becomes persistent state. Channel-agnostic — it dispatches to `channelById(ctx.channels, …)`. With a
+ * `coordinator`, a fleet of workers shares the role: each connection is held by one worker and commands route to it.
  */
 export class Sessions {
   readonly #live = new Map<string, Entry>()
   #seal: SecretSeal | undefined
-  private readonly ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig }
+  private readonly ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator }
 
-  constructor(ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig }) {
+  constructor(ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator }) {
     this.ctx = ctx
   }
 
-  async #seal_(): Promise<SecretSeal> {
-    return (this.#seal ??= serverSeal(await SignInKey.from(this.ctx.config.signInKey)))
+  /** Start coordination (no-op without a coordinator). Call once before serving. */
+  async start(): Promise<void> {
+    await this.ctx.coordinator?.start((req) => this.#handleRpc(req))
   }
 
-  /** Start linking a new connection. Returns its id and how the user links it; the link material arrives via events. */
   async connect(accountId: string, channelId: string): Promise<{ connectionId: string; channel: string; linkMethod: LinkMethod }> {
     const channel = channelById(this.ctx.channels, channelId)
     if (!channel) throw new ConnectError("unknown_channel", `no channel "${channelId}"`)
@@ -51,57 +67,89 @@ export class Sessions {
     return { connectionId: conn.id, channel: channelId, linkMethod: channel.capabilities.linkMethod }
   }
 
-  /** The current state of a connection, including live link material while it's being linked. */
-  async status(accountId: string, connectionId: string): Promise<{ status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }> {
+  async status(accountId: string, connectionId: string): Promise<StatusView> {
     const conn = await this.#owned(accountId, connectionId)
-    const entry = this.#live.get(connectionId)
-    return { status: conn.status, channel: conn.channel, handle: conn.handle, link: entry?.link }
+    const routed = await this.#route(connectionId, { op: "status", args: {} })
+    if (routed.ok) return routed.result as StatusView
+    return { status: conn.status, channel: conn.channel, handle: conn.handle, link: this.#live.get(connectionId)?.link }
   }
 
   async list(accountId: string): Promise<Connection[]> {
     return listConnections(this.ctx.sql, accountId)
   }
 
-  /**
-   * What the link page shows — no account check, since the person linking may not have a browser session yet. The
-   * unguessable connection id is the capability (like a one-time link). Returns the live link material while linking.
-   */
-  async linkView(connectionId: string): Promise<{ status: string; channel: string; link?: { method: LinkMethod; data: string } }> {
+  /** What the link page shows — no account check (the unguessable id is the capability). Routes to the owner. */
+  async linkView(connectionId: string): Promise<LinkView> {
     const conn = await getConnection(this.ctx.sql, connectionId)
     if (!conn) throw new ConnectError("not_found", "no such connection")
-    const entry = this.#live.get(connectionId)
-    return { status: conn.status, channel: conn.channel, link: entry?.link }
+    const routed = await this.#route(connectionId, { op: "linkView", args: {} })
+    if (routed.ok) return routed.result as LinkView
+    return { status: conn.status, channel: conn.channel, link: this.#live.get(connectionId)?.link }
   }
 
-  /** Send a message on a connected connection; hydrates the socket from stored creds if this worker didn't hold it. */
   async send(accountId: string, connectionId: string, to: string, text: string): Promise<{ id: string }> {
     await this.#owned(accountId, connectionId)
+    const routed = await this.#route(connectionId, { op: "send", args: { to, text } })
+    if (routed.ok) return routed.result as { id: string }
     let entry = this.#live.get(connectionId)
     if (!entry?.live) entry = await this.#hydrate(connectionId)
     if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
     return entry.live.send(to, { text })
   }
 
-  /** Unlink on the channel and forget the sealed creds. */
   async logout(accountId: string, connectionId: string): Promise<void> {
-    const conn = await this.#owned(accountId, connectionId)
-    const entry = this.#live.get(connectionId) ?? (await this.#hydrate(connectionId))
-    if (entry) entry.loggingOut = true
-    await entry?.live?.logout().catch(() => {})
-    await this.#forgetCreds(conn.accountId, conn.channel, connectionId)
-    await setStatus(this.ctx.sql, connectionId, "logged_out")
-    this.#live.delete(connectionId)
+    await this.#owned(accountId, connectionId)
+    const routed = await this.#route(connectionId, { op: "logout", args: {} })
+    if (routed.ok) return
+    await this.#localLogout(connectionId)
   }
 
-  /** On boot, re-open every live connection from its sealed creds so sockets survive a restart. */
+  /** On boot, re-open live connections this worker will own (those nobody else holds). */
   async hydrateAll(): Promise<number> {
     const conns = await connectedConnections(this.ctx.sql)
     let n = 0
-    for (const conn of conns) if (await this.#hydrate(conn.id)) n++
+    for (const conn of conns) {
+      if (this.ctx.coordinator && (await this.ctx.coordinator.ownerOf(conn.id))) continue
+      if (await this.#hydrate(conn.id)) n++
+    }
     return n
   }
 
+  // --- routing ---------------------------------------------------------------
+
+  /** If another worker owns this connection, run the op there. Returns {ok:false} to mean "handle locally". */
+  async #route(connectionId: string, req: { op: string; args: Record<string, unknown> }): Promise<{ ok: true; result: unknown } | { ok: false }> {
+    if (this.#live.has(connectionId) || !this.ctx.coordinator) return { ok: false }
+    const owner = await this.ctx.coordinator.ownerOf(connectionId)
+    if (!owner || owner === this.ctx.coordinator.workerId) return { ok: false }
+    return { ok: true, result: await this.ctx.coordinator.callOwner(owner, { connId: connectionId, op: req.op, args: req.args }) }
+  }
+
+  async #handleRpc(req: { connId: string; op: string; args: Record<string, unknown> }): Promise<unknown> {
+    const { connId, op, args } = req
+    const conn = await getConnection(this.ctx.sql, connId)
+    const entry = this.#live.get(connId)
+    switch (op) {
+      case "status":
+        return { status: conn?.status ?? "unknown", channel: conn?.channel ?? "", handle: conn?.handle ?? null, link: entry?.link } satisfies StatusView
+      case "linkView":
+        return { status: conn?.status ?? "unknown", channel: conn?.channel ?? "", link: entry?.link } satisfies LinkView
+      case "send":
+        if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
+        return entry.live.send(String(args.to), { text: String(args.text) })
+      case "logout":
+        await this.#localLogout(connId)
+        return null
+      default:
+        throw new Error(`unknown op ${op}`)
+    }
+  }
+
   // --- internals -------------------------------------------------------------
+
+  async #seal_(): Promise<SecretSeal> {
+    return (this.#seal ??= serverSeal(await SignInKey.from(this.ctx.config.signInKey)))
+  }
 
   async #owned(accountId: string, connectionId: string): Promise<Connection> {
     const conn = await getConnection(this.ctx.sql, connectionId)
@@ -115,6 +163,7 @@ export class Sessions {
     this.#live.set(connectionId, entry)
     const live = await channel.open({ connectionId, state, emit: (event) => void this.#onEvent(connectionId, event).catch(() => {}) })
     entry.live = live
+    await this.ctx.coordinator?.claim(connectionId)
     return entry
   }
 
@@ -133,13 +182,24 @@ export class Sessions {
         await this.#saveCreds(entry.accountId, entry.channel, connectionId, event.state)
         break
       case "message":
-        // Inbound storage + delivery (webhooks/events) is the messages phase; nothing to do yet.
         break
       case "closed":
         await setStatus(this.ctx.sql, connectionId, entry.loggingOut ? "logged_out" : "closed")
         this.#live.delete(connectionId)
+        await this.ctx.coordinator?.release(connectionId)
         break
     }
+  }
+
+  async #localLogout(connectionId: string): Promise<void> {
+    const conn = await getConnection(this.ctx.sql, connectionId)
+    const entry = this.#live.get(connectionId) ?? (await this.#hydrate(connectionId))
+    if (entry) entry.loggingOut = true
+    await entry?.live?.logout().catch(() => {})
+    if (conn) await this.#forgetCreds(conn.accountId, conn.channel, connectionId)
+    await setStatus(this.ctx.sql, connectionId, "logged_out")
+    this.#live.delete(connectionId)
+    await this.ctx.coordinator?.release(connectionId)
   }
 
   async #saveCreds(accountId: string, channel: string, connectionId: string, state: string): Promise<void> {

@@ -1,6 +1,7 @@
 import { RequestDatabase, type Sql, type IdentityConfig, tokenKeys, type TokenKeys } from "@parley/auth"
 import { CHANNELS, type Channel } from "@parley/channels"
 import { Sessions } from "./sessions/actor.ts"
+import { RedisCoordinator } from "./sessions/coordinator.ts"
 
 /** How long an MCP access token lives before the client must refresh it. */
 export const ACCESS_TOKEN_SECONDS = 3600
@@ -29,6 +30,6 @@ export function makeContext(config: IdentityConfig, db?: RequestDatabase, channe
     sql: database.query,
     accessTokenKeys: tokenKeys(accessTokenConfig, config.env),
     channels,
-    sessions: new Sessions({ sql: database.query, channels, config }),
+    sessions: new Sessions({ sql: database.query, channels, config, coordinator: config.redisUrl ? new RedisCoordinator(config.redisUrl) : undefined }),
   }
 }
