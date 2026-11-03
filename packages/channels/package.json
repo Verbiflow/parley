@@ -1,0 +1,15 @@
+{
+  "name": "@parley/channels",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Parley's channel-connector framework: the Channel contract, the registry, a conformance suite, and a Fake. WhatsApp is the first channel.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fake": "./src/fake.ts",
+    "./conformance": "./src/conformance.ts"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
+  }
+}

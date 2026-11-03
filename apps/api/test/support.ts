@@ -3,13 +3,14 @@ import { Client } from "pg"
 import { serve, type ServerType } from "@hono/node-server"
 import { migrate, RequestDatabase, readConfig } from "@parley/auth"
 import { MIGRATIONS } from "@parley/auth/migrate"
+import type { Channel } from "@parley/channels"
 import { makeApp } from "../src/app.ts"
 import { makeContext, type AppContext } from "../src/context.ts"
 
 const ADMIN_URL = process.env.DATABASE_ADMIN_URL ?? "postgres://postgres@127.0.0.1:5432/postgres"
 
 /** A fresh migrated database + a running HTTP server for one test file, both torn down at the end. */
-export async function testServer(): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
+export async function testServer(channels?: Channel[]): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
   const name = `parley_api_test_${process.pid}_${Math.random().toString(36).slice(2, 8)}`
   const admin = new Client({ connectionString: ADMIN_URL })
   await admin.connect().catch((e) => {
@@ -26,7 +27,7 @@ export async function testServer(): Promise<{ ctx: AppContext; base: string; sql
 
   const config = readConfig({ PARLEY_ENV: "local", DATABASE_URL: url })
   const db = new RequestDatabase(url)
-  const ctx = makeContext(config, db)
+  const ctx = makeContext(config, db, channels)
   const app = makeApp(ctx)
 
   const server: ServerType = serve({ fetch: app.fetch, port: 0 })
