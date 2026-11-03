@@ -1,0 +1,22 @@
+// Parley's edge app: the dashboard, sign-in, OAuth and MCP at app.itsparley.com.
+// The WhatsApp sockets live on the EC2 sessions service (src/sessions-server.ts); see deploy/README.md.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "parley-app",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "app.itsparley.com", "custom_domain": true }],
+  "observability": { "enabled": true },
+  "vars": {
+    "PARLEY_ENV": "production",
+    "PUBLIC_URL": "https://app.itsparley.com"
+  },
+  // Postgres: Hyperdrive → Workers VPC service `parley-db` → Cloudflare Tunnel → private RDS.
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "HYPERDRIVE_ID" }],
+  // Live channel ops: Workers VPC service `parley-sessions` → Cloudflare Tunnel → EC2 127.0.0.1:8790.
+  "vpc_services": [{ "binding": "SESSIONS", "service_id": "SESSIONS_VPC_SERVICE_ID" }]
+  // Secrets (wrangler secret put): SIGN_IN_KEY, CONNECTION_SIGNING_KEY, WORKOS_CLIENT_ID, WORKOS_API_KEY, SESSIONS_SECRET
+}

@@ -26,8 +26,22 @@ type Entry = {
 const HISTORY_PER_CHAT = 50
 const HISTORY_CHATS = 300
 
-type StatusView = { status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }
-type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
+export type StatusView = { status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }
+export type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
+
+/**
+ * What the HTTP app needs from the session pool. Two implementations: `Sessions` (the pool itself — runs where the
+ * channel sockets live, the EC2 sessions service, and in-process locally/in tests) and `RemoteSessions` (the edge
+ * Worker — reads Postgres directly, forwards live operations to the sessions service).
+ */
+export type SessionsApi = Pick<
+  Sessions,
+  "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
+>
+
+/** The live operations the sessions service exposes over RPC (everything else is a plain Postgres read). */
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats"] as const
+export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
  * Cross-worker coordinator: tracks which worker holds each connection and routes commands to it. Optional — without

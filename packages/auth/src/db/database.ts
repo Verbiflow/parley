@@ -43,15 +43,22 @@ export class RequestDatabase {
   }
 
   #connect(): Promise<Client> {
-    this.#client ??= (async () => {
-      const client = new Client({
-        connectionString: this.#connectionString,
-        connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-        statement_timeout: STATEMENT_TIMEOUT_MS,
-      })
-      await client.connect()
-      return client
-    })()
-    return this.#client
+    if (this.#client) return this.#client
+    const client = new Client({
+      connectionString: this.#connectionString,
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      statement_timeout: STATEMENT_TIMEOUT_MS,
+    })
+    const opening = client.connect().then(() => client)
+    // A dropped or failed connection (DB restart, failover, network blip) must neither crash a long-lived process (an
+    // unhandled 'error' event would) nor wedge it on a dead client: forget it, and the next query reconnects.
+    const forget = () => {
+      if (this.#client === opening) this.#client = undefined
+    }
+    client.on("error", forget)
+    client.on("end", forget)
+    opening.catch(forget)
+    this.#client = opening
+    return opening
   }
 }

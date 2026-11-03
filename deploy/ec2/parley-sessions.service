@@ -1,0 +1,35 @@
+[Unit]
+Description=Parley sessions service (live channel sockets + internal RPC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=parley
+Group=parley
+WorkingDirectory=/opt/parley/current
+ExecStartPre=+/opt/parley/current/deploy/ec2/parley-env.sh
+ExecStart=/usr/local/bin/node --env-file=/run/parley/env apps/api/src/sessions-server.ts
+Restart=always
+RestartSec=3
+# Give sockets a moment to close cleanly on restart.
+TimeoutStopSec=20
+MemoryMax=1600M
+Environment=NODE_ENV=production
+
+# Hardening: no privilege gain, read-only OS, no home dirs, private /tmp, loopback + outbound only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/parley
+
+[Install]
+WantedBy=multi-user.target

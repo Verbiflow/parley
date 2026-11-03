@@ -65,7 +65,8 @@ export function makeApp(ctx: AppContext): Hono {
     if (c.req.method === "POST") {
       const body = await c.req.raw.clone().json().catch(() => undefined)
       const calls = (Array.isArray(body) ? body : [body]).filter((m) => m?.method === "tools/call").map((m) => String(m.params?.name ?? ""))
-      void recordAgentUse(ctx.sql, userId, sessionId, calls.at(-1) || null).catch(() => {})
+      // Awaited (one small write): on the edge the request's DB connection closes once the response is sent.
+      await recordAgentUse(ctx.sql, userId, sessionId, calls.at(-1) || null).catch(() => {})
     }
 
     // Stateless: a fresh server + transport per request, so there's no cross-request state to leak.
