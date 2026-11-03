@@ -10,6 +10,7 @@ get() { jq -r --arg k "$1" '.[$k]' <<<"$app"; }
 
 umask 027
 mkdir -p /run/parley
+chown root:parley /run/parley && chmod 750 /run/parley
 tmp=$(mktemp /run/parley/env.XXXXXX)
 {
   echo "PARLEY_ENV=production"
