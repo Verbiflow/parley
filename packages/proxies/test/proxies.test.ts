@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { HttpsProxyAgent } from "https-proxy-agent"
 import { SocksProxyAgent } from "socks-proxy-agent"
-import { PRESETS, formatProxyUrl, gatewayEndpoint, newSessionId, parseProxyUrl, proxyAgent, resolveGateway } from "../src/index.ts"
+import { PRESETS, formatProxyUrl, gatewayEndpoint, newSessionId, parseProxyUrl, resolveGateway } from "../src/index.ts"
+import { proxyAgent } from "../src/agent.ts"
 
 const creds = { username: "acme", password: "s3cret" }
 const session = { id: "ab12cd34", country: "us" }
