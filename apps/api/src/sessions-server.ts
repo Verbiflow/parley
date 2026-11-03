@@ -30,5 +30,13 @@ serve({ fetch: app.fetch, port, hostname }, async (info) => {
   console.log(JSON.stringify({ msg: "parley sessions listening", host: hostname, port: info.port, env: config.env, reopened }))
 })
 
+// On a deploy/restart: stop the dispatcher (letting an in-flight send finish) and close sockets cleanly.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    console.log(JSON.stringify({ msg: "parley sessions stopping", signal }))
+    void sessions.stop().finally(() => process.exit(0))
+  })
+}
+
 // Keep running through one bad event; systemd restarts us if the process does die.
 process.on("unhandledRejection", (e) => console.error(JSON.stringify({ msg: "unhandled rejection", error: e instanceof Error ? e.message : String(e) })))

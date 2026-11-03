@@ -1,10 +1,12 @@
 import type { Sql } from "@parley/auth/db"
 import type { LinkMethod } from "@parley/channels"
-import { ConnectError, type LiveOp, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
-import { getConnection, listConnections, type Connection } from "./store.ts"
+import { ConnectError, type LiveOp, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
+import { OutboxError, type Queued } from "./outbox.ts"
+import { getConnection, listConnections, type Connection, type Locale } from "./store.ts"
 import { listChats, getChat, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
-const CONNECT_ERRORS = new Set(["unknown_channel", "not_found", "forbidden", "not_connected", "not_synced"])
+const CONNECT_ERRORS = new Set(["unknown_channel", "not_found", "forbidden", "not_connected", "not_synced", "no_exit"])
+type EnqueueRequest = Parameters<Sessions["enqueue"]>[2]
 const RPC_TIMEOUT_MS = 20_000
 
 /** How the edge reaches the sessions service: a `fetch` (the Workers VPC binding's, in production) plus the shared secret. */
@@ -26,8 +28,15 @@ export class RemoteSessions implements SessionsApi {
     this.#transport = transport
   }
 
-  connect(accountId: string, channelId: string): Promise<{ connectionId: string; channel: string; linkMethod: LinkMethod }> {
-    return this.#call("connect", [accountId, channelId])
+  connect(accountId: string, channelId: string, locale: Locale = {}): Promise<{ connectionId: string; channel: string; linkMethod: LinkMethod }> {
+    return this.#call("connect", [accountId, channelId, locale])
+  }
+  /** `now` isn't forwarded: the sessions service's clock decides pacing. */
+  enqueue(accountId: string, connectionId: string, req: EnqueueRequest): Promise<{ message: Queued; replayed: boolean }> {
+    return this.#call("enqueue", [accountId, connectionId, { ...req, notBefore: req.notBefore?.toISOString() }])
+  }
+  setLocale(accountId: string, connectionId: string, locale: Locale): Promise<void> {
+    return this.#call("setLocale", [accountId, connectionId, locale])
   }
   status(accountId: string, connectionId: string): Promise<StatusView> {
     return this.#call("status", [accountId, connectionId])
@@ -89,9 +98,10 @@ export class RemoteSessions implements SessionsApi {
       body: JSON.stringify({ args }),
       signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
     })
-    const body = (await res.json().catch(() => undefined)) as { result?: T; error?: { code: string; message: string } } | undefined
+    const body = (await res.json().catch(() => undefined)) as { result?: T; error?: { type?: string; code: string; message: string } } | undefined
     if (res.ok && body && "result" in body) return body.result as T
     const err = body?.error
+    if (err?.type === "OutboxError") throw new OutboxError(err.code as OutboxError["code"], err.message)
     if (err && CONNECT_ERRORS.has(err.code)) throw new ConnectError(err.code as ConstructorParameters<typeof ConnectError>[0], err.message)
     throw new Error(`sessions service ${op} failed: ${res.status} ${err?.code ?? ""}`.trim())
   }

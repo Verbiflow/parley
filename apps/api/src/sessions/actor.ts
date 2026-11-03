@@ -1,7 +1,12 @@
 import { SignInKey, serverSeal, secrets, type IdentityConfig, type Sql, type SecretSeal } from "@parley/auth"
-import { channelById, type Channel, type ChannelEvent, type LinkMethod, type LiveConnection } from "@parley/channels"
+import { SendFailure, channelById, type Channel, type ChannelEvent, type LinkMethod, type LiveConnection } from "@parley/channels"
+import type { ActionKind, Outcome } from "@parley/pacing"
+import { parsePhoneNumberFromString } from "libphonenumber-js"
+import { Transactor } from "../db/transactor.ts"
+import { Exits, ExitError } from "./exits.ts"
+import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, type Claimed, type Queued } from "./outbox.ts"
 import type { InboundMessage } from "@parley/channels"
-import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, type Connection } from "./store.ts"
+import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, type Connection, type Locale } from "./store.ts"
 import { upsertChats, touchChat, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
@@ -36,11 +41,16 @@ export type LinkView = { status: string; channel: string; link?: { method: LinkM
  */
 export type SessionsApi = Pick<
   Sessions,
-  "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
+  | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
+  | "enqueue" | "setLocale"
 >
 
-/** The live operations the sessions service exposes over RPC (everything else is a plain Postgres read). */
-export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats"] as const
+/**
+ * The operations the sessions service exposes over RPC: anything touching a live socket, plus the outbox writes
+ * (`enqueue`, `setLocale`) so pacing, its row locks and the dispatcher stay in one place. Everything else is a plain
+ * Postgres read the edge does itself.
+ */
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale"] as const
 export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
@@ -57,9 +67,11 @@ export interface Coordinator {
   close(): Promise<void>
 }
 
+type ConnectErrorCode = "unknown_channel" | "not_found" | "forbidden" | "not_connected" | "not_synced" | "no_exit"
+
 export class ConnectError extends Error {
-  readonly code: "unknown_channel" | "not_found" | "forbidden" | "not_connected" | "not_synced"
-  constructor(code: "unknown_channel" | "not_found" | "forbidden" | "not_connected" | "not_synced", message: string) {
+  readonly code: ConnectErrorCode
+  constructor(code: ConnectErrorCode, message: string) {
     super(message)
     this.name = "ConnectError"
     this.code = code
@@ -71,26 +83,119 @@ export class ConnectError extends Error {
  * stream becomes persistent state. Channel-agnostic — it dispatches to `channelById(ctx.channels, …)`. With a
  * `coordinator`, a fleet of workers shares the role: each connection is held by one worker and commands route to it.
  */
+/** How often a worker looks for due messages on the connections it holds. */
+export const DISPATCH_INTERVAL_MS = 3_000
+
+type SessionsContext = { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator; tx?: Transactor; exits?: Exits }
+
 export class Sessions {
   readonly #live = new Map<string, Entry>()
   #seal: SecretSeal | undefined
-  private readonly ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator }
+  #dispatcher: ReturnType<typeof setInterval> | undefined
+  #dispatching: Promise<number> | undefined
+  readonly tx: Transactor
+  readonly exits: Exits
+  private readonly ctx: SessionsContext
 
-  constructor(ctx: { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator }) {
+  constructor(ctx: SessionsContext) {
     this.ctx = ctx
+    if (!ctx.tx && !ctx.config.databaseUrl) throw new Error("Sessions needs DATABASE_URL (or a Transactor) for the outbox")
+    this.tx = ctx.tx ?? new Transactor(ctx.config.databaseUrl!)
+    this.exits = ctx.exits ?? new Exits(ctx.config)
   }
 
-  /** Start coordination (no-op without a coordinator). Call once before serving. */
+  /** Start coordination (no-op without a coordinator) and the dispatcher. Call once before serving. */
   async start(): Promise<void> {
     await this.ctx.coordinator?.start((req) => this.#handleRpc(req))
+    this.#dispatcher = setInterval(() => void this.dispatchDue().catch(() => {}), DISPATCH_INTERVAL_MS)
+    this.#dispatcher.unref()
   }
 
-  async connect(accountId: string, channelId: string): Promise<{ connectionId: string; channel: string; linkMethod: LinkMethod }> {
+  async stop(): Promise<void> {
+    clearInterval(this.#dispatcher)
+    await this.#dispatching?.catch(() => {})
+    for (const entry of this.#live.values()) await entry.live?.close().catch(() => {})
+    this.#live.clear()
+    await this.tx.close()
+  }
+
+  async connect(accountId: string, channelId: string, locale: Locale = {}): Promise<{ connectionId: string; channel: string; linkMethod: LinkMethod }> {
     const channel = channelById(this.ctx.channels, channelId)
     if (!channel) throw new ConnectError("unknown_channel", `no channel "${channelId}"`)
-    const conn = await createConnection(this.ctx.sql, accountId, channelId)
+    const conn = await createConnection(this.ctx.sql, accountId, channelId, locale)
     await this.#open(channel, conn.id, accountId, undefined)
     return { connectionId: conn.id, channel: channelId, linkMethod: channel.capabilities.linkMethod }
+  }
+
+  /**
+   * Queue a message for this connection's next human-paced slot. Whichever worker holds the connection sends it then;
+   * the caller gets back when that will be and why it isn't sooner.
+   */
+  async enqueue(
+    accountId: string, connectionId: string,
+    req: { to: string; text: string; kind?: ActionKind | undefined; notBefore?: Date | undefined; idempotencyKey?: string | undefined; agentSessionId?: string | undefined },
+    now?: Date
+  ): Promise<{ message: Queued; replayed: boolean }> {
+    const at = now ?? new Date()
+    const queued = await enqueue(this.tx, { accountId, connectionId, ...req }, at)
+    // Due now on a connection held here: send without waiting for the next pass. (Not for a caller-supplied clock.)
+    if (!now && queued.message.scheduledFor && Date.parse(queued.message.scheduledFor) <= at.getTime() && this.#live.has(connectionId)) {
+      setImmediate(() => void this.dispatchDue().catch(() => {}))
+    }
+    return queued
+  }
+
+  async setLocale(accountId: string, connectionId: string, locale: Locale, now = new Date()): Promise<void> {
+    await setLocale(this.tx, accountId, connectionId, locale, now)
+  }
+
+  /**
+   * Send what's due on the connections this worker holds, one message per connection per pass, and feed each result
+   * back into pacing. Lapsed leases (a worker that died mid-send) fail here too. Passes never overlap.
+   */
+  async dispatchDue(now?: Date): Promise<number> {
+    if (this.#dispatching) return this.#dispatching
+    this.#dispatching = (async () => {
+      const at = now ?? new Date()
+      await expireLeases(this.tx, at)
+      const ids = [...this.#live].filter(([, e]) => e.live && !e.loggingOut).map(([id]) => id)
+      const jobs = await claimDue(this.tx, ids, at)
+      for (const job of jobs) await this.#deliver(job, now)
+      return jobs.length
+    })().finally(() => {
+      this.#dispatching = undefined
+    })
+    return this.#dispatching
+  }
+
+  async #deliver(job: Claimed, now: Date | undefined): Promise<void> {
+    const entry = this.#live.get(job.connectionId)
+    let result: { outcome: Outcome; externalId?: string; detail?: string }
+    try {
+      if (!entry?.live) throw new SendFailure("transport_error", "connection went offline before the send")
+      const sent = await entry.live.send(job.chatId, { text: job.text })
+      result = { outcome: "sent", externalId: sent.id }
+    } catch (e) {
+      result = { outcome: e instanceof SendFailure ? e.outcome : "transport_error", detail: e instanceof Error ? e.message : String(e) }
+    }
+    await report(this.tx, job.id, result, now ?? new Date())
+
+    const exitId = await this.exits.liveExitId(this.ctx.sql, job.connectionId)
+    if (!exitId) return
+    if (result.outcome === "transport_error") {
+      await this.exits.recordFailure(this.tx, exitId)
+      // Retired for failing: reopen the socket so it picks up a fresh exit.
+      if (!(await this.exits.liveExitId(this.ctx.sql, job.connectionId)) && entry) {
+        this.#live.delete(job.connectionId)
+        await entry.live?.close().catch(() => {})
+        await this.ctx.coordinator?.release(job.connectionId)
+        await this.#hydrate(job.connectionId).catch(() => {})
+      }
+    } else if (result.outcome === "banned") {
+      await this.exits.burn(this.ctx.sql, exitId)
+    } else {
+      await this.exits.recordSuccess(this.ctx.sql, exitId)
+    }
   }
 
   async status(accountId: string, connectionId: string): Promise<StatusView> {
@@ -240,11 +345,19 @@ export class Sessions {
   async #open(channel: Channel, connectionId: string, accountId: string, state: string | undefined): Promise<Entry> {
     const chosen = await chatsChosen(this.ctx.sql, connectionId)
     const entry: Entry = { live: undefined, channel: channel.id, accountId, link: undefined, loggingOut: false, queue: Promise.resolve(), history: chosen ? undefined : new Map() }
+    const conn = await getConnection(this.ctx.sql, connectionId)
+    let proxy: string | undefined
+    try {
+      proxy = conn ? (await this.exits.exitFor(this.tx, { id: connectionId, accountId, channel: channel.id, country: conn.country }))?.url : undefined
+    } catch (e) {
+      if (e instanceof ExitError) throw new ConnectError("no_exit", e.message)
+      throw e
+    }
     this.#live.set(connectionId, entry)
     const emit = (event: ChannelEvent) => {
       entry.queue = entry.queue.then(() => this.#onEvent(connectionId, event)).catch(() => {})
     }
-    const live = await channel.open({ connectionId, state, emit })
+    const live = await channel.open({ connectionId, state, proxy, emit })
     entry.live = live
     await this.ctx.coordinator?.claim(connectionId)
     return entry
@@ -259,7 +372,8 @@ export class Sessions {
         break
       case "open":
         entry.link = undefined
-        await markConnected(this.ctx.sql, connectionId, event.handle)
+        await markConnected(this.ctx.sql, connectionId, event.handle, countryOf(event.handle))
+        await replanConnection(this.tx, connectionId, new Date())
         break
       case "state":
         await this.#saveCreds(entry.accountId, entry.channel, connectionId, event.state)
@@ -336,4 +450,10 @@ export class Sessions {
     if (!bytes) return undefined
     return this.#open(channel, connectionId, conn.accountId, decoder.decode(bytes))
   }
+}
+
+/** The country of a phone-number handle (a WhatsApp JID), so pacing and exits follow where the account lives. */
+function countryOf(handle: string): string | undefined {
+  const digits = handle.split("@")[0]!.split(":")[0]!.replace(/\D/g, "")
+  return digits ? parsePhoneNumberFromString(`+${digits}`)?.country : undefined
 }

@@ -1,4 +1,5 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
+import { getConnInfo } from "@hono/node-server/conninfo"
 import QRCode from "qrcode"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import type { AppContext } from "./context.ts"
@@ -8,6 +9,26 @@ import { linkPage } from "./web/pages.ts"
 import { buildMcpServer } from "./mcp/server.ts"
 import { ConnectError } from "./sessions/actor.ts"
 import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
+import { LIMITS } from "./ratelimit.ts"
+
+/**
+ * The caller's address. Behind Cloudflare (production) that's `cf-connecting-ip`, which Cloudflare sets itself — the
+ * first `x-forwarded-for` hop is whatever the client claims, so trusting it would let anyone rotate past the rate
+ * limits. Elsewhere: the first hop a proxy in front of us reports, else the socket's peer.
+ */
+function clientIp(c: Context): string {
+  const cf = c.req.header("cf-connecting-ip")
+  if (cf) return cf
+  const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+  if (forwarded) return forwarded
+  try {
+    return getConnInfo(c).remote.address ?? "unknown"
+  } catch {
+    return "unknown"
+  }
+}
+
+const SIGN_IN = /^\/(auth\/(dev|start|callback)|oauth\/(token|register|authorize))$/
 
 /**
  * Parley's HTTP app: the OAuth 2.1 authorization server, plus the MCP endpoint at `/mcp` (Streamable HTTP). The MCP
@@ -16,6 +37,21 @@ import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
  */
 export function makeApp(ctx: AppContext): Hono {
   const app = new Hono()
+
+  const tooMany = (c: Context, wait: number) =>
+    c.json({ error: "rate_limited", error_description: `Too many requests. Retry in ${wait}s.` }, 429, { "Retry-After": String(wait) })
+
+  // Sign-in endpoints take guesses at codes and passwords; dashboard writes change what agents can reach.
+  app.use("*", async (c, next) => {
+    if (c.req.method === "POST") {
+      const rule = SIGN_IN.test(c.req.path) ? ["sign-in", LIMITS.signIn] as const : c.req.path.startsWith("/app/") ? ["dashboard", LIMITS.dashboardWrite] as const : undefined
+      if (rule) {
+        const wait = await ctx.limiter.hit(`${rule[0]}:${clientIp(c)}`, rule[1].limit, rule[1].windowSeconds)
+        if (wait) return tooMany(c, wait)
+      }
+    }
+    await next()
+  })
 
   app.get("/health", (c) => c.json({ ok: true, env: ctx.config.env, version: ctx.config.version }))
   app.route("/", oauthRoutes(ctx))
@@ -61,6 +97,9 @@ export function makeApp(ctx: AppContext): Hono {
       return c.json({ error: "invalid_token" }, 401, { "WWW-Authenticate": challenge })
     }
 
+    const wait = await ctx.limiter.hit(`mcp:${userId}`, LIMITS.mcp.limit, LIMITS.mcp.windowSeconds)
+    if (wait) return tooMany(c, wait)
+
     // Activity for the dashboard ("which agent is using this right now"). Best-effort: never fails the request.
     if (c.req.method === "POST") {
       const body = await c.req.raw.clone().json().catch(() => undefined)
@@ -73,7 +112,7 @@ export function makeApp(ctx: AppContext): Hono {
     const server = buildMcpServer(ctx)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     await server.connect(transport)
-    return transport.handleRequest(c.req.raw, { authInfo: { token, clientId: "", scopes: ["mcp"], extra: { userId } } })
+    return transport.handleRequest(c.req.raw, { authInfo: { token, clientId: "", scopes: ["mcp"], extra: { userId, sessionId } } })
   })
 
   return app

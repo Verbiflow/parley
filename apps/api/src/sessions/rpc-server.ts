@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { Hono } from "hono"
 import { ConnectError, LIVE_OPS, type LiveOp, type Sessions } from "./actor.ts"
+import { OutboxError } from "./outbox.ts"
 
 /**
  * The sessions service's internal API (runs on the EC2 box that holds the channel sockets). The edge Worker reaches it
@@ -27,12 +28,22 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
     const args = (body as { args?: unknown })?.args
     if (!Array.isArray(args)) return c.json({ error: { code: "bad_request", message: "expected { args: [...] }" } }, 400)
 
+    // JSON carries dates as strings; the outbox compares `notBefore` as a Date. Callers never pass `now` (args past
+    // the documented ones are dropped) — this service's clock decides pacing.
+    if (op === "enqueue") {
+      args.length = Math.min(args.length, 3)
+      const req = args[2] as { notBefore?: unknown } | undefined
+      if (req && typeof req.notBefore === "string") req.notBefore = new Date(req.notBefore)
+    }
+    if (op === "setLocale") args.length = Math.min(args.length, 3)
+
     try {
       const fn = sessions[op] as (...a: unknown[]) => Promise<unknown>
       const result = await fn.apply(sessions, args)
       return c.json({ result: result ?? null })
     } catch (e) {
-      if (e instanceof ConnectError) return c.json({ error: { code: e.code, message: e.message } }, 400)
+      // Typed errors cross the wire with their class, so the edge can rebuild them (MCP and the dashboard branch on them).
+      if (e instanceof ConnectError || e instanceof OutboxError) return c.json({ error: { type: e.name, code: e.code, message: e.message } }, 400)
       console.error(JSON.stringify({ msg: "rpc failed", op, error: e instanceof Error ? e.message : String(e) }))
       return c.json({ error: { code: "internal", message: "internal error" } }, 500)
     }

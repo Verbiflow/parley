@@ -1,0 +1,15 @@
+{
+  "name": "@parley/proxies",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Egress proxies for channel sessions: provider presets, gateway sticky-session templates, proxy URLs, and the Node agent a socket connects through.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.6",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}

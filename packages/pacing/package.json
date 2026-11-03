@@ -1,0 +1,11 @@
+{
+  "name": "@parley/pacing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Human pacing for outbound messages: active hours, gaps, bursts and breaks, daily and weekly caps, warmup, and what each platform answer means for the account. Pure; no I/O.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
+  }
+}

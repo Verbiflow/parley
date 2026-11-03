@@ -105,9 +105,10 @@ export async function readMessages(sql: Sql, connectionId: string, chatId: strin
 }
 
 export type InboxMessage = StoredMessage & { channel: string; connectionId: string; chatName: string | null; chatKind: "direct" | "group" }
-export type InboxChat = ChatRow & { channel: string; connectionId: string }
+/** `awaiting`: who owes the next message. `you` when the last word in the chat was theirs. */
+export type InboxChat = ChatRow & { channel: string; connectionId: string; awaiting: "you" | "them" | null }
 
-export type InboxFilter = { channel?: string | undefined; connectionId?: string | undefined; chatId?: string | undefined }
+export type InboxFilter = { channel?: string | undefined; connectionId?: string | undefined; chatId?: string | undefined; awaitingReply?: boolean | undefined }
 
 /**
  * The account's inbox: messages from every synced chat on every connected connection, newest first. Narrow it by
@@ -133,15 +134,17 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
   }))
 }
 
-/** Synced chats across the account's connected connections, most recent first. */
+/** Synced chats across the account's connected connections, most recent first. `awaitingReply` keeps those whose last message was theirs. */
 export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter): Promise<InboxChat[]> {
-  const rows = await sql<Raw & { channel: string; connection_id: string }>(
-    `select c.id, c.kind, c.name, c.synced, c.last_message_at, k.channel, k.id as connection_id
+  const rows = await sql<Raw & { channel: string; connection_id: string; last_from_me: boolean | null }>(
+    `select c.id, c.kind, c.name, c.synced, c.last_message_at, k.channel, k.id as connection_id, lm.from_me as last_from_me
        from parley.chat c join parley.connection k on k.id = c.connection_id
+       left join lateral (select m.from_me from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id order by m.sent_at desc, m.seq desc limit 1) lm on true
       where k.account_id = $1 and k.status = 'connected' and c.synced
         and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3)
+        and ($4::boolean is not true or lm.from_me = false)
       order by c.last_message_at desc nulls last, c.name nulls last`,
-    [accountId, opts.channel ?? null, opts.connectionId ?? null]
+    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.awaitingReply ?? null]
   )
-  return rows.map((r) => ({ ...chatRow(r), channel: r.channel, connectionId: r.connection_id }))
+  return rows.map((r) => ({ ...chatRow(r), channel: r.channel, connectionId: r.connection_id, awaiting: r.last_from_me === null ? null : r.last_from_me ? "them" : "you" }))
 }

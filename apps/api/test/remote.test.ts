@@ -12,8 +12,10 @@ import { freshDatabase } from "./support.ts"
 // talking over HTTP with a shared secret. Same Postgres for both, as in production.
 const SECRET = "test-secret-0123456789abcdef0123456789abcdef"
 const fake = makeFakeChannel("fake")
+const wa = makeFakeChannel("fake-wa")
 const { sql, config } = await freshDatabase()
-const pool = new Sessions({ sql, channels: [fake.channel], config })
+const pool = new Sessions({ sql, channels: [fake.channel, wa.channel], config })
+after(() => pool.stop())
 let server!: ServerType
 const port = await new Promise<number>((resolve) => {
   server = serve({ fetch: rpcApp(pool, SECRET).fetch, port: 0, hostname: "127.0.0.1" }, (info) => resolve(info.port))
@@ -68,6 +70,26 @@ test("ownership errors come back typed, across the wire and on local reads", asy
   await assert.rejects(remote.send(other, connectionId, "x", "y"), { name: "ConnectError", code: "forbidden" })
   await assert.rejects(remote.chats(other, connectionId), { name: "ConnectError", code: "forbidden" })
   await assert.rejects(remote.connect(owner, "nope"), { name: "ConnectError", code: "unknown_channel" })
+})
+
+test("paced sends go through the sessions service: notBefore survives the wire, outbox errors come back typed", async () => {
+  const { id: accountId } = await account("paced@parley.test")
+  const { id: other } = await account("paced-other@parley.test")
+  const { connectionId } = await remote.connect(accountId, "fake-wa", { timezone: "UTC" })
+  await waitUntil(() => remote.linkView(connectionId), (v) => Boolean(v.link))
+  wa.simulator.completeLink(connectionId)
+  await waitUntil(() => remote.status(accountId, connectionId), (s) => s.status === "connected")
+
+  const notBefore = new Date(Date.now() + 3 * 24 * 3600_000)
+  const { message, replayed } = await remote.enqueue(accountId, connectionId, { to: "+15550199", text: "later", notBefore, idempotencyKey: "k1" })
+  assert.equal(replayed, false)
+  assert.ok(Date.parse(message.scheduledFor!) >= notBefore.getTime(), "scheduled no earlier than notBefore")
+  const again = await remote.enqueue(accountId, connectionId, { to: "+15550199", text: "later", notBefore, idempotencyKey: "k1" })
+  assert.equal(again.replayed, true)
+  assert.equal(again.message.id, message.id)
+
+  await remote.setLocale(accountId, connectionId, { timezone: "America/New_York" })
+  await assert.rejects(remote.enqueue(other, connectionId, { to: "+15550199", text: "x" }), { name: "OutboxError", code: "forbidden" })
 })
 
 test("the RPC refuses a wrong secret and anything outside the live ops", async () => {
