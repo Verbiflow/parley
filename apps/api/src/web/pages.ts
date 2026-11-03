@@ -26,7 +26,11 @@ function tile(id: string, size = 32): string {
   return `<span class="tile" style="background:${b.bg};width:${size}px;height:${size}px"><svg viewBox="0 0 24 24" width="${Math.round(size * 0.54)}" height="${Math.round(size * 0.54)}" fill="#fff" aria-hidden="true"><path d="${b.path}"/></svg></span>`
 }
 
-const LOGO = `<span class="logo">${tile("whatsapp", 24)}<span>Parley</span></span>`
+/** Parley's mark: a chat bubble whose tail forms the stem of a "P". Uses currentColor so it follows the theme. */
+const MARK_PATH = "M16 26A20 20 0 1 1 28 44.33C26 50.5 21.5 55.5 16 58ZM36 18a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"
+const MARK = `<svg viewBox="0 0 64 64" width="24" height="24" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="${MARK_PATH}"/></svg>`
+
+const LOGO = `<span class="logo">${MARK}<span>Parley</span></span>`
 
 /**
  * Flage's design tokens, copied from flage/frontend/app/globals.css: the neutral light theme (#FAFAFA page, white cards,
