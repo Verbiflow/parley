@@ -81,6 +81,68 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     }
   )
 
+  const filters = {
+    channel: z.string().optional().describe("Only this channel, e.g. \"whatsapp\". Omit for every connected channel."),
+    connection_id: z.string().optional().describe("Only this connection (if you have several on one channel)."),
+  }
+  const pickUrl = `${base}/app`
+
+  server.registerTool(
+    "read_inbox",
+    {
+      title: "Read inbox",
+      description: "Read recent messages across all your connected channels, newest first — only from the chats the account holder chose to sync. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`.",
+      inputSchema: {
+        ...filters,
+        chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
+        limit: z.number().int().min(1).max(200).optional().describe("How many messages (default 50)."),
+        before: z.string().datetime().optional().describe("Only messages sent before this ISO time — pass the `at` of the oldest message you have to page back."),
+      },
+    },
+    async ({ channel, connection_id, chat_id, limit, before }, extra) => {
+      const userId = principalOf(extra)
+      try {
+        const messages = await ctx.sessions.inbox(userId, { channel, connectionId: connection_id, chatId: chat_id, limit: limit ?? 50, before })
+        const out: Record<string, unknown> = {
+          messages: messages.map((m) => ({
+            channel: m.channel, connection_id: m.connectionId, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
+            id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
+          })),
+        }
+        if (!messages.length) {
+          const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id })
+          out.note = chats.length
+            ? "No messages yet in the synced chats (matching your filters)."
+            : `No chats are synced${channel ? ` on ${channel}` : ""}. Ask the account holder to connect a channel and choose chats at ${pickUrl}`
+        }
+        return json(out)
+      } catch (e) {
+        return fail(e instanceof ConnectError ? e.message : "could not read the inbox")
+      }
+    }
+  )
+
+  server.registerTool(
+    "list_chats",
+    {
+      title: "List chats",
+      description: "List the chats (people and groups) the account holder chose to sync, across all connected channels, most recent first. Filter by channel or connection.",
+      inputSchema: filters,
+    },
+    async ({ channel, connection_id }, extra) => {
+      const userId = principalOf(extra)
+      try {
+        const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id })
+        return json({
+          chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt })),
+          ...(chats.length ? {} : { note: `No chats are synced. Ask the account holder to choose chats at ${pickUrl}` }),
+        })
+      } catch (e) {
+        return fail(e instanceof ConnectError ? e.message : "could not list chats")
+      }
+    }
+  )
+
   server.registerTool(
     "send_message",
     {

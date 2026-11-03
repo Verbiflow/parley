@@ -173,3 +173,38 @@ export async function entitlements(sql: Sql, userId: string): Promise<string[]> 
   )
   return rows.map((row) => row.kind)
 }
+
+// ---- Profile & browser sessions (dashboard) ---------------------------------
+
+export type Profile = { id: string; email: string; name: string; image: string | null; signedInWith: SignInMethod | null; createdAt: string }
+
+/** The signed-in account's profile, for the dashboard. */
+export async function accountById(sql: Sql, id: string): Promise<Profile | undefined> {
+  const [row] = await sql<{ id: string; email: string; name: string; image: string | null; signed_in_with: SignInMethod | null; created_at: Date }>(
+    `select id, email, name, image, signed_in_with, created_at from identity.account where id = $1`,
+    [id]
+  )
+  return row && { id: row.id, email: row.email, name: row.name, image: row.image, signedInWith: row.signed_in_with, createdAt: row.created_at.toISOString() }
+}
+
+export type BrowserSessionView = { id: string; method: SignInMethod | null; userAgent: string | null; createdAt: string; lastSeenAt: string }
+
+/** The account's live browser sessions, most recently used first. */
+export async function browserSessions(sql: Sql, userId: string): Promise<BrowserSessionView[]> {
+  const rows = await sql<{ id: string; method: SignInMethod | null; user_agent: string | null; created_at: Date; last_seen_at: Date }>(
+    `select id, method, user_agent, created_at, last_seen_at from identity.browser_session
+     where user_id = $1 and expires_at > now() order by last_seen_at desc limit 50`,
+    [userId]
+  )
+  return rows.map((r) => ({ id: r.id, method: r.method, userAgent: r.user_agent, createdAt: r.created_at.toISOString(), lastSeenAt: r.last_seen_at.toISOString() }))
+}
+
+/** End one of the account's browser sessions by its public id. */
+export async function endBrowserSession(sql: Sql, userId: string, id: string): Promise<void> {
+  await sql(`delete from identity.browser_session where user_id = $1 and id = $2`, [userId, id])
+}
+
+/** End every browser session for the account except (optionally) one. */
+export async function endOtherBrowserSessions(sql: Sql, userId: string, keepId?: string): Promise<void> {
+  await sql(`delete from identity.browser_session where user_id = $1 and ($2::uuid is null or id <> $2::uuid)`, [userId, keepId ?? null])
+}

@@ -7,6 +7,7 @@ import { webRoutes } from "./web/routes.ts"
 import { linkPage } from "./web/pages.ts"
 import { buildMcpServer } from "./mcp/server.ts"
 import { ConnectError } from "./sessions/actor.ts"
+import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
 
 /**
  * Parley's HTTP app: the OAuth 2.1 authorization server, plus the MCP endpoint at `/mcp` (Streamable HTTP). The MCP
@@ -28,7 +29,7 @@ export function makeApp(ctx: AppContext): Hono {
       const view = await ctx.sessions.linkView(c.req.param("id"))
       let qrSvg: string | undefined
       if (view.link?.method === "qr") qrSvg = await QRCode.toString(view.link.data, { type: "svg", margin: 1, width: 280 })
-      return c.json({ status: view.status, channel: view.channel, link_method: view.link?.method, qr_svg: qrSvg })
+      return c.json({ status: view.status, channel: view.channel, link_method: view.link?.method, qr_svg: qrSvg, chats_url: `/app/connections/${c.req.param("id")}/chats` })
     } catch (e) {
       return c.json({ error: e instanceof ConnectError ? e.message : "not found" }, 404)
     }
@@ -50,10 +51,21 @@ export function makeApp(ctx: AppContext): Hono {
     if (!token) return c.json({ error: "unauthorized" }, 401, { "WWW-Authenticate": challenge })
 
     let userId: string
+    let sessionId: string
     try {
-      userId = (await (await ctx.accessTokenKeys).verify(token)).userId
+      const principal = await (await ctx.accessTokenKeys).verify(token)
+      if (await isSessionEnded(ctx.sql, principal.deviceId)) throw new Error("session ended")
+      userId = principal.userId
+      sessionId = principal.deviceId
     } catch {
       return c.json({ error: "invalid_token" }, 401, { "WWW-Authenticate": challenge })
+    }
+
+    // Activity for the dashboard ("which agent is using this right now"). Best-effort: never fails the request.
+    if (c.req.method === "POST") {
+      const body = await c.req.raw.clone().json().catch(() => undefined)
+      const calls = (Array.isArray(body) ? body : [body]).filter((m) => m?.method === "tools/call").map((m) => String(m.params?.name ?? ""))
+      void recordAgentUse(ctx.sql, userId, sessionId, calls.at(-1) || null).catch(() => {})
     }
 
     // Stateless: a fresh server + transport per request, so there's no cross-request state to leak.

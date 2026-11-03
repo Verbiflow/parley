@@ -1,4 +1,4 @@
-import type { Channel, ChannelEvent, ChannelFake, ChannelSimulator, Capabilities, LiveConnection, OpenOptions, OutboundContent } from "./contract.ts"
+import type { Channel, ChannelEvent, Chat, ChannelFake, ChannelSimulator, Capabilities, LiveConnection, OpenOptions, OutboundContent } from "./contract.ts"
 
 /**
  * An in-memory channel for tests: it fills the `Channel` contract exactly, and its simulator drives the outside
@@ -64,6 +64,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
       conn.emit({ type: "message", message: { id: crypto.randomUUID(), at: new Date().toISOString(), ...message } })
+    },
+    announceChats(connectionId, chats: Chat[]) {
+      const conn = conns.get(connectionId)
+      if (!conn) throw new Error(`no open connection ${connectionId}`)
+      conn.emit({ type: "chats", chats })
     },
     failNextOpen(connectionId) {
       failNext.add(connectionId)

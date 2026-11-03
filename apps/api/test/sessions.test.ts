@@ -38,11 +38,11 @@ test("connect → link → complete → connected → send; creds are sealed and
   assert.equal(fake.simulator.sent(connectionId).length, 1)
 
   // the sealed creds were persisted (channel-creds for this connection)
-  const [{ n }] = await sql<{ n: string }>(
-    `select count(*)::text as n from secret.record where kind = 'channel-creds' and purpose = 'fake' and name = $1`,
-    [connectionId]
+  // (events apply in order, so the creds save can land just after "connected" — wait for it)
+  await waitUntil(
+    async () => (await sql<{ n: string }>(`select count(*)::text as n from secret.record where kind = 'channel-creds' and purpose = 'fake' and name = $1`, [connectionId]))[0]!.n,
+    (n) => n === "1"
   )
-  assert.equal(n, "1")
 
   // a brand-new pool (as after a restart) re-opens the connection from the sealed creds and can send
   const afterRestart = new Sessions({ sql, channels: [fake.channel], config: ctx.config })

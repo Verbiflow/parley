@@ -46,9 +46,9 @@ export async function freshDatabase(): Promise<{ url: string; db: RequestDatabas
 }
 
 /** A fresh migrated database + a running HTTP server (single-process, no Redis) for one test file. */
-export async function testServer(channels?: Channel[]): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
+export async function testServer(channels?: Channel[], env: Record<string, string> = {}): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
   const { url, drop } = await createMigratedDatabase()
-  const config = readConfig({ PARLEY_ENV: "local", DATABASE_URL: url })
+  const config = readConfig({ PARLEY_ENV: "local", DATABASE_URL: url, ...env })
   const db = new RequestDatabase(url)
   const ctx = makeContext(config, db, channels)
   const server: ServerType = serve({ fetch: makeApp(ctx).fetch, port: 0 })

@@ -20,7 +20,17 @@ export type Capabilities = {
   presence: boolean
 }
 
-export type InboundMessage = { id: string; threadId: string; from: string; text: string; at: string }
+/**
+ * A message seen on the connection. `threadId` is the chat it belongs to. `fromMe` marks one the account itself sent
+ * (from its phone or through Parley), so a synced chat holds both sides of the conversation.
+ */
+export type InboundMessage = { id: string; threadId: string; from: string; text: string; at: string; fromMe?: boolean }
+
+/**
+ * A conversation on the channel: a person (`direct`) or a group. The user picks which chats Parley syncs; agents only
+ * ever see synced ones. `name` may be unknown at first and filled in by a later `chats` event.
+ */
+export type Chat = { id: string; name: string | null; kind: "direct" | "group"; lastMessageAt?: string | undefined }
 export type OutboundContent = { text: string }
 
 /** What a live connection tells the host (the session actor) as it runs. */
@@ -31,7 +41,9 @@ export type ChannelEvent =
   | { type: "open"; handle: string }
   /** Opaque channel session state to persist. The host seals it (AES-256-GCM) before storing in Postgres. */
   | { type: "state"; state: string }
-  /** An inbound message arrived. */
+  /** Chats the channel learned of (initial history sync, a new conversation, a name change). An upsert, not a full list. */
+  | { type: "chats"; chats: Chat[] }
+  /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
   | { type: "message"; message: InboundMessage }
   /** The connection closed. `reason` is for logs/UI, not control flow. */
   | { type: "closed"; reason: string }
@@ -77,7 +89,9 @@ export interface ChannelSimulator {
   /** Simulate the user completing the link (scanning the QR / authorizing). */
   completeLink(connectionId: string): void
   /** Simulate an inbound message. */
-  deliver(connectionId: string, message: { threadId: string; from: string; text: string }): void
+  deliver(connectionId: string, message: { threadId: string; from: string; text: string; fromMe?: boolean }): void
+  /** Simulate the channel reporting the account's chats (as on first link / history sync). */
+  announceChats(connectionId: string, chats: Chat[]): void
   /** Make the next `open(connectionId)` fail. */
   failNextOpen(connectionId: string): void
   /** What was sent on a connection, for assertions. */
