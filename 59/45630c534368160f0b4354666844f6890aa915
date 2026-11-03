@@ -1,0 +1,28 @@
+DEVELOPING.md
+  s_64fea0cc107945::t_b33bb41c06a3cc 44-64
+tsconfig.json
+  s_64fea0cc107945::t_be113adc3aa948 20-22
+scripts/try-whatsapp.ts
+  s_64fea0cc107945::t_e597caa4323b93 1-17,19-57
+  s_64fea0cc107945::t_bec99fefebfaf0 18
+scripts/migrate.ts
+  s_64fea0cc107945::t_58dd9e244e408c 1-14
+package.json
+  s_64fea0cc107945::t_ffd8dc008832e5 11-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5945630c534368160f0b4354666844f6890aa915",
+  "prompts": {},
+  "sessions": {
+    "s_64fea0cc107945": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf969f06-5ce5-407d-802f-092b6ac98cc7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Rishi Mahadevan <12445358+rishi12438@users.noreply.github.com>"
+    }
+  }
+}
