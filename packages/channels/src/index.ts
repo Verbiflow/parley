@@ -13,5 +13,7 @@ export type {
   OutboundContent,
   ChannelSimulator,
   ChannelFake,
+  SendOutcome,
 } from "./contract.ts"
+export { SendFailure } from "./contract.ts"
 export { CHANNELS, channelById } from "./registry.ts"

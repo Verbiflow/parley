@@ -14,6 +14,7 @@
     "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.0"
+    "@whiskeysockets/baileys": "^6.7.0",
+    "@parley/proxies": "*"
   }
 }

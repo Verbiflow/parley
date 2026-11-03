@@ -46,17 +46,65 @@ export async function freshDatabase(): Promise<{ url: string; db: RequestDatabas
 }
 
 /** A fresh migrated database + a running HTTP server (single-process, no Redis) for one test file. */
-export async function testServer(channels?: Channel[], env: Record<string, string> = {}): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
+export async function testServer(channels?: Channel[], env: Record<string, string> = {}, opts: Parameters<typeof makeContext>[3] = {}): Promise<{ ctx: AppContext; base: string; sql: AppContext["sql"] }> {
   const { url, drop } = await createMigratedDatabase()
   const config = readConfig({ PARLEY_ENV: "local", DATABASE_URL: url, ...env })
   const db = new RequestDatabase(url)
-  const ctx = makeContext(config, db, channels)
+  const ctx = makeContext(config, db, channels, opts)
   const server: ServerType = serve({ fetch: makeApp(ctx).fetch, port: 0 })
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    await ctx.close()
     await db.close()
     await drop()
   })
   return { ctx, base, sql: ctx.sql }
+}
+
+/** Poll `get` until `ok` holds (session events are applied asynchronously). */
+export async function waitUntil<T>(get: () => Promise<T>, ok: (v: T) => boolean, ms = 2000): Promise<T> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const v = await get()
+    if (ok(v)) return v
+    if (Date.now() > deadline) throw new Error("timed out waiting")
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+/** Authorize an MCP client for `email` against a test server; returns its access token. */
+export async function agentToken(base: string, email: string, name: string): Promise<string> {
+  const { hashSecret, newSecret } = await import("@parley/auth")
+  const redirect = "http://127.0.0.1:9999/callback"
+  const reg = (await (await fetch(`${base}/oauth/register`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: name, redirect_uris: [redirect] }),
+  })).json()) as { client_id: string }
+  const verifier = newSecret("parley_dvc")
+  const authorize = await fetch(`${base}/oauth/authorize`, {
+    method: "POST", redirect: "manual",
+    body: new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: redirect, code_challenge: await hashSecret(verifier), code_challenge_method: "S256", email }),
+  })
+  const code = new URL(authorize.headers.get("location")!).searchParams.get("code")!
+  const tokens = (await (await fetch(`${base}/oauth/token`, {
+    method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: reg.client_id, code_verifier: verifier }),
+  })).json()) as { access_token: string }
+  return tokens.access_token
+}
+
+/** Call an MCP tool; returns the parsed JSON the tool answered with (or its error text). */
+export async function callTool(base: string, token: string, name: string, args: Record<string, unknown> = {}): Promise<{ status: number; isError: boolean; result: any; headers: Headers }> {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  })
+  if (res.status !== 200) return { status: res.status, isError: true, result: await res.json().catch(() => null), headers: res.headers }
+  const body = (await res.json()) as { result: { isError?: boolean; content: Array<{ text: string }> } }
+  const text = body.result.content[0]!.text
+  let result: unknown = text
+  try {
+    result = JSON.parse(text)
+  } catch {}
+  return { status: 200, isError: Boolean(body.result.isError), result, headers: res.headers }
 }

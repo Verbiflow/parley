@@ -15,10 +15,42 @@ Its auth (accounts, sign-in, the device-code grant, connection tokens, sealed se
 ## Layout
 
 ```
-packages/auth/        identity: db, migrations, credentials, tokens, sealing, secrets, store  ← Phase 1 (done)
-packages/channels/    the Channel connector framework; whatsapp is the first entry            ← Phase 3+
-apps/api/             Hono: web pages + REST + OAuth AS + MCP endpoint + session pool          ← Phase 2+
+packages/auth/        identity: db, migrations, credentials, tokens, sealing, secrets, store
+packages/channels/    the Channel connector framework; whatsapp is the first entry
+packages/pacing/      human pacing: active hours, gaps, bursts/breaks, caps, warmup, outcome policies (pure)
+packages/proxies/     egress: provider presets, gateway sticky-session templates, proxy agents (pure)
+apps/api/             Hono: web console + OAuth AS + MCP endpoint + session pool + outbox dispatcher
 ```
+
+## Sending: the outbox and human pacing
+
+Agents never send directly. `send_message` queues into `parley.outbound` and reserves the connection's next
+human-paced slot (`packages/pacing` `planNext`), under a row lock on the connection so concurrent sends queue
+instead of colliding:
+
+- inside the account's local active hours (`parley.connection.timezone`), with random gaps, bursts and breaks
+- daily caps per action that start low and warm up (`warmup`), and halve on pushback
+- replies interleave ahead of conversation openers that hit their cap
+
+The worker holding a connection's live socket runs the dispatcher (`Sessions.dispatchDue`, every 3s): it claims at
+most one due message per connection with a lease, sends it, and reports the outcome. `OUTCOME_POLICIES` decides
+what each platform answer means: back off on a rate limit, pause one action on a stated cap, halt for a person on a
+checkpoint, fail the message when the recipient is unreachable. A lapsed lease fails as `outcome_unknown` rather
+than risk sending twice. Agents see all of it through `send_availability`, `list_outbox` and `cancel_message`.
+
+## Egress: proxy providers and exits
+
+With a proxy provider configured (dashboard → Network), every connection's socket leaves through one exit in its
+own country, from the moment it links. Gateways (Bright Data, Oxylabs, Decodo, IPRoyal, or any custom
+username/password template) mint one sticky session per connection; static lists (ISP, datacenter, your own servers
+— e.g. a pool built with the AWS CLI) are imported as fixed exits. An exit never fronts two connections on the same
+channel (enforced by partial unique indexes), repeated transport failures retire it and reconnect through a fresh
+one, and a ban burns it. Credentials are sealed like every other secret.
+
+## Rate limits
+
+Per agent on `/mcp`, per client IP on sign-in endpoints and dashboard writes (`apps/api/src/ratelimit.ts`). Shared
+across workers in Redis when `REDIS_URL` is set; in memory otherwise. Over the limit: `429` with `Retry-After`.
 
 ## Setup
 

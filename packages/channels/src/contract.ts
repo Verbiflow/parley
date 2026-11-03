@@ -63,7 +63,25 @@ export type OpenOptions = {
   connectionId: string
   /** Previously-saved opaque state (session creds). Undefined for a fresh link. */
   state?: string | undefined
+  /** Proxy URL every socket of this connection must leave through (its exit IP). Undefined means connect directly. */
+  proxy?: string | undefined
   emit: Emit
+}
+
+/**
+ * What the platform said when a send failed, in the host's terms. A channel classifies its own errors into these and
+ * throws `SendFailure`; the host decides what each means for the account (pause, back off, halt). Anything else a
+ * send throws is treated as `transport_error`: it never reached the platform.
+ */
+export type SendOutcome = "rate_limited" | "limit_reached" | "challenge" | "auth_expired" | "banned" | "recipient_unavailable" | "transport_error"
+
+export class SendFailure extends Error {
+  readonly outcome: SendOutcome
+  constructor(outcome: SendOutcome, message: string) {
+    super(message)
+    this.name = "SendFailure"
+    this.outcome = outcome
+  }
 }
 
 /** A channel connector. One module per integration implements this and is added to the registry. */
@@ -96,6 +114,10 @@ export interface ChannelSimulator {
   failNextOpen(connectionId: string): void
   /** What was sent on a connection, for assertions. */
   sent(connectionId: string): Array<{ to: string; content: OutboundContent }>
+  /** Make the next send on a connection fail the way the platform would. */
+  failNextSend(connectionId: string, outcome: SendOutcome): void
+  /** The proxy the connection was last opened through. */
+  proxyOf(connectionId: string): string | undefined
 }
 
 export interface ChannelFake {

@@ -4,19 +4,24 @@
   "private": true,
   "type": "module",
   "description": "Parley's HTTP app: OAuth 2.1 authorization server, the MCP endpoint, and (later) web pages and the session pool.",
-  "exports": { ".": "./src/app.ts" },
+  "exports": {
+    ".": "./src/app.ts"
+  },
   "scripts": {
     "test": "node --test --test-timeout=60000 \"test/**/*.test.ts\"",
     "dev": "node --watch --env-file-if-exists=../../.env src/server.ts"
   },
   "dependencies": {
-    "@parley/auth": "*",
-    "@parley/channels": "*",
     "@hono/node-server": "^1.13.7",
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@parley/auth": "*",
+    "@parley/channels": "*",
+    "@parley/pacing": "*",
+    "@parley/proxies": "*",
     "@workos-inc/node": "^7.0.0",
     "hono": "^4.6.14",
     "ioredis": "^5.4.2",
+    "libphonenumber-js": "^1.13.15",
     "pg": "^8.13.1",
     "qrcode": "^1.5.4",
     "zod": "^3.24.1"

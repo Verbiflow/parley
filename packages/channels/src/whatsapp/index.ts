@@ -2,7 +2,8 @@ import makeWASocket, {
   DisconnectReason, makeCacheableSignalKeyStore, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
   type WAMessage, type Contact,
 } from "@whiskeysockets/baileys"
-import type { Channel, Chat, InboundMessage, LiveConnection, OpenOptions } from "../contract.ts"
+import { proxyAgent } from "@parley/proxies"
+import { SendFailure, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 
 // Baileys wants a pino-like logger; we keep it silent. Cast once, here.
@@ -16,6 +17,21 @@ function toJid(to: string): string {
 /** Chats a person can pick: direct and group conversations. Status updates, broadcast lists and channels are not chats. */
 function isChatJid(jid: string | null | undefined): jid is string {
   return Boolean(jid) && !isJidBroadcast(jid!) && !isJidNewsletter(jid!) && jid !== "status@broadcast"
+}
+
+/**
+ * WhatsApp's answer to a failed send, in the host's terms. Baileys surfaces server errors as Boom errors carrying an
+ * HTTP-style status: 429 is WhatsApp's rate limit, 401 a session it no longer accepts, 403 an account it has
+ * restricted. Anything without a status never reached WhatsApp.
+ */
+function classify(error: unknown): SendFailure {
+  const status = (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode
+  const message = error instanceof Error ? error.message : String(error)
+  if (status === 429 || /rate-overlimit/i.test(message)) return new SendFailure("rate_limited", message)
+  if (status === 401 || status === DisconnectReason.loggedOut) return new SendFailure("auth_expired", message)
+  if (status === 403) return new SendFailure("banned", message)
+  if (status === 404 || status === 400) return new SendFailure("recipient_unavailable", message)
+  return new SendFailure("transport_error", message)
 }
 
 const seconds = (t: unknown): string | undefined => {
@@ -50,7 +66,10 @@ export const whatsappChannel: Channel = {
   id: "whatsapp",
   capabilities: { linkMethod: "qr", media: false, groups: true, threads: true, presence: false },
 
-  async open({ state, emit }: OpenOptions): Promise<LiveConnection> {
+  async open({ state, proxy, emit }: OpenOptions): Promise<LiveConnection> {
+    // One agent for the WebSocket and one for media/HTTPS fetches, so nothing leaves from the server's own IP.
+    const agent = proxy ? proxyAgent(proxy) : undefined
+    const fetchAgent = proxy ? proxyAgent(proxy) : undefined
     const auth = makeAuthState(state)
     let sock!: ReturnType<typeof makeWASocket>
     let stopped = false
@@ -123,6 +142,7 @@ export const whatsappChannel: Channel = {
         logger: SILENT,
         browser: ["Parley", "Chrome", "1.0"],
         syncFullHistory: false,
+        ...(agent ? { agent, fetchAgent } : {}),
       })
 
       sock.ev.on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
@@ -168,8 +188,18 @@ export const whatsappChannel: Channel = {
 
     return {
       async send(to, content) {
-        const res = await sock.sendMessage(toJid(to), { text: content.text })
-        return { id: res?.key?.id ?? "" }
+        const jid = toJid(to)
+        // A bare number that isn't on WhatsApp is the recipient's problem, not the account's: say so before trying.
+        if (jid.endsWith("@s.whatsapp.net")) {
+          const [found] = await sock.onWhatsApp(jid).catch((e: unknown) => { throw classify(e) }) ?? []
+          if (found && !found.exists) throw new SendFailure("recipient_unavailable", `${to} isn't on WhatsApp`)
+        }
+        try {
+          const res = await sock.sendMessage(jid, { text: content.text })
+          return { id: res?.key?.id ?? "" }
+        } catch (e) {
+          throw classify(e)
+        }
       },
       async logout() {
         stopped = true

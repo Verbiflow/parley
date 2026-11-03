@@ -1,4 +1,4 @@
-import type { Channel, ChannelEvent, Chat, ChannelFake, ChannelSimulator, Capabilities, LiveConnection, OpenOptions, OutboundContent } from "./contract.ts"
+import { SendFailure, type Channel, type ChannelEvent, type Chat, type ChannelFake, type ChannelSimulator, type Capabilities, type LiveConnection, type OpenOptions, type OutboundContent, type SendOutcome } from "./contract.ts"
 
 /**
  * An in-memory channel for tests: it fills the `Channel` contract exactly, and its simulator drives the outside
@@ -15,11 +15,14 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
   const caps: Capabilities = { linkMethod: "qr", media: false, groups: false, threads: true, presence: false, ...capabilities }
   const conns = new Map<string, ConnState>()
   const failNext = new Set<string>()
+  const failSend = new Map<string, SendOutcome>()
+  const proxies = new Map<string, string | undefined>()
 
   const channel: Channel = {
     id,
     capabilities: caps,
-    async open({ connectionId, state, emit }: OpenOptions): Promise<LiveConnection> {
+    async open({ connectionId, state, proxy, emit }: OpenOptions): Promise<LiveConnection> {
+      proxies.set(connectionId, proxy)
       if (failNext.has(connectionId)) {
         failNext.delete(connectionId)
         emit({ type: "closed", reason: "forced failure" })
@@ -37,6 +40,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       return {
         async send(to: string, content: OutboundContent) {
           if (!conn.linked) throw new Error("not linked")
+          const failure = failSend.get(connectionId)
+          if (failure) {
+            failSend.delete(connectionId)
+            throw new SendFailure(failure, `simulated ${failure}`)
+          }
           conn.sent.push({ to, content })
           return { id: `msg-${conn.sent.length}` }
         },
@@ -75,6 +83,12 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
     },
     sent(connectionId) {
       return conns.get(connectionId)?.sent ?? []
+    },
+    failNextSend(connectionId, outcome) {
+      failSend.set(connectionId, outcome)
+    },
+    proxyOf(connectionId) {
+      return proxies.get(connectionId)
     },
   }
 
