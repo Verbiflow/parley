@@ -1,0 +1,68 @@
+apps/api/src/context.ts
+  s_adf2bae2cc84bd::t_4824803126b16a 3,12-15,23,26-31,41
+apps/api/src/server.ts
+  s_adf2bae2cc84bd::t_5a89559fca8ab4 6-7,9-18,22-23
+packages/auth/src/db/database.ts
+  s_adf2bae2cc84bd::t_0807d44d7fe8e8 46-50,52-62
+  s_adf2bae2cc84bd::t_7100d8d7d91846 51
+apps/api/package.json
+  s_adf2bae2cc84bd::t_4b295aa4cc32f9 7-9,17-18,27-28
+apps/api/src/sessions/actor.ts
+  s_adf2bae2cc84bd::t_84ac010df7bab1 29-44
+apps/api/src/worker.ts
+  s_adf2bae2cc84bd::t_f0ee50c41c3a9a 1
+  s_adf2bae2cc84bd::t_dba7e1ec69fe8c 2-49
+apps/api/src/sessions/rpc-server.ts
+  s_adf2bae2cc84bd::t_a73b354186513f 1-44
+deploy/ec2/parley-sessions.service
+  s_adf2bae2cc84bd::t_9eeb22b020b23b 1-35
+deploy/deploy-sessions.sh
+  s_adf2bae2cc84bd::t_694ae1ade7dcd2 1-52
+apps/api/wrangler.jsonc
+  s_adf2bae2cc84bd::t_8a0afbe039aef7 1-22
+deploy/ec2/user-data.sh
+  s_adf2bae2cc84bd::t_be08cae75e4ae6 1-42
+packages/channels/src/whatsapp/meta.ts
+  s_adf2bae2cc84bd::t_174b91d14cf787 1-8
+packages/channels/src/whatsapp/index.ts
+  s_adf2bae2cc84bd::t_8cc2dd545ec01d 7
+  s_adf2bae2cc84bd::t_047d4f7872094d 51-52
+apps/api/src/app.ts
+  s_adf2bae2cc84bd::t_855936a00f1ba0 68-69
+deploy/ec2/parley-env.sh
+  s_adf2bae2cc84bd::t_1dcce745970965 1-28
+packages/channels/package.json
+  s_adf2bae2cc84bd::t_4693406b2070c6 11-12
+deploy/ec2/db-bootstrap.sh
+  s_adf2bae2cc84bd::t_8fc8e197ce9de4 1-23
+apps/api/src/sessions/remote.ts
+  s_adf2bae2cc84bd::t_5bde5fa9dc3edb 1-98
+deploy/ec2/cloudflared.service
+  s_adf2bae2cc84bd::t_afaff1d2a9b68e 1-9,11-21
+  s_adf2bae2cc84bd::t_261a695d623fed 10
+apps/api/test/remote.test.ts
+  s_adf2bae2cc84bd::t_ab7051846027bd 1-16,22-82
+  s_adf2bae2cc84bd::t_4033d1a934a389 17-21
+apps/api/src/sessions-server.ts
+  s_adf2bae2cc84bd::t_99d9cb0533176d 1-34
+deploy/README.md
+  s_adf2bae2cc84bd::t_5ff1823d9950ba 1-76
+package-lock.json
+  s_adf2bae2cc84bd::t_e55b743f15674a 37-38,87-210,217-660,1244-1271,1412-1440,1498-1517,1968-1974,2330-2339,2385-2426,2687-2701,3062-3071,3164-3203,3424-3430,4153-4165,4265-4274,4281-4290,4349-4413,4505-4543
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "deaafc81a0947be72b9f3b5d0217adffa837da1c",
+  "prompts": {},
+  "sessions": {
+    "s_adf2bae2cc84bd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b4e75c10-9180-459d-91da-f3365c519912",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
