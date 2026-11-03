@@ -28,6 +28,7 @@ echo $SHA > "\$R/REVISION"
 cd "\$R" && HOME=/root npm ci --omit=dev --no-audit --no-fund --loglevel=error
 chmod 750 deploy/ec2/*.sh
 chown -R parley:parley "\$R"
+id cloudflared >/dev/null 2>&1 || useradd --system --no-create-home --shell /sbin/nologin cloudflared
 install -m 644 deploy/ec2/parley-sessions.service /etc/systemd/system/parley-sessions.service
 install -m 644 deploy/ec2/cloudflared.service /etc/systemd/system/cloudflared.service
 ln -sfn "\$R" /opt/parley/current

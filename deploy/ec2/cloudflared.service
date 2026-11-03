@@ -1,21 +1,24 @@
 [Unit]
-Description=Cloudflare Tunnel (parley-prod) — the only way into this box
+Description=Cloudflare Tunnel (parley-prod), the only way into this box
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-DynamicUser=true
-# The tunnel token is read from Secrets Manager at start and handed over via an env file on tmpfs.
-ExecStartPre=+/bin/bash -c 'umask 077; mkdir -p /run/cloudflared; echo "TUNNEL_TOKEN=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id parley/prod/tunnel-token --query SecretString --output text)" > /run/cloudflared/env'
-EnvironmentFile=/run/cloudflared/env
-ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
+User=cloudflared
+Group=cloudflared
+RuntimeDirectory=cloudflared
+RuntimeDirectoryMode=0700
+# The tunnel token comes from Secrets Manager at start, onto tmpfs, readable only by the cloudflared user.
+ExecStartPre=+/bin/bash -c 'umask 077; aws secretsmanager get-secret-value --region us-east-1 --secret-id parley/prod/tunnel-token --query SecretString --output text > /run/cloudflared/token && chown cloudflared:cloudflared /run/cloudflared/token'
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /run/cloudflared/token
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target
