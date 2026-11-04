@@ -497,9 +497,9 @@ const CHATS_CSS = `
 .prefs .today .bar{display:inline-block;width:120px;vertical-align:middle;margin:0}
 .prefs .today a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px}
 .pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
-.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .cc{flex:0 0 90px;min-width:0}
+.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .lim > span{white-space:nowrap}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
-.behave{display:flex;gap:28px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.sws{display:flex;gap:22px;align-items:center;height:34px;margin-left:18px}
 .sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px}
 .sw input{appearance:none;flex:0 0 30px;width:30px;height:18px;margin:0;border-radius:9px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
 .sw input::after{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
@@ -543,24 +543,26 @@ const CHATS_CSS = `
 `
 
 /** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
-/** A switch that saves its form as soon as it's flipped. */
-const toggle = (name: string, on: boolean, label: string) =>
-  `<label class="sw"><input type="checkbox" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
+/** A switch in form `form` that saves it as soon as it's flipped. */
+const toggle = (form: string, name: string, on: boolean, label: string) =>
+  `<label class="sw"><input type="checkbox" form="${form}" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
 
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
+  // The switches sit in the daily limit's row but belong to their own form (forms can't nest).
+  const behave = `behave-${esc(conn.id)}`
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
-      <label class="field lim"><span>Daily limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
+      <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
       <button class="btn line sm" type="submit">Save</button>
+      <span class="sws">
+        ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
+        ${toggle(behave, "typing", conn.typing, "Typing")}
+        <noscript><button class="btn line sm" type="submit" form="${behave}">Save</button></noscript>
+      </span>
     </form>
-    <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count.</p>
-    <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" class="behave">
-      ${toggle("read_receipts", conn.readReceipts, "Read receipts")}
-      ${toggle("typing", conn.typing, "Typing")}
-      <noscript><button class="btn line sm" type="submit">Save</button></noscript>
-    </form>
+    <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" id="${behave}" hidden></form>
   </div>`
 }
 
