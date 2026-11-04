@@ -112,3 +112,29 @@ test("a chat folded into another (private id → number) keeps how far it was re
   const ana = (await callTool(base, token, "list_chats")).result.chats.find((c: any) => c.chat_id === "ana")
   assert.deepEqual(ana.new, { messages: 0, reactions: 0 })
 })
+
+test("every other tool's answer carries a short count of what's new, without marking it read; none once all is read", async () => {
+  const email = "badge@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const { accountId, connectionId } = await linked(email)
+  const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString()
+  const news = async (tool: string, args: Record<string, unknown> = {}) => (await callTool(base, token, tool, args)).result.new_since_last_read
+
+  assert.equal(await news("list_connections"), undefined)
+  fake.simulator.deliver(connectionId, { id: "b1", threadId: "ana", from: "ana", text: "ping", at: at(1) })
+  fake.simulator.deliver(connectionId, { id: "b2", threadId: "team", from: "bo", text: "pong", at: at(1) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 2)
+  fake.simulator.react(connectionId, [{ threadId: "ana", messageId: "b1", from: "ana", fromMe: false, emoji: "👀", at: at(2) }])
+
+  const badge = await waitUntil(() => news("send_availability"), (b) => b?.reactions === 1)
+  assert.deepEqual({ ...badge, note: undefined }, { events: 3, messages: 2, reactions: 1, chats: 2, note: undefined })
+  // Asking again changes nothing: only reading does.
+  assert.equal((await news("list_connections")).events, 3)
+  // A failed call is left alone.
+  const failed = await callTool(base, token, "message_status", { message_id: "nope" })
+  assert.equal(failed.isError, true)
+  assert.equal(typeof failed.result, "string")
+
+  await callTool(base, token, "read_inbox")
+  assert.equal(await news("list_connections"), undefined)
+})
