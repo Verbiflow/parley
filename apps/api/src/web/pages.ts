@@ -1,5 +1,4 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js"
-import { policyFor } from "@parley/pacing"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
 import type { DailyUsage, Outbound } from "../sessions/outbox.ts"
@@ -592,22 +591,16 @@ const CHATS_CSS = `
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
-/** One line of sending settings: the daily limit, and where the account lives (active hours follow its clock). */
+/** Today's sending, and the one setting: how many messages a day. */
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
-  const { start, end } = policyFor(conn.channel).activeHours
-  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`
-  const zones = ["UTC", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Madrid", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Africa/Lagos"]
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
       <label class="field lim"><span>Daily limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
-      <label class="field"><span>Time zone</span><input class="input" name="timezone" value="${esc(conn.timezone)}" list="tzs" required></label>
-      <label class="field cc"><span>Country</span><input class="input" name="country" value="${esc(conn.country ?? "")}" maxlength="2" placeholder="GB" pattern="[A-Za-z]{2}"></label>
-      <datalist id="tzs">${zones.map((z) => `<option value="${z}">`).join("")}</datalist>
       <button class="btn line sm" type="submit">Save</button>
     </form>
-    <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count. Sends go out between ${hh(start)} and ${hh(end)} in the account's time zone.</p>
+    <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count.</p>
   </div>`
 }
 

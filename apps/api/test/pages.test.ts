@@ -40,7 +40,7 @@ test("the overview with two WhatsApp numbers lists both, offers another, and say
   assert.doesNotMatch(solo, /class="fr"/)
 })
 
-test("an account page shows its chats with the daily limit, time zone and disconnect on top", () => {
+test("an account page shows its chats with the daily limit and disconnect on top", () => {
   const conn: Connection = {
     id: "work", accountId: "a", channel: "whatsapp", status: "connected", handle: "6591363557:7@s.whatsapp.net", displayName: null, createdAt: "2026-11-01T00:00:00Z", linkedAt: "2026-11-01T00:00:00Z",
     chatsChosen: true, history: { startedAt: null, progress: null, doneAt: "2026-11-01T00:01:00Z" }, timezone: "America/Los_Angeles", country: "US", haltedReason: null, pausedUntil: null, dailyLimit: 100,
@@ -51,6 +51,6 @@ test("an account page shows its chats with the daily limit, time zone and discon
   assert.match(html, /name="daily_limit"[^>]*value="100"/)
   assert.match(html, /7<span class="faint"> \/ 100 sent today/)
   assert.match(html, /action="\/app\/connections\/work\/disconnect"/)
-  assert.match(html, /value="America\/Los_Angeles"/)
+  assert.doesNotMatch(html, /name="timezone"|name="country"/)
   assert.doesNotMatch(html, /New conversations/)
 })
