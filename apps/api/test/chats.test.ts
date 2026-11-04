@@ -3,7 +3,7 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { testServer } from "./support.ts"
-import { nameChats } from "../src/sessions/chats.ts"
+import { nameChats, setIgnored } from "../src/sessions/chats.ts"
 
 const fake = makeFakeChannel("fake")
 const { ctx, sql, base } = await testServer([fake.channel])
@@ -28,55 +28,49 @@ async function linked(email: string) {
   return { accountId: account.id, connectionId }
 }
 
-test("only chosen chats sync: held history backfills them, the rest stay invisible, unticking wipes", async () => {
+test("chats sync by default; ignoring one deletes what was stored and keeps new messages out; un-ignoring resumes", async () => {
   const { accountId, connectionId } = await linked("chats@parley.test")
 
-  // First link: the channel reports chats and recent history before the person has chosen anything.
   fake.simulator.announceChats(connectionId, [
     { id: "alice", name: "Alice", kind: "direct", lastMessageAt: "2026-11-01T10:00:00.000Z" },
     { id: "family", name: "Family", kind: "group", lastMessageAt: "2026-11-02T10:00:00.000Z" },
     { id: "bob", name: null, kind: "direct" },
   ])
   const all = await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 3)
-  // Most recent first; a chat with no known activity sorts last.
+  // Most recent first; a chat with no known activity sorts last. Everything syncs until ignored.
   assert.deepEqual(all.map((c) => c.id), ["family", "alice", "bob"])
-  fake.simulator.deliver(connectionId, { threadId: "alice", from: "alice", text: "hey from history" })
+  assert.ok(all.every((c) => c.synced))
+
+  fake.simulator.deliver(connectionId, { threadId: "alice", from: "alice", text: "hey" })
   fake.simulator.deliver(connectionId, { threadId: "bob", from: "bob", text: "bob's secret" })
   fake.simulator.deliver(connectionId, { threadId: "alice", from: "me", text: "my reply", fromMe: true })
-  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c[0]?.id !== "family")
-  assert.equal(all.find((c) => c.id === "family")!.kind, "group")
-  assert.ok(all.every((c) => !c.synced))
+  await waitUntil(() => sessions.messages(accountId, connectionId, "alice", { limit: 10 }), (r) => r.messages.length === 2)
+  await waitUntil(() => sessions.messages(accountId, connectionId, "bob", { limit: 10 }), (r) => r.messages.length === 1)
 
-  // Nothing is stored or visible before choosing.
-  const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
-  assert.equal(n, "0")
-  assert.deepEqual(await sessions.chats(accountId, connectionId, { syncedOnly: true }), [])
-  await assert.rejects(sessions.messages(accountId, connectionId, "alice", { limit: 10 }), /no such synced chat/)
-
-  // Choose Alice: her held history is backfilled (both sides), Bob's never touches the DB.
-  await sessions.chooseChats(accountId, connectionId, ["alice"])
-  const read = await sessions.messages(accountId, connectionId, "alice", { limit: 10 })
-  assert.deepEqual(read.messages.map((m) => [m.text, m.fromMe]), [["hey from history", false], ["my reply", true]])
-  assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id), ["alice"])
+  // Ignore Bob: his stored message is deleted, agents can't read him, and new messages from him aren't kept.
+  await setIgnored(sql, connectionId, ["bob"], true)
   await assert.rejects(sessions.messages(accountId, connectionId, "bob", { limit: 10 }), /no such synced chat/)
-
-  // New messages: synced chat stores them, unsynced chat doesn't.
-  fake.simulator.deliver(connectionId, { threadId: "alice", from: "alice", text: "live one" })
+  assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id).sort(), ["alice", "family"])
   fake.simulator.deliver(connectionId, { threadId: "bob", from: "bob", text: "still private" })
+  fake.simulator.deliver(connectionId, { threadId: "alice", from: "alice", text: "live one" })
   await waitUntil(() => sessions.messages(accountId, connectionId, "alice", { limit: 10 }), (r) => r.messages.length === 3)
-  const [{ total }] = await sql<{ total: string }>(`select count(*)::text as total from parley.message where connection_id = $1`, [connectionId])
-  assert.equal(total, "3")
+  const [{ bobs }] = await sql<{ bobs: string }>(`select count(*)::text as bobs from parley.message where connection_id = $1 and chat_id = 'bob'`, [connectionId])
+  assert.equal(bobs, "0")
+
+  // A chat that turns up later syncs too (ignoring is per chat, not a snapshot of the list).
+  fake.simulator.deliver(connectionId, { threadId: "dana", from: "dana", text: "new here" })
+  await waitUntil(() => sessions.messages(accountId, connectionId, "dana", { limit: 10 }).catch(() => ({ messages: [] })), (r) => r.messages.length === 1)
 
   // A later name for Bob fills in without blanking anything.
   fake.simulator.announceChats(connectionId, [{ id: "bob", name: "Bob", kind: "direct" }, { id: "alice", name: null, kind: "direct" }])
   const named = await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.find((x) => x.id === "bob")?.name === "Bob")
   assert.equal(named.find((c) => c.id === "alice")!.name, "Alice")
 
-  // Untick Alice, tick Bob: Alice's messages are deleted; Bob had no held history left (it's dropped after the first choice).
-  await sessions.chooseChats(accountId, connectionId, ["bob"])
-  const [{ left }] = await sql<{ left: string }>(`select count(*)::text as left from parley.message where connection_id = $1`, [connectionId])
-  assert.equal(left, "0")
-  await assert.rejects(sessions.messages(accountId, connectionId, "alice", { limit: 10 }), /no such synced chat/)
+  // Un-ignore Bob: new messages are kept again.
+  await setIgnored(sql, connectionId, ["bob"], false)
+  fake.simulator.deliver(connectionId, { threadId: "bob", from: "bob", text: "back again" })
+  const back = await waitUntil(() => sessions.messages(accountId, connectionId, "bob", { limit: 10 }), (r) => r.messages.length === 1)
+  assert.equal(back.messages[0]!.text, "back again")
 })
 
 test("another account can't read or choose chats on a connection", async () => {
@@ -109,19 +103,23 @@ test("the chat picker: sign-in required (and resumes after), owner only, saves t
 
   const cookie = await browser("picker@parley.test")
   const html = await (await fetch(`${base}${path}`, { headers: { cookie } })).text()
-  assert.match(html, /Choose what to sync/)
+  assert.match(html, /Your chats/)
   assert.match(html, /Carol &lt;script&gt;/)
   assert.doesNotMatch(html, /Carol <script>/)
 
-  // Someone else's account gets a 404, and can't save.
+  // Someone else's account gets a 404, and can't ignore anything.
   const intruder = await browser("mallory2@parley.test")
+  const ignore = (who: string, chats: string[], ignored = true) => fetch(`${base}${path}/ignore`, { method: "POST", headers: { cookie: who, "content-type": "application/json" }, body: JSON.stringify({ chats, ignored }) })
   assert.equal((await fetch(`${base}${path}`, { headers: { cookie: intruder } })).status, 404)
-  assert.equal((await fetch(`${base}${path}`, { method: "POST", redirect: "manual", headers: { cookie: intruder }, body: new URLSearchParams({ chat: "team" }) })).status, 404)
+  assert.equal((await ignore(intruder, ["team"])).status, 404)
+  assert.ok((await sessions.chats(accountId, connectionId)).every((c) => c.synced))
 
-  const saved = await fetch(`${base}${path}`, { method: "POST", redirect: "manual", headers: { cookie }, body: new URLSearchParams([["chat", "team"]]) })
-  assert.equal(saved.headers.get("location"), `${path}?saved=1`)
-  assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id), ["team"])
-  assert.match(await (await fetch(`${base}${path}?saved=1`, { headers: { cookie } })).text(), /value="team" checked/)
+  // Ignoring one chat leaves the rest syncing, and the page shows it as ignored.
+  assert.equal((await ignore(cookie, ["team"])).status, 200)
+  assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id), ["carol"])
+  assert.match(await (await fetch(`${base}${path}`, { headers: { cookie } })).text(), /class="chat off" data-id="team"/)
+  assert.equal((await ignore(cookie, ["team"], false)).status, 200)
+  assert.equal((await sessions.chats(accountId, connectionId, { syncedOnly: true })).length, 2)
 })
 
 test("relink signs the old link out and opens a fresh QR for the same account; nobody else can relink it", async () => {
