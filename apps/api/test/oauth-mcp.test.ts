@@ -99,7 +99,8 @@ test("MCP: an authenticated client lists tools and calls list_connections (empty
     assert.ok(tools.tools.some((t) => t.name === "list_connections"))
     const result = await client.callTool({ name: "list_connections", arguments: {} })
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text
-    assert.deepEqual(JSON.parse(text), { connections: [] })
+    assert.deepEqual(JSON.parse(text).connections, [])
+    assert.match(JSON.parse(text).note, /call connect/i)
   } finally {
     await transport.close()
   }
