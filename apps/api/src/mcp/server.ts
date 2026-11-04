@@ -49,6 +49,15 @@ const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javasc
 
 const FOLLOW_UP = "Call message_status with this id to see whether it has gone out."
 
+const FILE_LABEL: Record<string, string> = { audio: "voice-note", video: "video", document: "document", image: "photo", sticker: "sticker" }
+const EXTENSIONS: Record<string, string> = {
+  "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/wav": ".wav", "video/mp4": ".mp4", "video/quicktime": ".mov",
+  "video/3gpp": ".3gp", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "application/pdf": ".pdf", "application/zip": ".zip",
+}
+const extensionOf = (mimeType: string) => EXTENSIONS[mimeType] ?? ""
+/** A file name safe to put in a shell command and on disk. */
+const safeName = (name: string) => name.replace(/[^\w.\-]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "file"
+
 /** A message as agents see it (read_inbox, load_history). */
 function messageOut(m: StoredMessage) {
   return {
@@ -340,7 +349,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Get a message's media",
       description:
-        "Open the photo, video, voice note, document or sticker a message carries (a message from read_inbox with `media`). Always returns a `download_url` (any size, valid for an hour; fetch it with curl or code). Photos and stickers also come back as images you can see, voice notes and audio as audio, videos as their preview frame, PDFs as a document, and text files (txt, csv, json, …) as text. Needs the connection online; an old file may take a moment while the sender's phone uploads it again.",
+        "Open the photo, video, voice note, audio recording, document or sticker a message carries (a message from read_inbox with `media`). Photos and stickers come back as images you can see, and text files (txt, csv, json, …) as text. Voice notes, audio, videos, PDFs and other files up to 10 MB come back as the file itself, which your client saves to disk; videos also come with their preview frame. Every answer has a `download_url` (any size, valid for an hour) and a ready `save_with` curl command for saving the file yourself. Needs the connection online; an old file may take a moment while the sender's phone uploads it again.",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account the message is on.`),
         chat_id: z.string(),
@@ -355,28 +364,32 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         const link = await signMediaLink(ctx.config.signInKey, { accountId: userId, connectionId: conn.id, chatId: chat_id, messageId: message_id })
         const mimeType = (info.mimetype ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase()
         const size = info.size ?? 0
-        const about = {
-          kind: info.kind, mimetype: info.mimetype, file_name: info.fileName ?? null, size: info.size ?? null,
+        const fileName = safeName(info.fileName || `${FILE_LABEL[info.kind] ?? info.kind}-${message_id}${extensionOf(mimeType)}`)
+        const downloadUrl = `${base}/media/${link.token}`
+        const about: Record<string, unknown> = {
+          kind: info.kind, mimetype: info.mimetype, file_name: fileName, size: info.size ?? null,
           width: info.width ?? null, height: info.height ?? null, seconds: info.seconds ?? null,
-          download_url: `${base}/media/${link.token}`, download_expires_at: link.expiresAt,
+          download_url: downloadUrl, download_expires_at: link.expiresAt,
+          save_with: `curl -fsSL -o '${fileName}' '${downloadUrl}'`,
         }
-        type Part = { type: "text"; text: string } | { type: "image" | "audio"; data: string; mimeType: string } | { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }
+        type Part = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string } | { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }
         const parts: Part[] = []
         const fetchInline = async () => (await ctx.sessions.media(userId, conn.id, chat_id, message_id)).data
+        // The file itself, as an embedded resource: clients save binary resources to disk and give the agent the path
+        // (an `audio` block, by contrast, reaches some clients as a bare placeholder). Named, so the saved file is too.
+        const asFile = async () => parts.push({ type: "resource", resource: { uri: `parley://media/${encodeURIComponent(fileName)}`, mimeType, blob: await fetchInline() } })
         if ((info.kind === "image" || info.kind === "sticker") && size <= INLINE_IMAGE_BYTES) {
           parts.push({ type: "image", data: await fetchInline(), mimeType: mimeType.startsWith("image/") ? mimeType : "image/jpeg" })
-        } else if (info.kind === "audio" && size <= INLINE_FILE_BYTES) {
-          parts.push({ type: "audio", data: await fetchInline(), mimeType })
         } else if (info.kind === "document" && TEXTUAL.test(mimeType) && size <= INLINE_TEXT_BYTES) {
           parts.push({ type: "text", text: new TextDecoder().decode(Uint8Array.from(atob(await fetchInline()), (ch) => ch.charCodeAt(0))) })
-        } else if (info.kind === "document" && mimeType === "application/pdf" && size <= INLINE_FILE_BYTES) {
-          parts.push({ type: "resource", resource: { uri: about.download_url, mimeType, blob: await fetchInline() } })
-        } else if (info.thumbnail) {
-          // A video (or a file too big to inline): its preview, and the link for the real thing.
-          parts.push({ type: "image", data: info.thumbnail, mimeType: "image/jpeg" })
-          Object.assign(about, { note: info.kind === "video" ? "This is the video's preview frame; the full video is at download_url." : "This is a preview; the full file is at download_url." })
         } else {
-          Object.assign(about, { note: "Download the file from download_url." })
+          if (info.thumbnail) parts.push({ type: "image", data: info.thumbnail, mimeType: "image/jpeg" })
+          if (size <= INLINE_FILE_BYTES) {
+            await asFile()
+            about.note = `The ${FILE_LABEL[info.kind] ?? "file"} is attached as a file${info.thumbnail ? " (the image is its preview)" : ""}. If your client didn't save it, run save_with.`
+          } else {
+            about.note = `Too big to attach (${Math.round(size / 1024 / 1024)} MB): save it with save_with${info.thumbnail ? "; the image is its preview" : ""}.`
+          }
         }
         return { content: [{ type: "text" as const, text: JSON.stringify(about) }, ...parts] }
       } catch (e) {
