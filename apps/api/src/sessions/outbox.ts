@@ -438,3 +438,49 @@ export async function listOutbound(
   )
   return rows.map(outbound)
 }
+
+/** One line of the activity log: the send, when it last moved (sent, or asked for), and the agent that asked for it. */
+export type ActivityEntry = Outbound & { at: string; agent: string | null }
+export type ActivityStatus = "sent" | "queued" | "failed" | "canceled"
+export type ActivityPage = { entries: ActivityEntry[]; total: number; counts: Record<ActivityStatus | "all", number> }
+const ACTIVITY_STATUSES: Record<ActivityStatus, OutboundStatus[]> = { sent: ["sent"], queued: ["scheduled", "sending"], failed: ["failed"], canceled: ["canceled"] }
+
+/**
+ * The account's activity log, newest first: every send its agents asked for, filtered by state, account and a search
+ * over the text and recipient. `counts` ignores the state filter, so each state's tab can say how many it holds.
+ */
+export async function listActivity(
+  sql: Sql, accountId: string,
+  opts: { status?: ActivityStatus | undefined; connectionId?: string | undefined; q?: string | undefined; limit: number; offset: number }
+): Promise<ActivityPage> {
+  const q = opts.q?.trim().slice(0, 200) || null
+  const like = q && `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+  const digits = q?.replace(/\D/g, "") ?? ""
+  const filter = `k.account_id = $1 and ($2::uuid is null or o.connection_id = $2)
+    and ($3::text is null or o.body ilike $3 or ($4::text is not null and o.chat_id like $4))`
+  const args = [accountId, opts.connectionId ?? null, like, digits.length >= 3 ? `%${digits}%` : null]
+  const [rows, counts] = await Promise.all([
+    sql<OutRow & { at: Date; agent: string | null }>(
+      `select ${OUT_COLUMNS.split(", ").map((c) => `o.${c}`).join(", ")}, coalesce(o.sent_at, o.created_at) as at, a.client_name as agent
+         from parley.outbound o join parley.connection k on k.id = o.connection_id
+         left join lateral (select c.client_name from oauth.refresh_token r join oauth.client c using (client_id)
+                             where r.session_id = o.agent_session_id order by r.created_at limit 1) a on o.agent_session_id is not null
+        where ${filter} and ($5::text[] is null or o.status = any($5))
+        order by coalesce(o.sent_at, o.created_at) desc, o.id desc
+        limit $6 offset $7`,
+      [...args, opts.status ? ACTIVITY_STATUSES[opts.status] : null, opts.limit, opts.offset]
+    ),
+    sql<{ status: OutboundStatus; n: string }>(
+      `select o.status, count(*)::text as n from parley.outbound o join parley.connection k on k.id = o.connection_id where ${filter} group by o.status`,
+      args
+    ),
+  ])
+  const by = new Map(counts.map((r) => [r.status, Number(r.n)]))
+  const tally = (s: OutboundStatus[]) => s.reduce((n, x) => n + (by.get(x) ?? 0), 0)
+  const all = { all: tally(["scheduled", "sending", "sent", "failed", "canceled"]), sent: tally(["sent"]), queued: tally(["scheduled", "sending"]), failed: tally(["failed"]), canceled: tally(["canceled"]) }
+  return {
+    entries: rows.map((r) => ({ ...outbound(r), at: r.at.toISOString(), agent: r.agent })),
+    total: opts.status ? all[opts.status] : all.all,
+    counts: all,
+  }
+}

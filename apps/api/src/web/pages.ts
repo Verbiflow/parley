@@ -1,7 +1,7 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
-import { UNSEND_WINDOW_MS, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
+import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
@@ -52,12 +52,6 @@ function connectionState(c: Connection): { tone: Tone; text: string; live?: bool
   return { tone: "bad", text: "error" }
 }
 
-function outcome(m: Outbound): string {
-  if (m.status === "sent") return status("ok", "sent")
-  if (m.status === "failed") return `<span title="${esc(m.error?.message)}">${status("bad", m.error?.code === "outcome_unknown" ? "interrupted" : m.error?.code === "recipient_unavailable" ? "not on WhatsApp" : m.error?.code ?? "failed")}</span>`
-  if (m.status === "canceled") return status("idle", "canceled")
-  return status("info", "sending", true)
-}
 
 // ---- Signed out ---------------------------------------------------------------------------------------------------
 
@@ -132,12 +126,12 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .chtag.soon{background:none;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}.chtag i{font-style:normal;font-size:11.5px;color:var(--faint);margin-left:2px}
 .conns{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));gap:12px;padding-top:18px}
 .conn{position:relative;display:flex;flex-direction:column;gap:16px;padding:18px;border-radius:16px;background:var(--card);box-shadow:var(--frame);transition:box-shadow .2s var(--ease),transform .2s var(--ease)}
-.conn .ct{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:13px;background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 22%,transparent)}
+.conn .ct{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:13px;background:var(--glass);box-shadow:var(--glass-ring)}
 .conn b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;color:var(--text)}
 .conn small{display:block;font-size:12.5px;line-height:18px;color:var(--muted);margin-top:3px}
 .conn .cf{margin-top:auto}
-.conn.ready{box-shadow:var(--frame),0 0 0 1px color-mix(in srgb,var(--c) 30%,transparent),0 24px 60px -30px color-mix(in srgb,var(--c) 45%,transparent)}
-.conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,color-mix(in srgb,var(--c) 10%,transparent),transparent 70%);pointer-events:none}
+.conn.ready{box-shadow:var(--frame),0 0 0 1px rgba(227,185,141,.2),0 24px 60px -30px rgba(227,185,141,.28)}
+.conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,rgba(255,236,210,.05),transparent 70%);pointer-events:none}
 .conn.ready .btn{width:100%}
 .conn.later{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
 .conn.later .cf{height:34px;display:flex;align-items:center}.conn.later .label{font-size:12px;color:var(--faint)}
@@ -159,10 +153,10 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:ping 2s var(--ease) infinite;color:var(--ok)}
 .accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-top:18px}
 .acard{position:relative;display:flex;flex-direction:column;gap:18px;padding:18px 18px 16px;border-radius:18px;background:var(--card);box-shadow:var(--frame);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
-.acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,color-mix(in srgb,var(--c) 8%,transparent),transparent 62%);pointer-events:none}
+.acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,rgba(255,246,232,.035),transparent 62%);pointer-events:none}
 a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
 .acard .ah{position:relative;display:flex;align-items:center;gap:12px}
-.acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 22%,transparent)}
+.acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-ring)}
 .acard .grow{flex:1;min-width:0}
 .acard b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .acard small{display:block;font-size:12.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -173,10 +167,9 @@ a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(-
 .acard .next{display:inline-flex;align-items:center;gap:8px;color:var(--text-2)}
 .acard .go{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);white-space:nowrap;transition:color .15s}a.acard:hover .go{color:var(--text)}
 .acard .go svg{transition:transform .15s var(--ease)}a.acard:hover .go svg{transform:translateX(2px)}
-.acard.add{--c:#e3b98d;background:transparent;box-shadow:inset 0 0 0 1px var(--line-2)}.acard.add::before{opacity:.6}
+.acard.add{background:transparent;box-shadow:inset 0 0 0 1px var(--line-2)}.acard.add::before{opacity:.6}
 .acard.add .ct{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}
 .acard .soon{display:inline-flex;align-items:center;gap:9px}.acard .soon span{display:inline-flex}
-.logcard{margin-top:16px;padding:2px 20px;border-radius:18px;background:var(--card);box-shadow:var(--frame)}.logcard .log > div:last-child{border-bottom:0}.logcard .empty{padding:28px 0}
 .agentc{display:flex;flex-direction:column;gap:20px;padding-top:20px}
 .cgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:14px}
 .cc{display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:18px;background:var(--card);box-shadow:var(--frame)}
@@ -185,13 +178,66 @@ a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(-
 .works{margin-top:auto;padding-top:6px;display:flex;flex-direction:column;gap:10px}.works > span{font-size:12px;color:var(--faint)}
 .works .arow{gap:6px}.works .arow li{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}.works .arow li:hover{color:var(--text)}
 @media (max-width:860px){.cgrid{grid-template-columns:1fr}}
+
+/* activity: one table on a lit card, a line per day, new and changed lines glowing in as they arrive */
+.sec .atable{margin-top:16px}
+.atable{border-radius:18px;background:var(--card);box-shadow:var(--frame);overflow:hidden}
+.atbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+.atbl col.c-t{width:90px}.atbl col.c-s{width:166px}.atbl col.c-ag{width:136px}.atbl col.c-fr{width:148px}.atbl col.c-to{width:160px}.atbl col.c-x{width:96px}
+.atbl th{height:40px;padding:0 12px;text-align:left;font-size:12px;font-weight:400;color:var(--faint);background:rgba(255,246,232,.02);border-bottom:1px solid var(--line);white-space:nowrap}
+.atbl td{height:50px;padding:0 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.atbl th:first-child,.atbl td:first-child{padding-left:20px}.atbl th:last-child,.atbl td:last-child{padding-right:20px}
+.atbl tbody tr:last-child td{border-bottom:0}
+.atbl tr.e{transition:background .15s var(--ease)}.atbl tr.e:hover{background:rgba(255,246,232,.025)}
+.atbl tr.dh td{height:36px;padding-top:12px;padding-bottom:6px;vertical-align:bottom;font-size:12px;font-weight:500;letter-spacing:.01em;color:var(--muted);background:linear-gradient(180deg,rgba(255,246,232,.018),transparent)}
+.atbl tr.none td{height:auto;padding:36px 20px;white-space:normal;text-align:center;font-size:13.5px;color:var(--muted)}
+.atbl .t{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.atbl .s{overflow:visible}.atbl .sw{margin-left:8px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.atbl .ag{color:var(--text-2)}.atbl .ag > *{vertical-align:middle}.atbl .ag .glyph{margin-right:9px;width:20px;height:20px;border-radius:6px}
+.atbl .ag .glyph.you{background:var(--glass);box-shadow:var(--glass-ring);color:var(--muted)}
+.atbl .fr{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.atbl .to{font-family:var(--mono);font-size:12.5px;color:var(--text);font-variant-numeric:tabular-nums}
+.atbl .b{color:var(--text-2)}.atbl .b > span{display:block;overflow:hidden;text-overflow:ellipsis}
+.atbl .b .err{margin-top:2px;font-size:12px;color:color-mix(in srgb,var(--bad) 55%,var(--muted))}
+.atbl .tag{display:inline-flex;align-items:center;height:18px;padding:0 7px;margin-right:8px;border-radius:6px;font-size:11px;font-weight:500;color:var(--sand);background:color-mix(in srgb,var(--sand) 10%,transparent);vertical-align:1px}
+.atbl .x{text-align:right;overflow:visible;text-overflow:clip}.atbl .x form{display:inline}.atbl .x .btn{margin-right:-8px}
+.atbl .x .later{opacity:0;transition:opacity .15s var(--ease)}.atbl tr.e:hover .x .later,.atbl .x .later:focus-within{opacity:1}
+.atbl tr.fresh{animation:fresh 2.6s var(--ease)}.atbl tr.fresh td{animation:fresh-in .5s var(--ease)}
+@keyframes fresh{from{background:color-mix(in srgb,var(--sand) 10%,transparent)}to{background:transparent}}
+@keyframes fresh-in{from{opacity:0}}
+.livei{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px 0 10px;border-radius:999px;font-size:12px;font-weight:500;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line)}
+.livei i{--d:var(--sand);width:6px;height:6px;border-radius:50%;background:var(--sand);animation:ping 2s var(--ease) infinite}
+.livei .off-t,.livei.off .on-t{display:none}.livei.off .off-t{display:inline}.livei.off{color:var(--muted)}.livei.off i{background:var(--faint);animation:none}
+.sec-h .aside .all{display:inline-flex;align-items:center;gap:5px}
+.atools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.atools .seg a{gap:7px}.atools .seg .c{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}.atools .seg .on .c{color:var(--text-2)}
+.atools .fl{display:flex;align-items:center;gap:8px}
+.atools .select{height:34px;width:auto;min-width:170px;border-radius:999px;font-variant-numeric:tabular-nums}
+.search{position:relative;display:block}.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none}
+.search .input{width:250px;height:34px;padding-left:34px;border-radius:999px}
+.search .input::-webkit-search-cancel-button{filter:grayscale(1) opacity(.5)}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding:0 4px;font-size:12.5px;color:var(--muted)}
+.pager b{font-weight:500;color:var(--text-2);font-variant-numeric:tabular-nums}
+.pager .pp{display:flex;align-items:center;gap:6px}.pager .pn{margin-right:8px;color:var(--faint)}
+.pager .btn.off{opacity:.38;pointer-events:none}
+@media (max-width:760px){
+  .atbl,.atbl tbody{display:block}.atbl thead,.atbl colgroup{display:none}
+  .atbl tr.e{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .atbl tr.e td{display:block;height:auto;padding:0!important;border:0}
+  .atbl td.to{order:1;flex:1 1 auto;min-width:0}.atbl td.s{order:2}.atbl td.b{order:3;flex:1 0 100%;white-space:normal}.atbl td.b > span{white-space:nowrap}
+  .atbl td.t{order:4}.atbl td.ag{order:5;font-size:12px}.atbl td.fr{order:6}.atbl td.x{order:7;margin-left:auto}.atbl .x .later{opacity:1}
+  .atbl tr.dh{display:block}.atbl tr.dh td{display:block;height:auto;padding:14px 16px 6px!important}
+  .atbl tr.none{display:block}.atbl tr.none td{display:block}
+  .atools{flex-direction:column;align-items:stretch}.atools .seg{overflow-x:auto;scrollbar-width:none}.atools .fl{flex-wrap:wrap}.search,.search .input{width:100%}.atools .fl .select{flex:1}
+  .pager{flex-direction:column;align-items:flex-start}
+}
 `
 
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
 /** One card per channel, for the first link: the live ones get a Connect button, the rest say "Coming soon". */
 function connectorCards(): string {
-  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => `<div class="conn ${c.live ? "ready" : "later"}" style="--c:${c.color}">
+  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => `<div class="conn ${c.live ? "ready" : "later"}">
       <span class="ct">${channelMark(id, 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
       <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">Coming soon</span>`}</div>
@@ -210,7 +256,7 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
     ? `<div class="ab"><div class="row"><span>Today</span><span class="m">${s.sentToday}<span class="faint"> / ${s.dailyLimit}</span></span></div>${bar(s.sentToday, s.dailyLimit)}</div>
        <div class="af"><span class="next">${s.nextAt ? `${orb(12)}${s.queued} queued · next ${esc(until(s.nextAt, c.timezone))}` : `<span class="faint">Nothing queued</span>`}</span><span class="go">${chats ?? 0} chats ${icon("arrow", 13)}</span></div>`
     : `<div class="af"><span class="faint">${live ? "Loading today's numbers" : "Waiting for the QR scan"}</span><span class="go">${live ? "Open" : "Finish linking"} ${icon("arrow", 13)}</span></div>`
-  return `<a class="acard" href="${href}" style="--c:${CHANNELS[c.channel]?.color ?? "#9d968b"}">
+  return `<a class="acard" href="${href}">
     <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text, st.live)}</div>
     ${body}
   </a>`
@@ -258,22 +304,168 @@ function outText(m: Outbound): string {
   return m.text
 }
 
-function activityLog(recent: Outbound[], connections: Connection[]): string {
-  const tz = new Map(connections.map((c) => [c.id, c.timezone]))
-  // With more than one account, each line says which number it went out from.
-  const from = connections.filter((c) => c.status !== "logged_out" && c.status !== "error").length > 1
-    ? new Map(connections.map((c) => [c.id, waNumber(c.handle) || channelName(c.channel)])) : undefined
-  if (!recent.length) return empty("No activity yet", "Sends and failures from your agents show up here as they happen.")
-  return `<div class="log${from ? " multi" : ""}">${recent.map((m) => {
-    const when = m.sentAt ?? m.createdAt
-    const [cls, word] = m.status === "sent" ? ["ok", "Sent"] : m.status === "failed" ? ["bad", m.error?.code === "outcome_unknown" ? "Interrupted" : "Failed"] : m.status === "canceled" ? ["", "Canceled"] : ["q", m.status === "scheduled" ? "Queued" : "Sending"]
-    return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span>${from ? `<span class="fr">${esc(from.get(m.connectionId) ?? "")}</span>` : ""}<span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(outText(m))}</span></div>`
-  }).join("")}</div>`
+// ---- Activity -----------------------------------------------------------------------------------------------------
+
+export type ActivityFilter = { status?: ActivityStatus | undefined; account?: string | undefined; q?: string | undefined }
+export const ACTIVITY_PER_PAGE = 50
+const ACTIVITY_TABS: [ActivityStatus | undefined, string][] = [[undefined, "All"], ["sent", "Sent"], ["queued", "Queued"], ["failed", "Failed"], ["canceled", "Canceled"]]
+
+/** "/app/activity?status=sent&q=…": the filter (and page) as a query string, leaving out what isn't set. */
+export function activityQuery(f: ActivityFilter & { page?: number; compact?: boolean }): string {
+  const p = new URLSearchParams()
+  if (f.status) p.set("status", f.status)
+  if (f.account) p.set("account", f.account)
+  if (f.q) p.set("q", f.q)
+  if (f.page && f.page > 1) p.set("page", String(f.page))
+  if (f.compact) p.set("compact", "1")
+  const s = p.toString()
+  return s ? `?${s}` : ""
 }
+
+const ymd = (d: Date, timeZone: string) => d.toLocaleDateString("en-CA", { timeZone })
+/** "Today", "Yesterday", "Mon, Oct 26": the day a line happened, on the account's own calendar. */
+function dayLabel(iso: string, timeZone: string): string {
+  const d = new Date(iso)
+  const key = ymd(d, timeZone)
+  if (key === ymd(new Date(), timeZone)) return "Today"
+  if (key === ymd(new Date(Date.now() - 86_400_000), timeZone)) return "Yesterday"
+  const thisYear = key.slice(0, 4) === ymd(new Date(), timeZone).slice(0, 4)
+  return d.toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric", ...(thisYear ? {} : { year: "numeric" }) })
+}
+
+function entryState(m: Outbound, tz: string): string {
+  if (m.status === "sent") return status("ok", m.attempts > 1 ? `Sent · try ${m.attempts}` : "Sent")
+  if (m.status === "failed") {
+    if (m.error?.code === "outcome_unknown") return status("warn", "Interrupted")
+    return status("bad", m.error?.code === "recipient_unavailable" ? "Not on WhatsApp" : "Failed")
+  }
+  if (m.status === "canceled") return status("idle", "Canceled")
+  if (m.status === "sending") return status("info", "Sending", true)
+  return `<span class="st info">${orb(10)}Queued</span><span class="sw">${m.scheduledFor ? esc(until(m.scheduledFor, tz)) : "held"}</span>`
+}
+
+const ERROR_TEXT: Record<string, string> = {
+  outcome_unknown: "The connection dropped mid-send, so it may or may not have gone out. Parley won't retry it.",
+  recipient_unavailable: "That number isn't on WhatsApp.",
+}
+
+type ActivityCtx = { tz: Map<string, string>; from?: Map<string, string> | undefined; actions: boolean; back: string }
+const activityCols = (c: ActivityCtx) => 5 + (c.from ? 1 : 0) + (c.actions ? 1 : 0)
+
+function activityRow(m: ActivityEntry, c: ActivityCtx): string {
+  const tz = c.tz.get(m.connectionId) ?? "UTC"
+  const full = new Date(m.at).toLocaleString("en-GB", { timeZone: tz, dateStyle: "medium", timeStyle: "medium" })
+  const who = m.agent ? `${agentMark(m.agent, 20)}<span>${esc(m.agent)}</span>` : `<span class="glyph you" aria-hidden="true">${icon("user", 11)}</span><span>You</span>`
+  const err = m.status === "failed" && m.error ? `<span class="err">${esc(ERROR_TEXT[m.error.code] ?? m.error.message)}</span>` : ""
+  const text = outText(m)
+  const action = !c.actions ? null
+    : m.status === "scheduled" ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><input type="hidden" name="back" value="${esc(c.back)}"><button class="btn quiet sm" type="submit">Cancel</button></form>`
+    : unsendable(m) ? `<form method="post" action="/app/outbox/${esc(m.id)}/unsend" data-confirm="Delete this message for everyone in the chat?" class="later"><input type="hidden" name="back" value="${esc(c.back)}"><button class="btn quiet sm" type="submit">Delete</button></form>`
+    : ""
+  return `<tr class="e" data-id="${esc(m.id)}" data-s="${m.status}">
+    <td class="t"><time datetime="${esc(m.at)}" title="${esc(`${full} · ${tz}`)}">${stamp(m.at, tz)}</time></td>
+    <td class="s">${entryState(m, tz)}</td>
+    <td class="ag">${who}</td>
+    ${c.from ? `<td class="fr">${esc(c.from.get(m.connectionId) ?? "")}</td>` : ""}
+    <td class="to">${esc(recipient(m.chatId))}</td>
+    <td class="b"><span title="${esc(text)}">${m.kind === "first_message" ? `<span class="tag">Opener</span>` : m.kind === "invite" ? `<span class="tag">Invite</span>` : ""}${esc(text)}</span>${err}</td>
+    ${action === null ? "" : `<td class="x">${action}</td>`}
+  </tr>`
+}
+
+/** The table's rows, with a line for each day they cross; the live view swaps exactly this in. */
+function activityBody(entries: ActivityEntry[], c: ActivityCtx, emptyText: string): string {
+  if (!entries.length) return `<tr class="none"><td colspan="${activityCols(c)}">${emptyText}</td></tr>`
+  let last = ""
+  return entries.map((m) => {
+    const label = dayLabel(m.at, c.tz.get(m.connectionId) ?? "UTC")
+    const head = label === last ? "" : `<tr class="dh"><td colspan="${activityCols(c)}">${esc(label)}</td></tr>`
+    last = label
+    return head + activityRow(m, c)
+  }).join("")
+}
+
+function activityCtx(connections: Connection[], actions: boolean, back: string): ActivityCtx {
+  // With more than one account, each line says which number it went out from.
+  const many = connections.filter((x) => x.status !== "logged_out" && x.status !== "error").length > 1
+  return {
+    tz: new Map(connections.map((x) => [x.id, x.timezone])), actions, back,
+    from: many ? new Map(connections.map((x) => [x.id, waNumber(x.handle) || channelName(x.channel)])) : undefined,
+  }
+}
+
+function activityTable(entries: ActivityEntry[], c: ActivityCtx, opts: { live?: string; emptyText: string }): string {
+  return `<div class="atable"${opts.live ? ` data-live="${esc(opts.live)}"` : ""}><table class="atbl">
+    <colgroup><col class="c-t"><col class="c-s"><col class="c-ag">${c.from ? `<col class="c-fr">` : ""}<col class="c-to"><col>${c.actions ? `<col class="c-x">` : ""}</colgroup>
+    <thead><tr><th>Time</th><th>Status</th><th>Agent</th>${c.from ? "<th>From</th>" : ""}<th>To</th><th>Message</th>${c.actions ? "<th></th>" : ""}</tr></thead>
+    <tbody>${activityBody(entries, c, opts.emptyText)}</tbody></table></div>`
+}
+
+const liveTag = `<span class="livei" data-live-ind><i></i><span class="on-t">Live</span><span class="off-t">Reconnecting</span></span>`
+const DASH_EMPTY = "Nothing yet. Every message your agents queue shows up here the moment they ask, then again when it goes out."
+
+/** What the live view fetches: the same rows, rendered the same way, plus the tab counts. */
+export function activityFeed(page: ActivityPage, connections: Connection[], f: ActivityFilter & { compact?: boolean }): { body: string; counts: ActivityPage["counts"]; total: number } {
+  const c = activityCtx(connections, !f.compact, `/app/activity${activityQuery(f)}`)
+  return { body: activityBody(page.entries, c, f.compact ? DASH_EMPTY : activityEmpty(f)), counts: page.counts, total: page.total }
+}
+
+const activityEmpty = (f: ActivityFilter) =>
+  f.q ? `Nothing matches “${esc(f.q)}”.` : f.status || f.account ? "Nothing here with these filters." : DASH_EMPTY
+
+export function activityPage(opts: {
+  user: Viewer; page: ActivityPage; connections: Connection[]; agentCount: number; queuedTotal: number; filter: ActivityFilter; pageNo: number
+}): string {
+  const f = opts.filter
+  const pages = Math.max(1, Math.ceil(opts.page.total / ACTIVITY_PER_PAGE))
+  const c = activityCtx(opts.connections, true, `/app/activity${activityQuery({ ...f, page: opts.pageNo })}`)
+  const accounts = opts.connections.filter((x) => x.status !== "logged_out" && x.status !== "error")
+  const tabs = ACTIVITY_TABS.map(([s, label]) =>
+    `<a href="/app/activity${activityQuery({ ...f, status: s })}" class="${f.status === s ? "on" : ""}">${label}<span class="c" data-count="${s ?? "all"}">${opts.page.counts[s ?? "all"].toLocaleString("en-US")}</span></a>`).join("")
+  const from = (opts.pageNo - 1) * ACTIVITY_PER_PAGE
+  const pageLink = (n: number, label: string, ic: string) => n >= 1 && n <= pages && n !== opts.pageNo
+    ? `<a class="btn line sm" href="/app/activity${activityQuery({ ...f, page: n })}">${ic}${label}</a>` : `<span class="btn line sm off" aria-disabled="true">${ic}${label}</span>`
+  const pager = opts.page.total > ACTIVITY_PER_PAGE || opts.pageNo > 1
+    ? `<div class="pager"><span><b>${opts.page.total ? `${(from + 1).toLocaleString("en-US")}–${Math.min(from + ACTIVITY_PER_PAGE, opts.page.total).toLocaleString("en-US")}` : "0"}</b> of <span data-count="total">${opts.page.total.toLocaleString("en-US")}</span></span>
+        <div class="pp"><span class="pn">Page ${opts.pageNo} of ${pages}</span>${pageLink(opts.pageNo - 1, "Newer", icon("back", 12))}${pageLink(opts.pageNo + 1, "Older", "")}</div></div>`
+    : ""
+  const live = opts.pageNo === 1 ? `/app/activity/feed${activityQuery(f)}` : undefined
+  return appShell({
+    title: "Activity", active: "activity", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, css: OVERVIEW_CSS,
+    body: `${pageHead({
+      title: "Activity",
+      sub: "Every message your agents asked to send, and what became of it. Times are each account's local time.",
+      actions: live ? liveTag : `<a class="btn line sm" href="/app/activity${activityQuery(f)}">Back to the latest</a>`,
+    })}
+    <form class="atools" method="get" action="/app/activity">
+      <nav class="seg" aria-label="Status">${tabs}</nav>
+      <div class="fl">
+        ${f.status ? `<input type="hidden" name="status" value="${esc(f.status)}">` : ""}
+        ${accounts.length > 1 ? `<select class="select" name="account" aria-label="Account" onchange="this.form.submit()"><option value="">All accounts</option>${accounts.map((x) => `<option value="${esc(x.id)}"${f.account === x.id ? " selected" : ""}>${esc(waNumber(x.handle) || channelName(x.channel))}</option>`).join("")}</select>` : ""}
+        <label class="search">${icon("search", 14)}<input class="input" type="search" name="q" value="${esc(f.q ?? "")}" placeholder="Search messages or numbers" aria-label="Search"></label>
+      </div>
+    </form>
+    ${activityTable(opts.page.entries, c, { live, emptyText: activityEmpty(f) })}
+    ${pager}`,
+    script: LIVE_SCRIPT,
+  })
+}
+
+/**
+ * Keeps an activity table current: every few seconds while the tab is visible it fetches the same rows and swaps them
+ * in, so new sends appear and queued ones turn to sent in place. Lines that are new, or whose state changed, light up.
+ */
+const LIVE_SCRIPT = `(()=>{const box=document.querySelector('[data-live]');if(!box)return;const tb=box.querySelector('tbody'),ind=document.querySelector('[data-live-ind]');let busy=false,last='';
+const seen=()=>new Set([...tb.querySelectorAll('tr[data-id]')].map(r=>r.dataset.id+':'+r.dataset.s));
+async function tick(){if(busy||document.hidden)return;busy=true;try{const r=await fetch(box.dataset.live,{headers:{accept:'application/json'},credentials:'same-origin'});if(!r.ok)throw 0;const j=await r.json();
+if(j.body!==last){const before=seen(),first=!last;last=j.body;tb.innerHTML=j.body;if(!first)tb.querySelectorAll('tr[data-id]').forEach(r=>{if(!before.has(r.dataset.id+':'+r.dataset.s))r.classList.add('fresh')})}
+for(const[k,v]of Object.entries(Object.assign({},j.counts,{total:j.total})))document.querySelectorAll('[data-count="'+k+'"]').forEach(e=>e.textContent=Number(v).toLocaleString('en-US'));
+ind&&ind.classList.remove('off')}catch(e){ind&&ind.classList.add('off')}busy=false}
+tick();setInterval(tick,4000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()})})();`
 
 export function dashboardPage(opts: {
   user: Viewer; connections: Connection[]; agents: AgentView[]; mcpUrl: string; syncedCounts?: Map<string, number>
-  summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: Outbound[]
+  summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: ActivityEntry[]
 }): string {
   const visible = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
   const live = visible.filter((c) => c.status === "connected")
@@ -284,7 +476,7 @@ export function dashboardPage(opts: {
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:12px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
-    title: "Overview", active: "overview", user: opts.user, counts: { agents: opts.agents.length, outbox: queued }, css: OVERVIEW_CSS, body,
+    title: "Overview", active: "overview", user: opts.user, counts: { agents: opts.agents.length, outbox: queued }, css: OVERVIEW_CSS, body, script: LIVE_SCRIPT,
   })
 
   // Setup: until an account is linked and an agent is connected, the page is just the two steps to get there.
@@ -308,7 +500,7 @@ export function dashboardPage(opts: {
       <div><span class="label">Agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
     ${section("Accounts", cards, `${live.length} live`)}
-    ${section("Activity", `<div class="logcard">${activityLog(opts.recent ?? [], opts.connections)}</div>`, `<a href="/app/outbox?view=recent">All activity</a>`)}
+    ${section("Activity", activityTable(opts.recent ?? [], activityCtx(opts.connections, false, "/app"), { live: "/app/activity/feed?compact=1", emptyText: DASH_EMPTY }), `${liveTag}<a class="all" href="/app/activity">View all ${icon("arrow", 12)}</a>`)}
     ${foldSection("Connect another agent", agentSetup(opts.mcpUrl, opts.agents), { aside: `${opts.agents.length} connected` })}`)
 }
 
@@ -319,30 +511,26 @@ function unsendable(m: Outbound): boolean {
   return m.status === "sent" && !m.reactTo && !m.unsend && Boolean(m.sentAt) && Date.parse(m.sentAt!) + UNSEND_WINDOW_MS > Date.now()
 }
 
-export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: Outbound[]; connections: Connection[]; agentCount: number; filter: "scheduled" | "recent" }): string {
+export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; connections: Connection[]; agentCount: number }): string {
   const byId = new Map(opts.connections.map((c) => [c.id, c]))
-  const scheduled = opts.filter === "scheduled"
-  const list = scheduled ? opts.scheduled : opts.recent
-  const rows = list.map((m) => {
+  const rows = opts.scheduled.map((m) => {
     const c = byId.get(m.connectionId)
     const tz = c?.timezone ?? "UTC"
     return `<tr>
       <td><div class="who">${glyph(recipient(m.chatId), 24, true)}<div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel)} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
       <td class="clip">${esc(outText(m))}</td>
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
-      <td class="m">${scheduled ? (m.scheduledFor ? `<span class="next">${orb(12)}${esc(until(m.scheduledFor, tz))}</span>` : `<span class="faint">Held while the channel is paused</span>`) : outcome(m)}</td>
-      <td class="m faint">${scheduled ? (m.scheduledFor ? `${clock(m.scheduledFor, tz)} <span class="faint">${esc(tz.split("/").pop()!.replace(/_/g, " "))}</span>` : "") : ago(m.sentAt ?? m.createdAt)}</td>
-      <td class="r">${scheduled
-        ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">Cancel</button></form>`
-        : unsendable(m) ? `<form method="post" action="/app/outbox/${esc(m.id)}/unsend"><button class="btn quiet sm" type="submit" title="Delete it for everyone in the chat">Delete</button></form>` : ""}</td>
+      <td class="m">${m.status === "sending" ? status("info", "Sending", true) : m.scheduledFor ? `<span class="next">${orb(12)}${esc(until(m.scheduledFor, tz))}</span>` : `<span class="faint">Held while the channel is paused</span>`}</td>
+      <td class="m faint">${m.scheduledFor ? `${clock(m.scheduledFor, tz)} <span class="faint">${esc(cityOf(tz))}</span>` : ""}</td>
+      <td class="r"><form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">Cancel</button></form></td>
     </tr>`
   }).join("")
   return appShell({
     title: "Outbox", active: "outbox", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.scheduled.length },
-    body: `${pageHead({ title: "Outbox", sub: "Everything your agents asked to send. Parley spaces it out so each account sends like the person who owns it.", actions: `<nav class="seg"><a href="/app/outbox" class="${scheduled ? "on" : ""}">Scheduled · ${opts.scheduled.length}</a><a href="/app/outbox?view=recent" class="${scheduled ? "" : "on"}">Recent</a></nav>` })}
-      ${list.length
-        ? `<table class="tbl"><thead><tr><th>To</th><th>Message</th><th>Kind</th><th>${scheduled ? "Sends" : "Result"}</th><th>${scheduled ? "Local time" : "When"}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-        : scheduled ? empty("Nothing scheduled", "Agents queue messages with <code>send_message</code>. Each one shows here with the time it will go out.") : empty("Nothing sent yet", "Sent, failed and canceled messages show up here.")}`,
+    body: `${pageHead({ title: "Outbox", sub: "What your agents queued and when each one goes out. Parley spaces it out so each account sends like the person who owns it.", actions: `<a class="btn line sm" href="/app/activity">Sent and failed ${icon("arrow", 12)}</a>` })}
+      ${rows
+        ? `<table class="tbl"><thead><tr><th>To</th><th>Message</th><th>Kind</th><th>Sends</th><th>Local time</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+        : empty("Nothing scheduled", "Agents queue messages with <code>send_message</code>. Each one shows here with the time it will go out.")}`,
   })
 }
 

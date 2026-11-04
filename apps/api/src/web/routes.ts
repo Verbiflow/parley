@@ -5,10 +5,10 @@ import type { AppContext } from "../context.ts"
 import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
-import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
+import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
-import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listOutbound, resume } from "../sessions/outbox.ts"
+import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { setBehaviour } from "../sessions/store.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
@@ -95,6 +95,20 @@ export function webRoutes(ctx: AppContext): Hono {
     return r?.n ?? 0
   }
 
+  /** Where a form posted from a page goes back to: one of the app's own pages (with its filters), else the outbox. */
+  const backTo = (back: string) => (/^\/app(\/[\w-]+)*(\?[\w=&%.+~-]*)?$/.test(back) ? back : "/app/outbox")
+
+  /** The activity log's filter from the query string, keeping only states it knows and accounts that are the viewer's. */
+  const activityFilter = (c: Context, accountIds: string[]): ActivityFilter => {
+    const s = c.req.query("status")
+    const account = c.req.query("account")
+    return {
+      status: s === "sent" || s === "queued" || s === "failed" || s === "canceled" ? (s as ActivityStatus) : undefined,
+      account: account && accountIds.includes(account) ? account : undefined,
+      q: c.req.query("q")?.trim().slice(0, 200) || undefined,
+    }
+  }
+
   /** Today's sending on a live connection: what went out against its daily limit, what's waiting, and when next. */
   async function summary(userId: string, connectionId: string): Promise<ConnectionSummary> {
     const [{ today }, [q]] = await Promise.all([
@@ -115,10 +129,10 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [connections, agents, outbound, queued] = await Promise.all([
+    const [connections, agents, activity, queued] = await Promise.all([
       ctx.sessions.list(v.profile.id),
       agentSessions(ctx.sql, v.profile.id),
-      listOutbound(ctx.sql, v.profile.id, { limit: 30 }),
+      listActivity(ctx.sql, v.profile.id, { limit: 8, offset: 0 }),
       queuedTotal(v.profile.id),
     ])
     // Every live connection's figures at once (they came from the viewer's own list, so ownership is settled).
@@ -133,8 +147,7 @@ export function webRoutes(ctx: AppContext): Hono {
       if (synced[i] !== undefined) syncedCounts.set(conn.id, synced[i])
       summaries.set(conn.id, sums[i]!)
     })
-    const recent = outbound.filter((m) => m.status !== "scheduled").slice(0, 8)
-    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued, recent }))
+    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued, recent: activity.entries }))
   })
 
   app.post("/app/connect", async (c) => {
@@ -218,16 +231,40 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/outbox", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [scheduled, recent, connections, agents] = await Promise.all([
+    if (c.req.query("view") === "recent") return c.redirect("/app/activity")
+    const [scheduled, sending, connections, agents] = await Promise.all([
       listOutbound(ctx.sql, v.profile.id, { status: "scheduled", limit: 200 }),
-      listOutbound(ctx.sql, v.profile.id, { limit: 100 }),
+      listOutbound(ctx.sql, v.profile.id, { status: "sending", limit: 50 }),
       ctx.sessions.list(v.profile.id),
       agentSessions(ctx.sql, v.profile.id),
     ])
-    return c.html(outboxPage({
-      user: v.profile, scheduled, recent: recent.filter((m) => m.status !== "scheduled"), connections, agentCount: agents.length,
-      filter: c.req.query("view") === "recent" ? "recent" : "scheduled",
-    }))
+    return c.html(outboxPage({ user: v.profile, scheduled: [...sending, ...scheduled], connections, agentCount: agents.length }))
+  })
+
+  app.get("/app/activity", async (c) => {
+    const v = await viewer(c)
+    if (!v) return rememberNext(c)
+    const connections = await ctx.sessions.list(v.profile.id)
+    const filter = activityFilter(c, connections.map((x) => x.id))
+    const pageNo = Math.min(10_000, Math.max(1, Math.floor(Number(c.req.query("page")) || 1)))
+    const [page, agents, queued] = await Promise.all([
+      listActivity(ctx.sql, v.profile.id, { status: filter.status, connectionId: filter.account, q: filter.q, limit: ACTIVITY_PER_PAGE, offset: (pageNo - 1) * ACTIVITY_PER_PAGE }),
+      agentSessions(ctx.sql, v.profile.id),
+      queuedTotal(v.profile.id),
+    ])
+    return c.html(activityPage({ user: v.profile, page, connections, agentCount: agents.length, queuedTotal: queued, filter, pageNo }))
+  })
+
+  // The live view's poll: the first page of the same filter, rendered as rows, with every state's count.
+  app.get("/app/activity/feed", async (c) => {
+    const v = await viewer(c)
+    if (!v) return c.json({ error: "signed_out" }, 401)
+    const connections = await ctx.sessions.list(v.profile.id)
+    const filter = activityFilter(c, connections.map((x) => x.id))
+    const compact = c.req.query("compact") === "1"
+    const page = await listActivity(ctx.sql, v.profile.id, { status: filter.status, connectionId: filter.account, q: filter.q, limit: compact ? 8 : ACTIVITY_PER_PAGE, offset: 0 })
+    c.header("cache-control", "no-store")
+    return c.json(activityFeed(page, connections, { ...filter, compact }))
   })
 
   app.post("/app/outbox/:id/cancel", async (c) => {
@@ -236,8 +273,7 @@ export function webRoutes(ctx: AppContext): Hono {
     await cancel(ctx.tx, userId, c.req.param("id"), new Date()).catch((e) => {
       if (!(e instanceof OutboxError)) throw e
     })
-    const back = String((await c.req.formData().catch(() => undefined))?.get("back") ?? "")
-    return c.redirect(/^\/app\/[\w/-]*$/.test(back) ? back : "/app/outbox")
+    return c.redirect(backTo(String((await c.req.formData().catch(() => undefined))?.get("back") ?? "")))
   })
 
   // Delete a sent message for everyone: queued like any other send, so it shows under scheduled until it goes out.
@@ -245,6 +281,7 @@ export function webRoutes(ctx: AppContext): Hono {
     const userId = await currentUserId(c, ctx)
     if (!userId) return c.redirect("/")
     const id = c.req.param("id")
+    const back = backTo(String((await c.req.formData().catch(() => undefined))?.get("back") ?? ""))
     const m = await getOutbound(ctx.sql, userId, id).catch((e) => {
       if (e instanceof OutboxError) return undefined
       throw e
@@ -254,7 +291,7 @@ export function webRoutes(ctx: AppContext): Hono {
         if (!(e instanceof OutboxError)) throw e
       })
     }
-    return c.redirect("/app/outbox")
+    return c.redirect(back)
   })
 
   app.get("/app/network", async (c) => {

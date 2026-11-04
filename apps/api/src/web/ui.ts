@@ -16,6 +16,7 @@ const ICON = {
   copy: `<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>`,
   check: `<path d="M20 6 9 17l-5-5"/>`,
   search: `<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>`,
+  user: `<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`,
   users: `<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`,
   trash: `<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>`,
   plus: `<path d="M5 12h14"/><path d="M12 5v14"/>`,
@@ -160,7 +161,7 @@ const CSS = `
   --line:rgba(255,246,232,.07);--line-2:rgba(255,246,232,.11);--line-3:rgba(255,246,232,.18);
   --text:#f3f0ea;--text-2:#d4cec4;--muted:#9d968b;--faint:#6e685f;
   --sand:#e3b98d;--clay:#d9825b;--signal:#e3b98d;--signal-dim:rgba(227,185,141,.14);
-  --ok:#79d79f;--warn:#e9b45f;--bad:#f08a73;--info:#e3b98d;--read:#7fcdf0;
+  --ok:#8fc49c;--warn:#e9b45f;--bad:#f08a73;--info:#e3b98d;--read:#7fcdf0;
   --hover:rgba(255,246,232,.04);--ring:0 0 0 2px var(--bg),0 0 0 3.5px rgba(227,185,141,.7);
   --frame:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px rgba(255,255,255,.065),0 30px 80px -40px rgba(0,0,0,.8);
   --shadow:0 24px 60px -20px rgba(0,0,0,.75);
@@ -212,12 +213,13 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .btn.block{width:100%}
 .btn .ar{transition:transform .15s var(--ease)}.btn:hover .ar{transform:translateX(2px)}
 
-/* status: a tinted pill with a dot, the way the site shows message states */
-.st{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 8px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--muted);background:color-mix(in srgb,currentColor 12%,transparent);white-space:nowrap;line-height:1}
-.st i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
-.st.ok{color:var(--ok)}.st.warn{color:var(--warn)}.st.bad{color:var(--bad)}.st.info{color:var(--info)}
-.st.ok i.pulse{box-shadow:0 0 0 0 currentColor;animation:ping 2s var(--ease) infinite}
-@keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 55%,transparent)}70%,100%{box-shadow:0 0 0 6px transparent}}
+/* status: a quiet glass pill; only its dot carries the color */
+.st{--d:var(--faint);display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px 0 8px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap;line-height:1}
+.st i{width:6px;height:6px;border-radius:50%;background:var(--d);flex:none}
+.st.ok{--d:var(--ok)}.st.warn{--d:var(--warn)}.st.bad{--d:var(--bad);color:color-mix(in srgb,var(--bad) 45%,var(--text-2))}.st.info{--d:var(--sand)}.st.idle{color:var(--muted)}
+.st i.pulse{animation:ping 2s var(--ease) infinite}
+.st .orb{margin-left:-1px}
+@keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--d) 55%,transparent)}70%,100%{box-shadow:0 0 0 5px transparent}}
 .pulse{animation:pulse 2.2s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
 .kind{font-size:12.5px;color:var(--muted)}
 .kind.open{color:var(--sand)}
@@ -343,14 +345,6 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .kv > div{padding:13px 0;border-bottom:1px solid var(--line);font-size:13.5px;min-width:0}
 .kv .k{font-size:13px;color:var(--muted)}
 
-.log{font-size:13px;line-height:20px}
-.log > div{display:grid;grid-template-columns:72px 92px minmax(0,190px) minmax(0,1fr);gap:16px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
-.log .t{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
-.log .e{justify-self:start;display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;font-size:11.5px;font-weight:500;color:var(--text-2);background:color-mix(in srgb,currentColor 12%,transparent)}
-.log .e.ok{color:var(--ok)}.log .e.bad{color:var(--bad)}.log .e.q{color:var(--sand)}
-.log .to{font-family:var(--mono);font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.log.multi > div{grid-template-columns:72px 92px minmax(0,150px) minmax(0,190px) minmax(0,1fr)}.log .fr{font-family:var(--mono);font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.log .b{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .seg{display:inline-flex;gap:2px;border-radius:999px;padding:3px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
 .seg button,.seg a{height:28px;padding:0 13px;border:0;background:none;border-radius:999px;font-size:12.5px;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;transition:color .15s,background .15s}
@@ -365,7 +359,6 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
   .acct .an,.acct .chev{display:none}.acct{padding:0 5px}
   .wrap{padding:32px 16px 80px}.head{flex-direction:column;align-items:flex-start}.head h1{font-size:30px;line-height:36px}
   .kv{grid-template-columns:1fr}.kv .k{padding-bottom:0;border-bottom:0}
-  .log > div,.log.multi > div{grid-template-columns:64px 1fr;row-gap:4px}.log .fr,.log .to,.log .b{grid-column:2}
   .strip > div{min-width:50%;border-bottom:1px solid var(--line)}
   .sec-h{flex-wrap:wrap;row-gap:12px}.sec-h .aside{flex-wrap:wrap}
   .tbl{display:block;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.tbl::-webkit-scrollbar{display:none}
@@ -382,7 +375,7 @@ document.addEventListener('keydown',e=>{const m=document.querySelector('.me');if
 document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);const s=b.querySelector('span');if(s){const t=s.textContent;s.textContent='Copied';setTimeout(()=>s.textContent=t,1400)}}catch(e){}}));
 document.querySelectorAll('[data-tabs]').forEach(t=>t.addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(!b)return;const box=t.closest('[data-tabbox]')||document;t.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('on',x===b));box.querySelectorAll('[data-pane]').forEach(p=>p.hidden=p.dataset.pane!==b.dataset.tab)}));
 document.querySelectorAll('form[data-locale]').forEach(f=>{try{f.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';const r=(navigator.language||'').split('-')[1];if(r&&/^[A-Za-z]{2}$/.test(r))f.country.value=r.toUpperCase()}catch(e){}});
-document.querySelectorAll('form[data-confirm]').forEach(f=>f.addEventListener('submit',e=>{if(!confirm(f.dataset.confirm))e.preventDefault()}));
+document.addEventListener('submit',e=>{const f=e.target.closest('form[data-confirm]');if(f&&!confirm(f.dataset.confirm))e.preventDefault()});
 document.querySelectorAll('tr[data-href]').forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a,button,form'))location.href=r.dataset.href}));
 `
 
@@ -406,7 +399,7 @@ export function avatar(u: Viewer, size = 26): string {
 /** Network (proxy providers) is hidden from the console for now; /app/network still works. Flip to bring it back. */
 export const SHOW_NETWORK = false
 
-export type Section = "overview" | "outbox" | "agents" | "network" | "settings"
+export type Section = "overview" | "activity" | "outbox" | "agents" | "network" | "settings"
 
 /** The signed-in frame: a top bar (mark, tabs, account) over the page. */
 export function appShell(opts: { title: string; active: Section | null; user: Viewer; counts?: Partial<Record<Section, number>>; css?: string; script?: string; body: string }): string {
@@ -419,7 +412,7 @@ export function appShell(opts: { title: string; active: Section | null; user: Vi
   return shell(`${opts.title} · Parley`, `
     <header class="top"><div class="top-in">
       <a class="home" href="/app" aria-label="Parley overview">${LOGO}</a>
-      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
+      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("activity", "/app/activity", "Activity")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
       <div class="right">
         <details class="me"><summary class="acct" aria-label="Account">${avatar(user, 24)}<span class="an">${esc(first)}</span><span class="chev">${icon("chevronDown", 13)}</span></summary>
           <div class="menu"><div class="mh">${avatar(user, 34)}<div><b>${esc(user.name)}</b><span>${esc(user.email)}</span></div></div>
