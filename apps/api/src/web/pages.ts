@@ -263,11 +263,14 @@ function outText(m: Outbound): string {
 
 function activityLog(recent: Outbound[], connections: Connection[]): string {
   const tz = new Map(connections.map((c) => [c.id, c.timezone]))
+  // With more than one account, each line says which number it went out from.
+  const from = connections.filter((c) => c.status !== "logged_out" && c.status !== "error").length > 1
+    ? new Map(connections.map((c) => [c.id, waNumber(c.handle) || channelName(c.channel)])) : undefined
   if (!recent.length) return empty("No activity yet", "Sends and failures from your agents show up here as they happen.")
-  return `<div class="log">${recent.map((m) => {
+  return `<div class="log${from ? " multi" : ""}">${recent.map((m) => {
     const when = m.sentAt ?? m.createdAt
     const [cls, word] = m.status === "sent" ? ["ok", "sent"] : m.status === "failed" ? ["bad", m.error?.code === "outcome_unknown" ? "interrupted" : "failed"] : m.status === "canceled" ? ["", "canceled"] : ["q", m.status]
-    return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span><span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(outText(m))}</span></div>`
+    return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span>${from ? `<span class="fr">${esc(from.get(m.connectionId) ?? "")}</span>` : ""}<span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(outText(m))}</span></div>`
   }).join("")}</div>`
 }
 
@@ -432,7 +435,7 @@ export function connectionPage(opts: {
       title: number || channelName(c.channel), crumb: { href: "/app", label: "Overview" }, lead: channelMark(c.channel, 28),
       sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="mono faint">${channelName(c.channel).toLowerCase()}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · linked ${c.linkedAt ? ago(c.linkedAt) : "—"} · ${esc(tz)}</span>`,
       actions: `${c.status === "connected" ? `<a class="btn line" href="/app/connections/${esc(c.id)}/chats">${opts.synced} chat${opts.synced === 1 ? "" : "s"} synced</a>` : `<a class="btn" href="/link/${esc(c.id)}">Finish linking</a>`}
-        <form method="post" action="/app/connections/${esc(c.id)}/disconnect" data-confirm="Disconnect ${esc(channelName(c.channel))}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
+        <form method="post" action="/app/connections/${esc(c.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${channelName(c.channel)} ${number}` : channelName(c.channel))}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
     })}
     ${banner}
     ${section("Local day", timeline({ start: opts.policy.start, end: opts.policy.end, tz, queued: opts.queued, activeToday }), `${hh(opts.policy.start)}–${hh(opts.policy.end)} ${esc(tz)} · ${days}`)}
