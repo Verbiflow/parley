@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0d0c0a;
+  --color-bg-1: #131210;
+  --color-bg-2: #1a1916;
+  --color-bg-3: #23211d;
+  --color-bg-4: #2d2a25;
+  --color-line: rgb(255 246 232 / 0.07);
+  --color-line-2: rgb(255 246 232 / 0.11);
+  --color-line-3: rgb(255 246 232 / 0.18);
+  --color-ink: #f3f0ea;
+  --color-ink-2: #d4cec4;
+  --color-muted: #9d968b;
+  --color-faint: #6e685f;
+  --color-sand: #e3b98d;
+  --color-clay: #d9825b;
+  --font-sans: "Switzer", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", Menlo, monospace;
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  html {
+    overflow-x: clip;
+    background: var(--color-bg);
+    color-scheme: dark;
+    scroll-behavior: smooth;
+    scroll-padding-top: 80px;
+  }
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: rgb(227 185 141 / 0.28);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-ink-2);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+}
+
+/* A logo set inline with running text: sits on the text's x-height, never nudges the line box. */
+.inline-logo {
+  display: inline;
+  white-space: nowrap;
+  color: var(--color-ink);
+  font-weight: 500;
+}
+.inline-logo > svg {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.32em;
+  vertical-align: -0.17em;
+  border-radius: 0.22em;
+}
+
+/* A band of light that crosses the primary button now and then, and on hover. */
+.sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.75) 50%, transparent 70%);
+  transform: translateX(-130%);
+  animation: sheen 7s var(--ease-out-soft) 1.5s infinite;
+  pointer-events: none;
+}
+.sheen:hover::after {
+  animation: sheen-once 0.9s var(--ease-out-soft);
+}
+@keyframes sheen {
+  0% { transform: translateX(-130%); }
+  14%, 100% { transform: translateX(130%); }
+}
+@keyframes sheen-once {
+  from { transform: translateX(-130%); }
+  to { transform: translateX(130%); }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+.animate-blink {
+  animation: blink 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}

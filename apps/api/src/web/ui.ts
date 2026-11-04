@@ -83,7 +83,7 @@ export function brandMark(title: string, size = 14): string {
 }
 
 /** Parley's mark: a chat bubble whose tail forms the stem of a "P". */
-const MARK_PATH = "M16 26A20 20 0 1 1 28 44.33C26 50.5 21.5 55.5 16 58ZM36 18a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"
+export const MARK_PATH = "M16 26A20 20 0 1 1 28 44.33C26 50.5 21.5 55.5 16 58ZM36 18a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"
 export const mark = (size = 18) => `<svg viewBox="0 0 64 64" width="${size}" height="${size}" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="${MARK_PATH}"/></svg>`
 export const LOGO = `<span class="logo">${mark(18)}<span>parley</span></span>`
 

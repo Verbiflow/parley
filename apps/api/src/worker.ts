@@ -8,7 +8,7 @@ import type { AppContext } from "./context.ts"
 import { Transactor } from "./db/transactor.ts"
 import { LIMITS, type RateLimiter } from "./ratelimit.ts"
 import { Exits } from "./sessions/exits.ts"
-import { marketingPage } from "./web/pages.ts"
+import { marketingPage } from "./web/site.ts"
 import { RemoteSessions } from "./sessions/remote.ts"
 
 /**

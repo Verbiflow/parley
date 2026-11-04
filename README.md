@@ -1,8 +1,12 @@
 # Parley
 
-One messaging API for AI agents across WhatsApp, LinkedIn, Instagram, Telegram, and more.
+Messaging infrastructure for AI agents.
 
-Parley gives agents a single interface to send and receive messages, follow threads, connect accounts, and track delivery events, whatever the underlying channel.
+Link a real account once. Your agents read conversations, reply and reach out over MCP, and Parley sends every message at the pace of the person who owns the account: inside its local hours, with gaps, breaks and daily limits that start low and grow.
+
+WhatsApp is live. iMessage, Slack and LinkedIn are next, behind the same ten MCP tools, so an agent written today keeps working as channels arrive.
+
+Hosted at [itsparley.com](https://itsparley.com). To run it yourself, see [DEVELOPING.md](DEVELOPING.md).
 
 > Early development. APIs will change.
 

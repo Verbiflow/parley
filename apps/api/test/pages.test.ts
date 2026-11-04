@@ -1,15 +1,16 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { chatsPage, dashboardPage, landingPage, marketingPage, type AgentView } from "../src/web/pages.ts"
+import { chatsPage, dashboardPage, landingPage, type AgentView } from "../src/web/pages.ts"
+import { marketingPage } from "../src/web/site.ts"
 import type { Connection } from "../src/sessions/store.ts"
 import type { Outbound } from "../src/sessions/outbox.ts"
 
 test("the marketing site only links to the app; it never starts sign-in itself", () => {
   const html = marketingPage({ appUrl: "https://app.itsparley.com" })
-  assert.match(html, /Give your agents a phone number/)
-  assert.match(html, /href="https:\/\/app\.itsparley\.com"[^>]*>Open app/)
+  assert.match(html, /Messaging infrastructure<br>for AI agents/)
+  assert.match(html, /href="https:\/\/app\.itsparley\.com"[^>]*>Get started/)
+  assert.match(html, /data-copy="https:\/\/app\.itsparley\.com\/mcp"/)
   assert.doesNotMatch(html, /\/auth\/start/)
-  assert.doesNotMatch(html, /Welcome to Parley/)
 })
 
 test("the app's sign-in page is the centered panel with one Google button", () => {
@@ -17,7 +18,7 @@ test("the app's sign-in page is the centered panel with one Google button", () =
   assert.match(html, /Your messaging, ready for your agents\./)
   assert.match(html, /href="\/auth\/start"[^>]*>.*Continue with Google/s)
   assert.doesNotMatch(html, /dev login/)
-  assert.doesNotMatch(html, /Give your agents a phone number/)
+  assert.doesNotMatch(html, /Messaging infrastructure<br>/)
 })
 
 test("the overview with two WhatsApp numbers lists both, offers another, and says which number sent what", () => {

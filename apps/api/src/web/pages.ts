@@ -80,7 +80,7 @@ export function landingPage(opts: { workos: boolean; dev: boolean }): string {
       ${LOGO}
       <h1>Your messaging, ready for your agents.</h1>
       <p class="sub">Link WhatsApp once. Your agents send and receive over MCP. You never hand them your phone.</p>
-      <div class="tiles">${["whatsapp", "telegram", "instagram", "linkedin"].map((id) => `<span class="tile">${channelMark(id, 22)}</span>`).join("")}</div>
+      <div class="tiles"><span class="tile">${channelMark("whatsapp", 22)}</span></div>
       <section class="panel">${signin}${dev}</section>
     </main>`, { css: SIGNIN_CSS })
 }
@@ -95,70 +95,6 @@ const SIGNIN_CSS = `
 .signin .panel{width:100%;max-width:300px;margin-top:14px;display:flex;flex-direction:column;gap:12px;text-align:left}
 .dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
 .or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
-`
-
-/** The marketing site (itsparley.com). Signing in happens on the app (`appUrl`), so this page only links there. */
-export function marketingPage(opts: { appUrl: string }): string {
-  const app = esc(opts.appUrl)
-  const ch = (id: string) => `<span class="ich">${channelMark(id, 17)}${CHANNELS[id]!.name}</span>`
-  const j = (k: string, v: string) => `  <span class="k">"${k}"</span>: ${v}`
-  const s = (v: string) => `<span class="s">"${v}"</span>`
-  return shell("Parley — messaging infrastructure for agents", `
-    <header class="lt"><div class="lt-in">${LOGO}<nav><a href="#how">How it works</a><a href="https://github.com/Verbiflow/parley">GitHub ${icon("external", 12)}</a><a class="open" href="${app}">Open app</a></nav></div></header>
-    <main class="land">
-      <section class="hero">
-        <p class="label">messaging infrastructure for ai agents</p>
-        <h1>Give your agents a phone number.</h1>
-        <p class="lede">One MCP server for ${ch("whatsapp")} today, with ${ch("telegram")}, ${ch("instagram")} and ${ch("linkedin")} next. Agents read the chats you choose and send from your own account, paced to look like you.</p>
-        <a class="btn lg cta" href="${app}">Open app <span class="ar">${icon("arrow", 14)}</span></a>
-        <div class="console" id="how">
-          <div class="c-bar"><span></span><span></span><span></span><em>mcp · tools/call</em></div>
-          <pre><span class="arrow">→</span> <span class="fn">send_message</span>
-{
-${j("connection_id", s("c7f3e1a0"))},
-${j("to", s("+44 7700 900123"))},
-${j("text", s("Happy to show you a demo this week."))}
-}
-
-<span class="arrow in">←</span> <span class="ok">queued</span>
-{
-${j("status", s("scheduled"))},
-${j("kind", s("first_message"))},
-${j("scheduled_for", s("2026-11-04T09:24:00Z"))},
-${j("waits", `[${s("outside_active_hours")}]`)},
-${j("note", s("Queued for 09:24 London: outside the account's active hours."))}
-}</pre>
-        </div>
-        <ul class="facts">
-          <li><span class="label">pacing</span>Active hours, gaps, breaks and warm-up limits on every send.</li>
-          <li><span class="label">privacy</span>Ignore any chat and agents never see it. Credentials sealed at rest.</li>
-          <li><span class="label">network</span>Each account sends from one stable IP in its own country.</li>
-        </ul>
-      </section>
-    </main>`, { css: LANDING_CSS })
-}
-
-const LANDING_CSS = `
-.lt{border-bottom:1px solid var(--line)}
-.lt-in{max-width:1200px;margin:0 auto;height:56px;padding:0 28px;display:flex;align-items:center;justify-content:space-between}
-.lt nav{display:flex;gap:24px;font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.lt nav a{display:inline-flex;align-items:center;gap:6px}.lt nav a:hover{color:var(--text)}
-.land{max-width:1200px;margin:0 auto;padding:72px 28px 96px}
-.cta{margin-top:28px}
-.lt nav a.open{color:var(--text);border:1px solid var(--line-3);border-radius:999px;padding:6px 12px}
-.hero h1{font-size:60px;line-height:62px;font-weight:400;letter-spacing:-.045em;margin:18px 0 22px;max-width:13ch}
-.lede{font-size:17px;line-height:30px;color:var(--muted);max-width:52ch}
-.ich{display:inline-flex;align-items:center;gap:6px;color:var(--text);white-space:nowrap}
-.console{margin-top:44px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1);overflow:hidden;box-shadow:var(--shadow);max-width:640px}
-.c-bar{display:flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-bottom:1px solid var(--line)}
-.c-bar span{width:9px;height:9px;border-radius:50%;background:var(--bg-3)}
-.c-bar em{margin-left:auto;font-style:normal;font-family:var(--mono);font-size:11px;color:var(--faint)}
-.console pre{margin:0;padding:18px 20px 20px;font-family:var(--mono);font-size:12.5px;line-height:21px;color:var(--text-2);overflow:auto}
-.console .k{color:var(--muted)}.console .s{color:var(--text)}.console .fn{color:var(--text)}.console .arrow{color:var(--faint)}.console .ok{color:var(--signal)}
-.facts{list-style:none;margin:40px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;max-width:720px}
-.facts li{font-size:13.5px;line-height:21px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
-.facts .label{display:block;margin-bottom:6px;color:var(--text-2)}
-@media (max-width:980px){.land{padding-top:40px}.hero h1{font-size:42px;line-height:46px}.facts{grid-template-columns:1fr}}
 `
 
 // ---- Overview -----------------------------------------------------------------------------------------------------
