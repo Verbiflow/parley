@@ -152,3 +152,28 @@ test("address-book names fill in chats already listed, never add new ones, and l
   assert.equal(byId.get("p1")?.name, "Priya")
   assert.equal(byId.get("g1")?.name, "Club")
 })
+
+test("a call is activity: it moves the chat up, and the list says which way the latest call went", async () => {
+  const { accountId, connectionId } = await linked("caller@parley.test")
+  fake.simulator.announceChats(connectionId, [
+    { id: "old", name: "Old friend", kind: "direct", lastMessageAt: "2026-10-01T10:00:00.000Z" },
+    { id: "new", name: "Chatty", kind: "direct", lastMessageAt: "2026-11-01T10:00:00.000Z" },
+  ])
+  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 2)
+  // A missed call from the old friend, later than anything in the other chat.
+  fake.simulator.announceChats(connectionId, [{ id: "old", name: null, kind: "direct", lastCall: { at: "2026-11-02T09:00:00.000Z", kind: "missed" } }])
+  const chats = await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c[0]?.id === "old")
+  assert.equal(chats[0]!.lastCallKind, "missed")
+  assert.equal(chats[0]!.lastMessageAt, "2026-11-02T09:00:00.000Z")
+  assert.equal(chats[0]!.name, "Old friend")
+  // An older call doesn't overwrite the latest one.
+  fake.simulator.announceChats(connectionId, [{ id: "old", name: null, kind: "direct", lastCall: { at: "2026-10-15T09:00:00.000Z", kind: "outgoing" } }])
+  fake.simulator.announceChats(connectionId, [{ id: "new", name: null, kind: "direct", lastCall: { at: "2026-10-20T09:00:00.000Z", kind: "outgoing" } }])
+  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.find((x) => x.id === "new")?.lastCallKind === "outgoing")
+  const after = await sessions.chats(accountId, connectionId)
+  assert.equal(after.find((c) => c.id === "old")!.lastCallKind, "missed")
+
+  const html = await (await fetch(`${base}/app/connections/${connectionId}/chats`, { headers: { cookie: await browser("caller@parley.test") } })).text()
+  assert.match(html, /class="s miss">Missed call</)
+  assert.match(html, /contact · called /)
+})

@@ -10,6 +10,7 @@ export type {
   OpenOptions,
   InboundMessage,
   Chat,
+  CallKind,
   OutboundContent,
   ChannelSimulator,
   ChannelFake,

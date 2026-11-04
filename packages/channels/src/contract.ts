@@ -30,7 +30,9 @@ export type InboundMessage = { id: string; threadId: string; from: string; text:
  * A conversation on the channel: a person (`direct`) or a group. The user picks which chats Parley syncs; agents only
  * ever see synced ones. `name` may be unknown at first and filled in by a later `chats` event.
  */
-export type Chat = { id: string; name: string | null; kind: "direct" | "group"; lastMessageAt?: string | undefined }
+/** Which way the chat's most recent call went. */
+export type CallKind = "incoming" | "outgoing" | "missed"
+export type Chat = { id: string; name: string | null; kind: "direct" | "group"; lastMessageAt?: string | undefined; lastCall?: { at: string; kind: CallKind } | undefined }
 export type OutboundContent = { text: string }
 
 /** What a live connection tells the host (the session actor) as it runs. */

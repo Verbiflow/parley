@@ -1,27 +1,37 @@
 import type { Sql } from "@parley/auth/db"
-import type { Chat, InboundMessage } from "@parley/channels"
+import type { CallKind, Chat, InboundMessage } from "@parley/channels"
 
 /** CRUD for `parley.chat` / `parley.message`: the chats on a connection, which are synced, and synced messages. */
 
-export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null }
+export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null }
 export type StoredMessage = { id: string; chatId: string; sender: string; fromMe: boolean; text: string; at: string }
 
-type Raw = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; last_message_at: Date | null }
-const chatRow = (r: Raw): ChatRow => ({ id: r.id, kind: r.kind, name: r.name, synced: r.synced, lastMessageAt: r.last_message_at?.toISOString() ?? null })
+type Raw = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; last_message_at: Date | null; last_call_at: Date | null; last_call_kind: CallKind | null }
+const chatRow = (r: Raw): ChatRow => ({
+  id: r.id, kind: r.kind, name: r.name, synced: r.synced, lastMessageAt: r.last_message_at?.toISOString() ?? null,
+  lastCallAt: r.last_call_at?.toISOString() ?? null, lastCallKind: r.last_call_kind ?? null,
+})
+const COLS = "id, kind, name, synced, last_message_at, last_call_at, last_call_kind"
 
-/** Upsert chats the channel reported. A known name is never blanked, and last activity only moves forward. */
+/**
+ * Upsert chats the channel reported. A known name is never blanked, and last activity only moves forward. A call is
+ * activity too (it moves the chat up), and the latest call's time and direction are kept for the list.
+ */
 export async function upsertChats(sql: Sql, connectionId: string, chats: Chat[]): Promise<void> {
   if (!chats.length) return
   await sql(
-    `insert into parley.chat (connection_id, id, kind, name, last_message_at)
-     select $1, c.id, c.kind, nullif(left(c.name, 200), ''), c.at
-       from jsonb_to_recordset($2::jsonb) as c(id text, kind text, name text, at timestamptz)
+    `insert into parley.chat (connection_id, id, kind, name, last_message_at, last_call_at, last_call_kind)
+     select $1, c.id, c.kind, nullif(left(c.name, 200), ''), greatest(c.at, c.call_at), c.call_at, c.call_kind
+       from jsonb_to_recordset($2::jsonb) as c(id text, kind text, name text, at timestamptz, call_at timestamptz, call_kind text)
      on conflict (connection_id, id) do update set
        kind = excluded.kind,
        name = coalesce(excluded.name, parley.chat.name),
        last_message_at = greatest(parley.chat.last_message_at, excluded.last_message_at),
+       last_call_kind = case when excluded.last_call_at >= parley.chat.last_call_at or parley.chat.last_call_at is null
+                             then coalesce(excluded.last_call_kind, parley.chat.last_call_kind) else parley.chat.last_call_kind end,
+       last_call_at = greatest(parley.chat.last_call_at, excluded.last_call_at),
        updated_at = now()`,
-    [connectionId, JSON.stringify(chats.map((c) => ({ id: c.id, kind: c.kind, name: c.name, at: c.lastMessageAt ?? null })))]
+    [connectionId, JSON.stringify(chats.map((c) => ({ id: c.id, kind: c.kind, name: c.name, at: c.lastMessageAt ?? null, call_at: c.lastCall?.at ?? null, call_kind: c.lastCall?.kind ?? null })))]
   )
 }
 
@@ -50,7 +60,7 @@ export async function touchChat(sql: Sql, connectionId: string, chatId: string, 
 
 export async function listChats(sql: Sql, connectionId: string, opts: { syncedOnly?: boolean } = {}): Promise<ChatRow[]> {
   const rows = await sql<Raw>(
-    `select id, kind, name, synced, last_message_at from parley.chat
+    `select ${COLS} from parley.chat
       where connection_id = $1 ${opts.syncedOnly ? "and synced" : ""}
       order by last_message_at desc nulls last, name nulls last, id`,
     [connectionId]
@@ -59,7 +69,7 @@ export async function listChats(sql: Sql, connectionId: string, opts: { syncedOn
 }
 
 export async function getChat(sql: Sql, connectionId: string, chatId: string): Promise<ChatRow | undefined> {
-  const [r] = await sql<Raw>(`select id, kind, name, synced, last_message_at from parley.chat where connection_id = $1 and id = $2`, [connectionId, chatId])
+  const [r] = await sql<Raw>(`select ${COLS} from parley.chat where connection_id = $1 and id = $2`, [connectionId, chatId])
   return r && chatRow(r)
 }
 
@@ -164,7 +174,7 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
 /** Synced chats across the account's connected connections, most recent first. `awaitingReply` keeps those whose last message was theirs. */
 export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter): Promise<InboxChat[]> {
   const rows = await sql<Raw & { channel: string; connection_id: string; last_from_me: boolean | null }>(
-    `select c.id, c.kind, c.name, c.synced, c.last_message_at, k.channel, k.id as connection_id, lm.from_me as last_from_me
+    `select c.id, c.kind, c.name, c.synced, c.last_message_at, c.last_call_at, c.last_call_kind, k.channel, k.id as connection_id, lm.from_me as last_from_me
        from parley.chat c join parley.connection k on k.id = c.connection_id
        left join lateral (select m.from_me from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id order by m.sent_at desc, m.seq desc limit 1) lm on true
       where k.account_id = $1 and k.status = 'connected' and c.synced
