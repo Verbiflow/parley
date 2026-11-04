@@ -1,0 +1,28 @@
+packages/channels/src/whatsapp/auth-state.ts
+  s_95c322ab435c72::t_002bc71e80381b 7-10,14
+  s_95c322ab435c72::t_8bb0b37850aab5 32-37,39
+packages/channels/src/whatsapp/index.ts
+  s_95c322ab435c72::t_ff1daee2d3537d 423,427-429,434,439
+  s_95c322ab435c72::t_c2b854b7758113 333
+  s_95c322ab435c72::t_c2f62b5504ce8f 92-101,103-106,109-128
+  s_95c322ab435c72::t_5fce9bc56b73a8 320-322
+  s_95c322ab435c72::t_2a1d320b467399 102
+packages/channels/test/whatsapp-auth.test.ts
+  s_95c322ab435c72::t_07c3ccc0925010 28-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c1f80287fa960b7b6235fadadfe904ef43f06784",
+  "prompts": {},
+  "sessions": {
+    "s_95c322ab435c72": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "578aa834-a925-48d4-8406-49c406a3f7ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
