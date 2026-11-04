@@ -67,6 +67,9 @@ export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Ar
 /** The message a reaction is for, as stored: its id, whether the account sent it, and (in a group) who did. */
 export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
+/** A stored message to fetch history from (backwards): which chat, which message, who sent it, when. */
+export type HistoryAnchor = { threadId: string; messageId: string; fromMe: boolean; sender?: string | undefined; at: string }
+
 /** What a live connection tells the host (the session actor) as it runs. */
 export type ChannelEvent =
   /** The user must act to finish linking: scan this QR / open this OAuth URL / enter this code. */
@@ -99,6 +102,12 @@ export interface LiveConnection {
   send(to: string, content: OutboundContent): Promise<{ id: string }>
   /** Fetch a message's attachment by its `MediaInfo.ref`, as a stream (files can be large). Channels without media leave this out. */
   media?(ref: string): Promise<{ body: ReadableStream<Uint8Array>; mimetype: string }>
+  /**
+   * Ask the platform for up to `count` messages sent before `anchor` (a message the host has). They arrive later as
+   * ordinary `messages` events; one already stored is filled in (media, reactions) rather than duplicated. Channels
+   * that can't fetch history leave this out.
+   */
+  backfill?(anchor: HistoryAnchor, count: number): Promise<void>
   /** Unlink the account on the channel; the saved state becomes useless afterward. */
   logout(): Promise<void>
   /** Drop the connection locally (e.g. idle eviction) without unlinking. */
@@ -153,7 +162,7 @@ export interface ChannelSimulator {
   /** Simulate the user completing the link (scanning the QR / authorizing), as `handle` (default: unique to the connection). */
   completeLink(connectionId: string, handle?: string): void
   /** Simulate an inbound message. */
-  deliver(connectionId: string, message: { id?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
+  deliver(connectionId: string, message: { id?: string; at?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
   /** Simulate reactions arriving (added, changed or taken back). */
   react(connectionId: string, reactions: Reaction[]): void
   /** Simulate the channel reporting the account's chats (as on first link / history sync). */
@@ -162,6 +171,8 @@ export interface ChannelSimulator {
   failNextOpen(connectionId: string): void
   /** What was sent on a connection, for assertions. */
   sent(connectionId: string): Array<{ to: string; content: OutboundContent }>
+  /** The history requests made on a connection (`LiveConnection.backfill`), for assertions. */
+  backfills(connectionId: string): Array<{ anchor: HistoryAnchor; count: number }>
   /** Make the next send on a connection fail the way the platform would. */
   failNextSend(connectionId: string, outcome: SendOutcome): void
   /** The proxy the connection was last opened through. */

@@ -422,7 +422,8 @@ export const whatsappChannel: Channel = {
         report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
         handleMessages(messages)
         // After the batch's chats and messages, so the host has stored them before it hears the progress (or "done").
-        historyBatch(typeof progress === "number" ? progress : null, syncType)
+        // History we asked for (a backfill) isn't the link-time sync: it mustn't show "Syncing" again.
+        if (syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND) historyBatch(typeof progress === "number" ? progress : null, syncType)
       })
       // Calls: someone you're talking to by phone is as recent as a message. Only who, when and which way; nothing about
       // the call itself. A call ringing this account now:
@@ -480,6 +481,14 @@ export const whatsappChannel: Channel = {
         const c = message.message ?? {}
         const mimetype = (c.imageMessage ?? c.videoMessage ?? c.ptvMessage ?? c.audioMessage ?? c.documentMessage ?? c.stickerMessage)?.mimetype ?? "application/octet-stream"
         return { body: Readable.toWeb(stream) as ReadableStream<Uint8Array>, mimetype }
+      },
+      async backfill(anchor, count) {
+        // The phone answers with a history batch of the messages before this one (as WhatsApp Desktop does when you
+        // scroll up). It has to be online; the answer comes through messaging-history.set like any history.
+        const jid = toJid(anchor.threadId)
+        const key: WAMessageKey = { remoteJid: jid, id: anchor.messageId, fromMe: anchor.fromMe }
+        if (isJidGroup(jid) && !anchor.fromMe && anchor.sender && anchor.sender !== "me") key.participant = toJid(anchor.sender)
+        await sock.fetchMessageHistory(Math.max(1, Math.min(50, count)), key, Date.parse(anchor.at))
       },
       async logout() {
         stopped = true

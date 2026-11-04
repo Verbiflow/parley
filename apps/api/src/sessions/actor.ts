@@ -9,7 +9,7 @@ import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../
 import type { MediaFetcher } from "./fetch-media.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, backfillAnchors, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -42,6 +42,9 @@ export type MediaDetails = Omit<MediaInfo, "ref">
 /** An attachment as a stream, for download links: any size, never held in memory whole. */
 export type MediaStream = { body: ReadableStream<Uint8Array>; mimetype: string; kind: string; fileName: string | null }
 
+/** Between one chat's history request and the next, so a backfill doesn't hammer the phone. */
+const BACKFILL_SPACING_MS = 3_000
+
 /** The largest attachment fetched whole (to hand an agent inline). Bigger ones go through a download link. */
 export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
 
@@ -68,7 +71,7 @@ export async function readAll(body: ReadableStream<Uint8Array>, max: number): Pr
 export type SessionsApi = Pick<
   Sessions,
   | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
-  | "media" | "mediaInfo" | "mediaStream"
+  | "media" | "mediaInfo" | "mediaStream" | "backfill"
   | "enqueue" | "setLocale"
 >
 
@@ -77,7 +80,7 @@ export type SessionsApi = Pick<
  * (`enqueue`, `setLocale`) so pacing, its row locks and the dispatcher stay in one place. Everything else is a plain
  * Postgres read the edge does itself.
  */
-export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media"] as const
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media", "backfill"] as const
 export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
@@ -277,6 +280,38 @@ export class Sessions {
     return { ...file, kind: info.kind, fileName: info.fileName ?? null, size: Buffer.from(file.data, "base64").byteLength }
   }
 
+  /**
+   * Re-fetch recent history from the platform, to fill in what older code didn't keep (attachments, previews,
+   * reactions). For each synced chat with messages since `since`, asks for that many messages before its newest one,
+   * one chat every few seconds (in the background: this returns the plan). Messages already stored are filled in,
+   * never duplicated.
+   */
+  async backfill(accountId: string, connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
+    await this.#owned(accountId, connectionId)
+    const routed = await this.#route(connectionId, { op: "backfill", args: { since } })
+    if (routed.ok) return routed.result as { chats: number; messages: number }
+    return this.#localBackfill(connectionId, since)
+  }
+
+  async #localBackfill(connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
+    let entry = this.#live.get(connectionId)
+    if (!entry?.live) entry = await this.#hydrate(connectionId)
+    if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
+    const live = entry.live
+    if (!live.backfill) throw new ConnectError("not_found", "this channel can't fetch history")
+    const anchors = await backfillAnchors(this.ctx.sql, connectionId, new Date(since))
+    void (async () => {
+      for (const [i, a] of anchors.entries()) {
+        if (i) await new Promise((r) => setTimeout(r, BACKFILL_SPACING_MS))
+        if (this.#live.get(connectionId)?.live !== live) return
+        await live.backfill!({ threadId: a.chatId, messageId: a.messageId, fromMe: a.fromMe, sender: a.sender, at: a.at }, a.count)
+          .catch((e: unknown) => console.error(JSON.stringify({ msg: "backfill request failed", connectionId, error: e instanceof Error ? e.message : String(e) })))
+      }
+      console.log(JSON.stringify({ msg: "backfill requested", connectionId, chats: anchors.length }))
+    })()
+    return { chats: anchors.length, messages: anchors.reduce((n, a) => n + Math.min(50, a.count), 0) }
+  }
+
   /** What a message's attachment is, from the database alone (no download). */
   async mediaInfo(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaDetails> {
     const { ref: _ref, ...details } = await this.#attachment(accountId, connectionId, chatId, messageId)
@@ -444,6 +479,8 @@ export class Sessions {
         return null
       case "media":
         return this.#localMedia(connId, String(args.ref))
+      case "backfill":
+        return this.#localBackfill(connId, String(args.since))
       case "flushHistory":
         await this.#flushHistory(connId, (args.chatIds as string[]) ?? [])
         return null

@@ -234,3 +234,34 @@ test("sending from a URL: the sessions service downloads it (videos past 16 MB a
   assert.equal(out!.content.media?.kind, "video")
   assert.equal(new TextDecoder().decode(out!.content.media!.data), "mp4-bytes")
 })
+
+test("backfill: asks for each recent chat's history before its newest message, and a message seen again gets its media and reactions filled in", async () => {
+  const { accountId, connectionId } = await linked("backfill@parley.test")
+  const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
+  // Stored by older code: a photo with no media info, then two more messages.
+  fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "ana", text: "[photo]", at: at(-600) })
+  fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0) })
+  fake.simulator.deliver(connectionId, { id: "t", threadId: "ana", from: "me", fromMe: true, text: "nice", at: at(5) })
+  fake.simulator.deliver(connectionId, { id: "g", threadId: "team", from: "bo@s.whatsapp.net", text: "hi", at: at(2) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (m) => m.length === 4)
+
+  const plan = await sessions.backfill(accountId, connectionId, at(-60))
+  assert.deepEqual(plan, { chats: 2, messages: 3 })
+  await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 2, 10_000)
+  const asked = Object.fromEntries(fake.simulator.backfills(connectionId).map((b) => [b.anchor.threadId, [b.anchor.messageId, b.anchor.fromMe, b.count]]))
+  assert.deepEqual(asked, { ana: ["t", true, 2], team: ["g", false, 1] })
+
+  // The phone's answer: the same message, now with its attachment and a reaction.
+  const reaction = { threadId: "ana", messageId: "p", from: "me", fromMe: true, emoji: "❤️", at: at(1) }
+  fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "late", thumbnail: "dGh1bWI=" }, reactions: [reaction] })
+  const filled = await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "ana" }), (m) => m.some((x) => x.id === "p" && x.media))
+  const p = filled.find((x) => x.id === "p")!
+  assert.equal(p.media?.kind, "image")
+  assert.deepEqual(p.reactions.map((r) => r.emoji), ["❤️"])
+  assert.equal(filled.filter((x) => x.id === "p").length, 1)
+  assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
+  // Seen once more without a preview: what's stored stays.
+  fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "later" } })
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
+})
