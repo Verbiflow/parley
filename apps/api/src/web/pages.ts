@@ -5,7 +5,7 @@ import { UNSEND_WINDOW_MS, type DailyUsage, type Outbound } from "../sessions/ou
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
   CHANNELS, LOGO, agentMark, ago, appShell, avatar, bar, brandMark, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
-  foldSection, mark, pageHead, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
+  foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
 export type { Viewer } from "./ui.ts"
@@ -19,7 +19,7 @@ export type BrowserSessionView = { id: string; method: string | null; userAgent:
 export type ConnectionSummary = { sentToday: number; dailyLimit: number; queued: number; nextAt: string | null }
 
 const METHOD: Record<string, string> = { google: "Google", github: "GitHub", local: "Email (dev login)", proof: "Test account" }
-const KIND_LABEL: Record<string, string> = { message: "reply", first_message: "opener", invite: "invite" }
+const KIND_LABEL: Record<string, string> = { message: "Reply", first_message: "Opener", invite: "Invite" }
 const HALT_TEXT: Record<string, string> = {
   challenge: "WhatsApp asked the account to verify itself. Open WhatsApp on the phone, clear any prompt, then resume.",
   auth_expired: "The linked session stopped working. Relink the device, then resume.",
@@ -54,7 +54,7 @@ function connectionState(c: Connection): { tone: Tone; text: string; live?: bool
 
 function outcome(m: Outbound): string {
   if (m.status === "sent") return status("ok", "sent")
-  if (m.status === "failed") return `<span title="${esc(m.error?.message)}">${status("bad", m.error?.code === "outcome_unknown" ? "interrupted" : m.error?.code === "recipient_unavailable" ? "not on whatsapp" : m.error?.code ?? "failed")}</span>`
+  if (m.status === "failed") return `<span title="${esc(m.error?.message)}">${status("bad", m.error?.code === "outcome_unknown" ? "interrupted" : m.error?.code === "recipient_unavailable" ? "not on WhatsApp" : m.error?.code ?? "failed")}</span>`
   if (m.status === "canceled") return status("idle", "canceled")
   return status("info", "sending", true)
 }
@@ -64,38 +64,61 @@ function outcome(m: Outbound): string {
 /** Google's "G" mark, for the sign-in button (sign-in goes straight to Google; see /auth/start). */
 const GOOGLE_G = `<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true" style="margin-right:8px;vertical-align:-3px"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-10l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>`
 
-/** The app's signed-out page (app.itsparley.com): one centered panel, straight to Google. */
+/** The app's signed-out page (app.itsparley.com): the site's threads behind one centered panel, straight to Google. */
 export function landingPage(opts: { workos: boolean; dev: boolean }): string {
   const signin = opts.workos
     ? `<a class="btn lg block" href="/auth/start">${GOOGLE_G}Continue with Google</a>`
     : `<div class="note warn"><div class="grow"><b>Sign-in isn't configured</b><p>Set <code>WORKOS_CLIENT_ID</code> and <code>WORKOS_API_KEY</code>.</p></div></div>`
   const dev = opts.dev
     ? `<form method="post" action="/auth/dev" class="dev">
-         <div class="or label">local development</div>
+         <div class="or label">Local development</div>
          <label class="field"><span>Email</span><input class="input" name="email" type="email" placeholder="you@example.com" required autocomplete="email"></label>
          <button class="btn line lg block" type="submit">Continue with dev login</button></form>`
     : ""
   return shell("Sign in · Parley", `
+    <canvas class="threads" aria-hidden="true"></canvas>
     <main class="signin">
-      ${LOGO}
+      ${pmark(52)}
       <h1>Your messaging, ready for your agents.</h1>
-      <p class="sub">Link WhatsApp once. Your agents send and receive over MCP. You never hand them your phone.</p>
-      <div class="tiles"><span class="tile">${channelMark("whatsapp", 22)}</span></div>
+      <p class="sub">Link your accounts once. Your agents text people as you, at a human pace, with every message on record.</p>
       <section class="panel">${signin}${dev}</section>
-    </main>`, { css: SIGNIN_CSS })
+      <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => `<span title="${c.live ? c.name : `${c.name}, coming soon`}">${channelMark(id, 18)}</span>`).join("")}</div>
+    </main>
+    <p class="foot"><a href="https://itsparley.com">itsparley.com</a><span>·</span><a href="https://github.com/Verbiflow/parley">GitHub</a></p>`, { css: SIGNIN_CSS, script: THREADS_SCRIPT })
 }
 
 const SIGNIN_CSS = `
-.signin{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem 1.5rem;gap:14px}
-.signin .logo{font-size:15px}
-.signin h1{font-size:30px;line-height:36px;font-weight:400;letter-spacing:-.035em;margin:10px 0 0;max-width:17ch}
-.signin .sub{font-size:15px;line-height:23px;color:var(--muted);max-width:42ch;margin:0}
-.tiles{display:flex;gap:10px;margin-top:6px}
-.tile{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1)}
-.signin .panel{width:100%;max-width:300px;margin-top:14px;display:flex;flex-direction:column;gap:12px;text-align:left}
+body::before{display:none}
+.threads{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity 1.2s var(--ease)}.threads.on{opacity:1}
+.signin::before{content:"";position:absolute;left:50%;top:50%;width:min(760px,110vw);height:600px;transform:translate(-50%,-50%);background:radial-gradient(closest-side,var(--bg) 48%,color-mix(in srgb,var(--bg) 82%,transparent) 68%,transparent);pointer-events:none;z-index:-1}
+.signin{position:relative;isolation:isolate;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem 1.5rem 4rem}
+.signin .pmark{margin-bottom:26px}
+.signin h1{font-size:34px;line-height:40px;font-weight:400;letter-spacing:-.035em;margin:0;max-width:16ch;text-wrap:balance}
+.signin .sub{font-size:15px;line-height:24px;color:var(--muted);max-width:40ch;margin:14px 0 0;text-wrap:balance}
+.signin .panel{width:100%;max-width:300px;margin-top:30px;display:flex;flex-direction:column;gap:12px;text-align:left}
+.chans{display:flex;align-items:center;gap:14px;margin-top:36px}.chans .label{margin-right:4px;color:var(--faint)}.chans span{display:inline-flex}
 .dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
 .or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.foot{position:absolute;bottom:22px;left:0;right:0;display:flex;justify-content:center;gap:10px;font-size:12.5px;color:var(--faint)}.foot a:hover{color:var(--text-2)}
 `
+
+/**
+ * The site's hero background: message threads drawn in from the left, pinched through Parley's mark, fanned out to the
+ * right, with a few pulses running along them. Canvas 2D; pauses when the tab is hidden; still for reduced motion.
+ */
+const THREADS_SCRIPT = `(()=>{const c=document.querySelector('canvas.threads'),m=document.querySelector('.pmark');if(!c||!m)return;const x=c.getContext('2d');if(!x)return;
+const N=44,still=matchMedia('(prefers-reduced-motion: reduce)').matches;let w=0,h=0,px=0,py=0,f=0,last=performance.now();const t0=last;
+const pulses=Array.from({length:7},(_,k)=>({l:(k*23)%N,u:k/7,s:.05+(k%3)*.016}));
+function size(){const d=Math.min(devicePixelRatio||1,2);w=innerWidth;h=innerHeight;c.width=w*d;c.height=h*d;x.setTransform(d,0,0,d,0,0);const r=m.getBoundingClientRect();px=r.left+r.width/2;py=r.top+r.height/2}
+function curve(i,t){const g=i/(N-1),s=Math.sin(t*.35+g*5.5)*.02,sp=(g-.5)*h;return[[-.06*w,h*(-.15+1.3*g+s)],[px-w*.2,py+sp*(.08+s)],[px+w*.2,py+sp*(.05-s)],[1.06*w,h*(-.2+1.35*g-s)]]}
+function at(p,u){const v=1-u;return[0,1].map(k=>v*v*v*p[0][k]+3*v*v*u*p[1][k]+3*v*u*u*p[2][k]+u*u*u*p[3][k])}
+function draw(now){const t=(now-t0)/1000+12,dt=Math.min((now-last)/1000,.05);last=now;x.clearRect(0,0,w,h);const q=px/w;
+const g=x.createLinearGradient(0,0,w,0);g.addColorStop(0,'rgba(227,185,141,0)');g.addColorStop(Math.max(q-.3,.02),'rgba(227,185,141,.06)');g.addColorStop(q,'rgba(240,205,165,.42)');g.addColorStop(Math.min(q+.3,.98),'rgba(227,185,141,.08)');g.addColorStop(1,'rgba(227,185,141,0)');
+x.strokeStyle=g;x.lineWidth=.75;x.beginPath();for(let i=0;i<N;i++){const p=curve(i,t);x.moveTo(p[0][0],p[0][1]);x.bezierCurveTo(p[1][0],p[1][1],p[2][0],p[2][1],p[3][0],p[3][1])}x.stroke();
+x.globalCompositeOperation='lighter';for(const p of pulses){if(!still)p.u+=p.s*dt;if(p.u>1.05){p.u=-.05;p.l=(p.l+17)%N}const cv=curve(p.l,t),hd=Math.min(Math.max(p.u,0),1),tl=Math.max(hd-.07,0),a=Math.sin(Math.PI*hd);
+for(const[lw,al]of[[3,.1],[1.2,.75]]){x.beginPath();for(let k=0;k<=10;k++){const[X,Y]=at(cv,tl+(hd-tl)*k/10);k?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle='rgba(248,214,172,'+al*a+')';x.lineWidth=lw;x.stroke()}}
+x.globalCompositeOperation='source-over';c.classList.add('on');if(!still&&!document.hidden)f=requestAnimationFrame(draw)}
+const go=()=>{cancelAnimationFrame(f);last=performance.now();f=requestAnimationFrame(draw)};size();go();addEventListener('resize',()=>{size();go()});document.addEventListener('visibilitychange',()=>!document.hidden&&go())})();`
 
 // ---- Overview -----------------------------------------------------------------------------------------------------
 
@@ -104,35 +127,36 @@ const isActive = (a: AgentView) => Boolean(a.lastUsedAt && Date.now() - Date.par
 const OVERVIEW_CSS = `
 .chan td:first-child{padding-left:0}
 .chtags{display:flex;flex-wrap:wrap;gap:6px;margin-right:6px}
-.chtag{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px;border:1px solid var(--line-2);border-radius:999px;background:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:lowercase;color:var(--text-2);white-space:nowrap}
-button.chtag{cursor:pointer;transition:border-color .15s var(--ease),background .15s var(--ease),color .15s var(--ease)}button.chtag:hover{color:var(--text);border-color:var(--line-3);background:var(--hover)}
-.chtag.soon{border-style:dashed;color:var(--faint)}.chtag.soon .cm,.chtag.soon svg{filter:grayscale(1);opacity:.5}.chtag i{font-style:normal;color:var(--faint)}
-.conns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding-top:16px}
-.conn{display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1);transition:border-color .15s var(--ease)}
-.conn .ct{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:11px;background:color-mix(in srgb,var(--c) 14%,transparent)}
-.conn b{display:block;font-size:15px;font-weight:500;color:var(--text)}
-.conn small{display:block;font-size:12.5px;line-height:18px;color:var(--muted);margin-top:2px}
+.chtag{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px 0 10px;border:0;border-radius:999px;background:var(--glass);box-shadow:var(--glass-ring);font-size:12.5px;color:var(--text-2);white-space:nowrap}
+button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s var(--ease)}button.chtag:hover{color:var(--text);background:var(--glass-hi)}
+.chtag.soon{background:none;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}.chtag i{font-style:normal;font-size:11.5px;color:var(--faint);margin-left:2px}
+.conns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding-top:18px}
+.conn{position:relative;display:flex;flex-direction:column;gap:16px;padding:18px;border-radius:16px;background:var(--card);box-shadow:var(--frame);transition:box-shadow .2s var(--ease),transform .2s var(--ease)}
+.conn .ct{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:13px;background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 22%,transparent)}
+.conn b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;color:var(--text)}
+.conn small{display:block;font-size:12.5px;line-height:18px;color:var(--muted);margin-top:3px}
 .conn .cf{margin-top:auto}
-.conn.ready{border-color:color-mix(in srgb,var(--c) 45%,var(--line-2))}.conn.ready:hover{border-color:var(--c)}
-.conn.ready .btn{width:100%;background:var(--c);border-color:var(--c);color:#fff}.conn.ready .btn:hover{filter:brightness(1.06)}
-.conn.later{background:transparent;border-style:dashed}.conn.later .ct{filter:grayscale(1);opacity:.55}.conn.later b{color:var(--muted)}.conn.later small{color:var(--faint)}
-.conn.ready{box-shadow:var(--shadow)}
-.conn.later .cf{height:32px;display:flex;align-items:center}
+.conn.ready{box-shadow:var(--frame),0 0 0 1px color-mix(in srgb,var(--c) 30%,transparent),0 24px 60px -30px color-mix(in srgb,var(--c) 45%,transparent)}
+.conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,color-mix(in srgb,var(--c) 10%,transparent),transparent 70%);pointer-events:none}
+.conn.ready .btn{width:100%}
+.conn.later{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
+.conn.later .cf{height:34px;display:flex;align-items:center}.conn.later .label{font-size:12px;color:var(--faint)}
 .conns.compact .conn{flex-direction:row;align-items:center;padding:12px 14px;gap:12px}
-.conns.compact .conn .ct{width:34px;height:34px;border-radius:9px}.conns.compact .conn small{display:none}.conns.compact .conn b{font-size:13.5px}
+.conns.compact .conn .ct{width:34px;height:34px;border-radius:10px}.conns.compact .conn small{display:none}.conns.compact .conn b{font-size:13.5px}
 .conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}.conns.compact .conn.later .cf{height:auto}
-.stepn{display:inline-grid;place-items:center;flex:none;box-sizing:border-box;width:20px;height:20px;border-radius:50%;border:1px solid var(--line-3);font-family:var(--sans);font-size:11px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;text-box:trim-both cap alphabetic;color:var(--text);margin-right:10px;letter-spacing:0;text-indent:0}
-.stepn.done{background:var(--signal);border-color:var(--signal);color:var(--on-ink)}
-.done-tag{display:inline-flex;align-items:center;gap:6px;color:var(--signal);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.stepn{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line-3);font-size:11.5px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;color:var(--text);margin-right:11px}
+.stepn.done{background:var(--primary);box-shadow:var(--primary-shadow);color:var(--on-primary)}
+.done-tag{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 8px;border-radius:999px;background:color-mix(in srgb,var(--sand) 12%,transparent);color:var(--sand);font-size:12px;font-weight:500}
 .seg button .cm,.seg button svg{margin-right:7px}
-@media (max-width:980px){.conns{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.mcp{display:flex;flex-direction:column;gap:14px;padding-top:16px}
+@media (max-width:1100px){.conns{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:700px){.conns{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.mcp{display:flex;flex-direction:column;gap:16px;padding-top:18px}
 .mcp .tabrow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .pane{display:flex;flex-direction:column;gap:12px;font-size:13.5px;color:var(--muted);line-height:22px}
 .pane ol{margin:0;padding-left:20px}.pane b{color:var(--text);font-weight:500}.pane code{color:var(--text-2)}
 .agent-line{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
 .agent-line b{color:var(--text);font-weight:500}.agent-line a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-3)}
-.live{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:pulse 2.2s infinite}
+.live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:ping 2s var(--ease) infinite;color:var(--ok)}
 `
 
 /** Fill the hidden timezone/country fields of Connect forms from the browser, so pacing starts in the right local hours. */
@@ -148,7 +172,7 @@ function connectorCards(skip: Set<string>, compact = false): string {
     return `<div class="conn ${c.live ? "ready" : "later"}" style="--c:${c.color}">
       <span class="ct">${channelMark(id, compact ? 20 : 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
-      <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">coming soon</span>`}</div>
+      <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">Coming soon</span>`}</div>
     </div>`
   }).join("")}</div>`
 }
@@ -161,23 +185,23 @@ function channelTags(): string {
   return `<div class="chtags">${Object.keys(CHANNELS).map((id) => {
     const c = CHANNELS[id]!
     return c.live
-      ? connectForm(`${channelMark(id, 13)}${c.name.toLowerCase()}`, "chtag")
-      : `<span class="chtag soon">${channelMark(id, 13)}${c.name.toLowerCase()}<i>soon</i></span>`
+      ? connectForm(`${channelMark(id, 14)}${c.name}`, "chtag")
+      : `<span class="chtag soon">${channelMark(id, 14)}${c.name}<i>Soon</i></span>`
   }).join("")}</div>`
 }
 
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
-const doneTag = `<span class="done-tag">${icon("check", 12, 2.25)}done</span>`
+const doneTag = `<span class="done-tag">${icon("check", 12, 2.25)}Done</span>`
 
 function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; step?: number } = { open: true }): string {
   const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(mcpUrl)
   const tabs: Array<[string, string, string, string]> = [
-    ["cc", "claude code", "Claude", `<p>Run this, then start <code>claude</code> and type <code>/mcp</code> to sign in.</p>${copyLine(`claude mcp add --transport http parley ${mcpUrl}`, { prompt: "$" })}`],
-    ["cx", "codex", "OpenAI", `<p>Run this, then <code>codex mcp login parley</code>.</p>${copyLine(`codex mcp add parley --url ${mcpUrl}`, { prompt: "$" })}`],
-    ["cu", "cursor", "Cursor", `<p>Add to <code>~/.cursor/mcp.json</code>, then enable Parley under <b>Settings → MCP</b>.</p>${copyLine(JSON.stringify({ mcpServers: { parley: { url: mcpUrl } } }, null, 2), { multiline: true })}`],
-    ["cd", "claude app", "Claude", `<ol><li><b>Settings → Connectors → Add custom connector</b></li><li>Name it Parley and paste the endpoint</li><li><b>Connect</b> and sign in</li></ol>${local ? `<p class="faint">The Claude app connects from Anthropic's servers, so it needs a public URL. Set <code>PUBLIC_URL</code> behind a tunnel, or use Claude Code.</p>` : ""}`],
-    ["gpt", "chatgpt", "OpenAI", `<ol><li><b>Settings → Apps &amp; Connectors → Advanced</b>, turn on <b>Developer mode</b></li><li><b>Create</b>, paste the endpoint, pick <b>OAuth</b></li><li>Sign in</li></ol>${local ? `<p class="faint">ChatGPT connects from OpenAI's servers, so it needs a public URL.</p>` : ""}`],
-    ["ot", "other", "", `<p>Any MCP client with remote servers (Streamable HTTP + OAuth) works. Add the endpoint; it finds the sign-in on its own.</p>`],
+    ["cc", "Claude Code", "Claude", `<p>Run this, then start <code>claude</code> and type <code>/mcp</code> to sign in.</p>${copyLine(`claude mcp add --transport http parley ${mcpUrl}`, { prompt: "$" })}`],
+    ["cx", "Codex", "OpenAI", `<p>Run this, then <code>codex mcp login parley</code>.</p>${copyLine(`codex mcp add parley --url ${mcpUrl}`, { prompt: "$" })}`],
+    ["cu", "Cursor", "Cursor", `<p>Add to <code>~/.cursor/mcp.json</code>, then enable Parley under <b>Settings → MCP</b>.</p>${copyLine(JSON.stringify({ mcpServers: { parley: { url: mcpUrl } } }, null, 2), { multiline: true })}`],
+    ["cd", "Claude app", "Claude", `<ol><li><b>Settings → Connectors → Add custom connector</b></li><li>Name it Parley and paste the endpoint</li><li><b>Connect</b> and sign in</li></ol>${local ? `<p class="faint">The Claude app connects from Anthropic's servers, so it needs a public URL. Set <code>PUBLIC_URL</code> behind a tunnel, or use Claude Code.</p>` : ""}`],
+    ["gpt", "ChatGPT", "OpenAI", `<ol><li><b>Settings → Apps &amp; Connectors → Advanced</b>, turn on <b>Developer mode</b></li><li><b>Create</b>, paste the endpoint, pick <b>OAuth</b></li><li>Sign in</li></ol>${local ? `<p class="faint">ChatGPT connects from OpenAI's servers, so it needs a public URL.</p>` : ""}`],
+    ["ot", "Other", "", `<p>Any MCP client with remote servers (Streamable HTTP + OAuth) works. Add the endpoint; it finds the sign-in on its own.</p>`],
   ]
   const active = agents.filter(isActive)
   const line = agents.length
@@ -191,19 +215,19 @@ function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; st
       ${tabs.map(([id, , , html], i) => `<div class="pane" data-pane="${id}"${i === 0 ? "" : " hidden"}>${html}</div>`).join("")}
       ${line}
     </div>`
-  const aside = agents.length && opts.step ? doneTag : agents.length ? `${agents.length} agent${agents.length === 1 ? "" : "s"} connected` : "streamable http · oauth"
-  return foldSection("Add Parley to your AI", body, {
+  const aside = agents.length && opts.step ? doneTag : agents.length ? `${agents.length} agent${agents.length === 1 ? "" : "s"} connected` : "Streamable HTTP · OAuth"
+  return foldSection("Add Parley to your agent", body, {
     open: opts.open, aside, lead: opts.step ? stepNo(opts.step, agents.length > 0) : "",
-    note: "Parley is an MCP server. Add the endpoint to your AI app; it opens a browser to sign in. No API key to paste.",
+    note: "Parley is an MCP server. Add the endpoint to your agent; it opens a browser to sign in. No API key to paste.",
   })
 }
 
-const MEDIA_LABEL: Record<string, string> = { image: "photo", video: "video", audio: "audio", document: "document" }
+const MEDIA_LABEL: Record<string, string> = { image: "Photo", video: "Video", audio: "Voice note", document: "Document" }
 /** How a queued send reads in a list: its text, with what it carries when it's a file or a reaction. */
 function outText(m: Outbound): string {
-  if (m.unsend) return "deleted a message for everyone"
-  if (m.reactTo) return m.text ? `reacted ${m.text}` : "took back a reaction"
-  if (m.media) return `[${MEDIA_LABEL[m.media.kind] ?? m.media.kind}${m.media.fileName && m.media.kind === "document" ? `: ${m.media.fileName}` : ""}]${m.text ? ` ${m.text}` : ""}`
+  if (m.unsend) return "Deleted a message for everyone"
+  if (m.reactTo) return m.text ? `Reacted ${m.text}` : "Took back a reaction"
+  if (m.media) return `${m.media.kind === "document" && m.media.fileName ? m.media.fileName : MEDIA_LABEL[m.media.kind] ?? m.media.kind}${m.text ? ` · ${m.text}` : ""}`
   return m.text
 }
 
@@ -215,7 +239,7 @@ function activityLog(recent: Outbound[], connections: Connection[]): string {
   if (!recent.length) return empty("No activity yet", "Sends and failures from your agents show up here as they happen.")
   return `<div class="log${from ? " multi" : ""}">${recent.map((m) => {
     const when = m.sentAt ?? m.createdAt
-    const [cls, word] = m.status === "sent" ? ["ok", "sent"] : m.status === "failed" ? ["bad", m.error?.code === "outcome_unknown" ? "interrupted" : "failed"] : m.status === "canceled" ? ["", "canceled"] : ["q", m.status]
+    const [cls, word] = m.status === "sent" ? ["ok", "Sent"] : m.status === "failed" ? ["bad", m.error?.code === "outcome_unknown" ? "Interrupted" : "Failed"] : m.status === "canceled" ? ["", "Canceled"] : ["q", m.status === "scheduled" ? "Queued" : "Sending"]
     return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span>${from ? `<span class="fr">${esc(from.get(m.connectionId) ?? "")}</span>` : ""}<span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(outText(m))}</span></div>`
   }).join("")}</div>`
 }
@@ -238,13 +262,13 @@ export function dashboardPage(opts: {
     // A live row opens the account (its chats and sending settings); until it's linked, the QR page.
     const detail = `/app/connections/${esc(c.id)}`
     return `<tr class="link" data-href="${c.status === "connected" ? detail : `/link/${esc(c.id)}`}">
-      <td><div class="who">${channelMark(c.channel, 18)}<div><b>${esc(number || channelName(c.channel))}</b><small>${channelName(c.channel).toLowerCase()}${c.displayName ? ` · ${esc(c.displayName)}` : ""}</small></div></div></td>
+      <td><div class="who">${channelMark(c.channel, 18)}<div><b>${esc(number || channelName(c.channel))}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""}</small></div></div></td>
       <td>${status(st.tone, st.text, st.live)}</td>
       <td class="m">${s ? `${bar(s.sentToday, s.dailyLimit)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.dailyLimit}</span>` : `<span class="faint">—</span>`}</td>
       <td class="m">${s ? s.queued : "—"}</td>
-      <td class="m">${s?.nextAt ? esc(until(s.nextAt, c.timezone)) : `<span class="faint">—</span>`}</td>
-      <td class="m">${c.status === "connected" ? `<a href="${detail}">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
-      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<form method="post" action="${detail}/disconnect" data-confirm="Cancel linking this ${esc(channelName(c.channel))} account?" style="display:inline"><button class="btn quiet sm" type="submit">cancel</button></form>`}</td>
+      <td class="m">${s?.nextAt ? `<span class="next">${orb(12)}${esc(until(s.nextAt, c.timezone))}</span>` : `<span class="faint">—</span>`}</td>
+      <td class="m">${c.status === "connected" ? `<a href="${detail}">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">Finish linking</a>`}</td>
+      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<form method="post" action="${detail}/disconnect" data-confirm="Cancel linking this ${esc(channelName(c.channel))} account?" style="display:inline"><button class="btn quiet sm" type="submit">Cancel</button></form>`}</td>
     </tr>`
   }).join("")
 
@@ -258,7 +282,7 @@ export function dashboardPage(opts: {
   // Setup: until a channel is linked and an AI is connected, the page is just the two steps to get there.
   if (!visible.length || !opts.agents.length) {
     const hasChannel = visible.length > 0
-    return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your AI." })}
+    return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your agent." })}
     ${alerts}
     ${section("Link a channel", hasChannel ? table : connectorCards(linked), hasChannel ? `${channelTags()}${doneTag}` : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
@@ -271,13 +295,13 @@ export function dashboardPage(opts: {
     })}
     ${alerts}
     <div class="strip">
-      <div><span class="label">live channels</span><div class="v">${live.length}</div><div class="h">${visible.length > live.length ? `${visible.length - live.length} waiting to link` : "all online"}</div></div>
-      <div><span class="label">sent today</span><div class="v">${sentToday}</div><div class="h">across every channel</div></div>
-      <div><span class="label">queued</span><div class="v">${queued}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
-      <div><span class="label">agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
+      <div><span class="label">Live channels</span><div class="v">${live.length}</div><div class="h">${visible.length > live.length ? `${visible.length - live.length} waiting to link` : "all online"}</div></div>
+      <div><span class="label">Sent today</span><div class="v">${sentToday}</div><div class="h">across every channel</div></div>
+      <div><span class="label">Queued</span><div class="v">${queued}${queued ? orb(18) : ""}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
+      <div><span class="label">Agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
     ${section("Channels", table, channelTags())}
-    ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">all activity</a>`)}
+    ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">All activity</a>`)}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: false })}`)
 }
 
@@ -296,19 +320,19 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: 
     const c = byId.get(m.connectionId)
     const tz = c?.timezone ?? "UTC"
     return `<tr>
-      <td><div class="who">${glyph(recipient(m.chatId), 24, true)}<div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel).toLowerCase()} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
+      <td><div class="who">${glyph(recipient(m.chatId), 24, true)}<div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel)} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
       <td class="clip">${esc(outText(m))}</td>
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
-      <td class="m">${scheduled ? (m.scheduledFor ? esc(until(m.scheduledFor, tz)) : `<span class="faint">held — channel paused</span>`) : outcome(m)}</td>
-      <td class="m faint">${scheduled ? (m.scheduledFor ? `${clock(m.scheduledFor, tz)} ${esc(tz.split("/").pop()!.replace(/_/g, " ").toLowerCase())}` : "") : ago(m.sentAt ?? m.createdAt)}</td>
+      <td class="m">${scheduled ? (m.scheduledFor ? `<span class="next">${orb(12)}${esc(until(m.scheduledFor, tz))}</span>` : `<span class="faint">Held while the channel is paused</span>`) : outcome(m)}</td>
+      <td class="m faint">${scheduled ? (m.scheduledFor ? `${clock(m.scheduledFor, tz)} <span class="faint">${esc(tz.split("/").pop()!.replace(/_/g, " "))}</span>` : "") : ago(m.sentAt ?? m.createdAt)}</td>
       <td class="r">${scheduled
-        ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">cancel</button></form>`
-        : unsendable(m) ? `<form method="post" action="/app/outbox/${esc(m.id)}/unsend"><button class="btn quiet sm" type="submit" title="Delete it for everyone in the chat">delete</button></form>` : ""}</td>
+        ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">Cancel</button></form>`
+        : unsendable(m) ? `<form method="post" action="/app/outbox/${esc(m.id)}/unsend"><button class="btn quiet sm" type="submit" title="Delete it for everyone in the chat">Delete</button></form>` : ""}</td>
     </tr>`
   }).join("")
   return appShell({
     title: "Outbox", active: "outbox", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.scheduled.length },
-    body: `${pageHead({ title: "Outbox", sub: "Everything your agents asked to send. Parley spaces it out so each account sends like the person who owns it.", actions: `<nav class="seg"><a href="/app/outbox" class="${scheduled ? "on" : ""}">scheduled · ${opts.scheduled.length}</a><a href="/app/outbox?view=recent" class="${scheduled ? "" : "on"}">recent</a></nav>` })}
+    body: `${pageHead({ title: "Outbox", sub: "Everything your agents asked to send. Parley spaces it out so each account sends like the person who owns it.", actions: `<nav class="seg"><a href="/app/outbox" class="${scheduled ? "on" : ""}">Scheduled · ${opts.scheduled.length}</a><a href="/app/outbox?view=recent" class="${scheduled ? "" : "on"}">Recent</a></nav>` })}
       ${list.length
         ? `<table class="tbl"><thead><tr><th>To</th><th>Message</th><th>Kind</th><th>${scheduled ? "Sends" : "Result"}</th><th>${scheduled ? "Local time" : "When"}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
         : scheduled ? empty("Nothing scheduled", "Agents queue messages with <code>send_message</code>. Each one shows here with the time it will go out.") : empty("Nothing sent yet", "Sent, failed and canceled messages show up here.")}`,
@@ -339,7 +363,7 @@ export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: st
   return appShell({
     title: "Agents", active: "agents", user: opts.user, counts: { agents: opts.agents.length, outbox: opts.queuedTotal }, css: OVERVIEW_CSS,
     body: `${pageHead({ title: "Agents", sub: "Apps you've authorized to read your synced chats and queue messages for you. Disconnecting one cuts off its tokens immediately." })}
-      ${section("MCP endpoint", `<div style="padding-top:16px">${copyLine(opts.mcpUrl)}</div>`, "streamable http · oauth")}
+      ${section("MCP endpoint", `<div style="padding-top:18px">${copyLine(opts.mcpUrl)}</div>`, "Streamable HTTP · OAuth")}
       ${section("Authorized", opts.agents.length
         ? `<table class="tbl"><thead><tr><th>Agent</th><th>Activity</th><th>Since</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
         : empty("No agents yet", "Add the endpoint above to an MCP client. It opens a browser to sign in with this account."), `${opts.agents.length} authorized`)}`,
@@ -356,7 +380,7 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
       <td class="m">${p.type === "gateway" ? esc(p.gateway?.host ?? "") : "—"}</td>
       <td class="m">${p.countries.length ? esc(p.countries.join(" ")) : "any"}</td>
       <td class="m">${p.assigned}<span class="faint">/${p.exits}${p.maxExits ? ` max ${p.maxExits}` : ""}</span></td>
-      <td>${p.enabled ? status("ok", "on") : status("idle", "off")}</td>
+      <td>${p.enabled ? status("ok", "On") : status("idle", "Off")}</td>
       <td class="r" style="white-space:nowrap"><form method="post" action="/app/network/providers/${esc(p.id)}/${p.enabled ? "disable" : "enable"}" style="display:inline"><button class="btn quiet sm" type="submit">${p.enabled ? "turn off" : "turn on"}</button></form><form method="post" action="/app/network/providers/${esc(p.id)}/delete" data-confirm="Remove ${esc(p.name)}? Connections using its exits move to another on their next reconnect." style="display:inline"><button class="btn quiet sm" type="submit" aria-label="Remove">${icon("trash", 13)}</button></form></td>
     </tr>`).join("")
   const exitRows = opts.exits.map((e) => {
@@ -432,16 +456,16 @@ export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[
       <td class="r"><form method="post" action="/app/settings/sessions/${esc(s.id)}/end"><button class="btn ${here ? "line" : "quiet"} sm" type="submit">${here ? "Sign out" : "Revoke"}</button></form></td>
     </tr>`
   }).join("")
-  const others = opts.sessions.length > 1 ? `<form method="post" action="/app/settings/sessions/end-others"><button class="btn quiet sm" type="submit">sign out other sessions</button></form>` : ""
+  const others = opts.sessions.length > 1 ? `<form method="post" action="/app/settings/sessions/end-others"><button class="btn quiet sm" type="submit">Sign out other sessions</button></form>` : ""
   return appShell({
     title: "Settings", active: "settings", user: u, counts: { agents: opts.agentCount, outbox: opts.queuedTotal },
     body: `${pageHead({ title: "Settings", sub: "Your Parley account and where you're signed in.", lead: avatar(u, 40) })}
       ${section("Profile", `<div class="kv">
-          <div class="k">name</div><div>${esc(u.name)}</div>
-          <div class="k">email</div><div class="mono">${esc(u.email)}</div>
-          <div class="k">signed in with</div><div>${esc(METHOD[u.signedInWith ?? ""] ?? "—")}</div>
-          <div class="k">member since</div><div>${day(u.createdAt)}</div>
-        </div>`, "from your sign-in provider")}
+          <div class="k">Name</div><div>${esc(u.name)}</div>
+          <div class="k">Email</div><div class="mono">${esc(u.email)}</div>
+          <div class="k">Signed in with</div><div>${esc(METHOD[u.signedInWith ?? ""] ?? "—")}</div>
+          <div class="k">Member since</div><div>${day(u.createdAt)}</div>
+        </div>`, "From your sign-in provider")}
       ${section("Sessions", rows ? `<table class="tbl"><thead><tr><th>Browser</th><th>Method</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : empty("No active sessions", ""), others)}
       ${section("Security", `<p class="sec-note">Channel credentials and proxy logins are sealed with AES-256-GCM, bound to the record they belong to. Agents only get the access you authorize; disconnect any of them from <a href="/app/agents" style="color:var(--text);text-decoration:underline;text-underline-offset:3px">Agents</a>.</p>`)}`,
   })
@@ -450,15 +474,17 @@ export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[
 // ---- Linking and consent ------------------------------------------------------------------------------------------
 
 const FOCUS_CSS = `
-.focus{min-height:100vh;display:flex;flex-direction:column}
-.focus > header{height:56px;display:flex;align-items:center;padding:0 28px;border-bottom:1px solid var(--line)}
-.focus > main{flex:1;display:grid;place-items:center;padding:40px 20px}
-.fc{width:100%;max-width:420px;border:1px solid var(--line-2);border-radius:14px;background:var(--bg-1);overflow:hidden}
-.fc-h{padding:22px 24px 18px;border-bottom:1px solid var(--line)}
-.fc-h h1{margin:10px 0 0;font-size:24px;line-height:30px;font-weight:400;letter-spacing:-.03em}
-.fc-h p{margin-top:6px;font-size:13.5px;color:var(--muted)}
-.fc-b{padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px}
-.fine{font-size:12px;color:var(--faint);text-align:center;margin-top:18px;max-width:46ch}
+.focus{position:relative;min-height:100vh;display:flex;flex-direction:column}
+.focus > header{height:60px;display:flex;align-items:center;padding:0 28px;border-bottom:1px solid var(--line)}
+.focus > main{flex:1;display:grid;place-items:center;padding:48px 20px}
+.fc{width:100%;max-width:440px;border-radius:20px;background:var(--card);box-shadow:var(--frame),0 40px 100px -40px rgba(0,0,0,.6);overflow:hidden}
+.fc-h{padding:26px 28px 22px;border-bottom:1px solid var(--line)}
+.fc-h .label{display:inline-flex;align-items:center;gap:7px}
+.fc-h h1{margin:14px 0 0;font-size:26px;line-height:32px;font-weight:400;letter-spacing:-.03em}
+.fc-h p{margin-top:8px;font-size:14px;line-height:21px;color:var(--muted)}
+.fc-b{padding:24px 28px 28px;display:flex;flex-direction:column;gap:20px}
+.fine{font-size:12.5px;color:var(--faint);text-align:center;margin:20px auto 0;max-width:46ch}
+.wait{align-self:center;display:flex;flex-direction:column;align-items:center;gap:14px;margin:34px 0;font-size:13px;color:var(--muted)}
 `
 
 /** The link page: shows the channel's QR, live-polls, and flips to a success state once connected. */
@@ -466,8 +492,8 @@ export function linkPage(id: string): string {
   return shell("Link a channel · Parley", `
     <div class="focus"><header><a href="/app">${LOGO}</a></header><main><div>
       <section class="fc">
-        <div class="fc-h"><span class="label" id="step">${channelMark("whatsapp", 13)}&nbsp; whatsapp · link device</span><h1 id="title">Link your account</h1><p id="sub">Preparing a secure link…</p></div>
-        <div class="fc-b" id="card"><div class="spin"></div></div>
+        <div class="fc-h"><span class="label" id="step">${channelMark("whatsapp", 14)}WhatsApp · Link a device</span><h1 id="title">Link your account</h1><p id="sub">Preparing a secure link…</p></div>
+        <div class="fc-b" id="card"><div class="wait">${orb(40)}Preparing a secure link</div></div>
       </section>
       <p class="fine">Parley links as a companion device, like WhatsApp Web. Unlink it any time from your phone.</p>
       <form method="post" action="/app/connections/${esc(id)}/disconnect" id="cancel" style="text-align:center;margin-top:10px"><button class="btn quiet sm" type="submit">Cancel linking</button></form>
@@ -475,71 +501,72 @@ export function linkPage(id: string): string {
     <script>
       const id=${JSON.stringify(id)};const card=document.getElementById('card'),title=document.getElementById('title'),sub=document.getElementById('sub');
       function render(d){
-        if(d.status==='connected'){document.getElementById('cancel')?.remove();title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Your chats sync now; ignore any you want kept from agents.';card.innerHTML='<span class="st ok"><i></i>live</span><a class="btn lg block" href="'+d.chats_url+'">See your chats</a>';return true}
+        if(d.status==='connected'){document.getElementById('cancel')?.remove();title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Your chats sync now; ignore any you want kept from agents.';card.innerHTML='<span class="st ok"><i class="pulse"></i>Live</span><a class="btn lg block" href="'+d.chats_url+'">See your chats</a>';return true}
         if(d.qr_svg){title.textContent='Scan to link';sub.textContent='The code refreshes on its own.';card.innerHTML='<div class="qr">'+d.qr_svg+'</div><ol class="ol"><li>Open WhatsApp on your phone</li><li>Settings → Linked devices</li><li>Link a device, then scan</li></ol>';return false}
-        card.innerHTML='<div class="spin"></div>';return false
+        card.innerHTML=${JSON.stringify(`<div class="wait">${orb(40)}Preparing a secure link</div>`)};return false
       }
       async function tick(){try{const r=await fetch('/link/'+id+'/status');if(r.ok){if(render(await r.json()))return}}catch(e){}setTimeout(tick,2000)}
       tick();
     </script>`, {
     css: FOCUS_CSS + `
-      .qr{align-self:center;width:256px;height:256px;background:#fff;border-radius:10px;display:grid;place-items:center;padding:12px}
+      .qr{align-self:center;width:260px;height:260px;background:#fff;border-radius:16px;display:grid;place-items:center;padding:14px;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 0 0 7px rgba(255,246,232,.04),0 24px 60px -24px rgba(227,185,141,.35)}
       .qr svg{width:100%;height:100%;display:block}
-      .ol{margin:0;padding:0;list-style:none;counter-reset:s;display:grid;gap:9px;font-size:13.5px;color:var(--text-2)}
-      .ol li{counter-increment:s;display:flex;gap:12px}.ol li::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);font-size:11.5px;color:var(--faint);padding-top:1px}
-      .spin{align-self:center;width:22px;height:22px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin:40px 0}@keyframes sp{to{transform:rotate(360deg)}}`,
+      .ol{margin:0;padding:0;list-style:none;counter-reset:s;display:grid;gap:10px;font-size:13.5px;color:var(--text-2)}
+      .ol li{counter-increment:s;display:flex;align-items:center;gap:12px}.ol li::before{content:counter(s);display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line-3);font-size:11.5px;font-weight:500;color:var(--text)}`,
   })
 }
 
 const CHATS_CSS = `
-.prefs{margin:4px 0 22px;padding:16px 18px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-1)}
-.prefs .today{display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--text-2)}
-.prefs .today .bar{display:inline-block;width:120px;vertical-align:middle;margin:0}
-.prefs .today a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px}
-.pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
-.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .lim > span{white-space:nowrap}.pf .cc{flex:0 0 90px;min-width:0}
+.prefs{margin:4px 0 26px;padding:18px 20px;border-radius:16px;background:var(--card);box-shadow:var(--frame)}
+.prefs .today{display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--text-2)}
+.prefs .today .m{font-family:var(--mono);font-size:12.5px}
+.prefs .today .bar{display:inline-block;width:140px;vertical-align:middle;margin:0}
+.prefs .today a{color:var(--sand)}.prefs .today a:hover{text-decoration:underline;text-underline-offset:3px}
+.pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:16px}
+.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 140px;min-width:0}.pf .lim > span{white-space:nowrap}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
-.sws{display:flex;gap:22px;align-items:center;height:34px;margin-left:12px}
-.sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px}
-.sw input{appearance:none;flex:0 0 30px;width:30px;height:18px;margin:0;border-radius:9px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
-.sw input::after{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
-.sw input:checked{background:var(--ok)}.sw input:checked::after{transform:translateX(12px)}
-.sw input:focus-visible{outline:2px solid var(--info);outline-offset:2px}
-.lede{font-size:13px;color:var(--text-2);margin:0}
-.tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 0 4px}
-.search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:11px;top:10px;color:var(--faint)}
-.search .input{padding-left:34px}
+.sws{display:flex;gap:22px;align-items:center;height:36px;margin-left:12px}
+.sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px;color:var(--text-2)}
+.sw input{appearance:none;flex:0 0 32px;width:32px;height:18px;margin:0;border-radius:9px;background:var(--bg-3);box-shadow:inset 0 0 0 1px var(--line-2);position:relative;cursor:pointer;transition:background .2s var(--ease)}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .25s var(--ease)}
+.sw input:checked{background:color-mix(in srgb,#5fd38d 80%,transparent);box-shadow:none}.sw input:checked::after{transform:translateX(14px)}
+.sw input:focus-visible{box-shadow:var(--ring)}
+.lede{font-size:13.5px;line-height:21px;color:var(--muted);margin:0;max-width:80ch}
+.tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:18px 0 4px}
+.search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:12px;top:11px;color:var(--faint)}
+.search .input{padding-left:36px}
 .chats{border-top:1px solid var(--line);margin-top:12px}
-.chat{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
-.chat .grow{flex:1;min-width:0}.chat .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat .s{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
-.chat .when{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
+.chat{display:flex;align-items:center;gap:12px;padding:12px 8px;margin:0 -8px;border-bottom:1px solid var(--line);border-radius:0;transition:background .12s}
+.chat:hover{background:var(--hover)}
+.chat .grow{flex:1;min-width:0}.chat .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.chat .s{font-size:12.5px;color:var(--faint);margin-top:1px}
+.chat .when{font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap}
 .chat.off .t,.chat.off .glyph{opacity:.45}
 .chat .s.miss{color:var(--bad)}
-.ign{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;white-space:nowrap;transition:all .12s var(--ease)}
-.ign:hover{border-color:var(--line-3);color:var(--text)}
-.chat.off .ign{background:var(--text);border-color:var(--text);color:var(--bg)}
+.ign{font:inherit;font-size:12.5px;font-weight:500;height:28px;padding:0 12px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease)}
+.ign:hover{color:var(--text);background:var(--glass-hi)}
+.chat.off .ign{background:color-mix(in srgb,var(--sand) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 35%,transparent);color:var(--sand)}
 .ign:disabled{opacity:.5;cursor:default}
 .none{display:none!important}
 .tags{display:flex;gap:6px;flex-wrap:wrap}
-.tag{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;transition:all .12s var(--ease)}
-.tag:hover{border-color:var(--line-3);color:var(--text)}
-.tag[aria-pressed="true"]{background:var(--text);border-color:var(--text);color:var(--bg)}
-.tag .n{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:5px}
-.older{display:block;width:100%;padding:14px 0;border:0;background:none;color:var(--text-2);font:inherit;font-size:13px;cursor:pointer;text-align:center}
+.tag{font:inherit;font-size:12.5px;height:30px;padding:0 13px;border-radius:999px;border:0;background:none;box-shadow:inset 0 0 0 1px var(--line-2);color:var(--muted);cursor:pointer;transition:background .15s var(--ease),color .15s var(--ease)}
+.tag:hover{color:var(--text)}
+.tag[aria-pressed="true"]{background:var(--glass-hi);box-shadow:var(--glass-ring);color:var(--text)}
+.tag .n{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:6px}
+.older{display:block;width:100%;padding:16px 0;border:0;background:none;color:var(--text-2);font:inherit;font-size:13px;cursor:pointer;text-align:center}
 .older:hover{color:var(--text)}
 .stale{margin:10px 0 0;font-size:12.5px;color:var(--faint)}
 .stale button{font:inherit;color:var(--text-2);background:none;border:0;padding:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .stale button:hover{color:var(--text)}
-.tally{font-family:var(--mono);font-size:12px;color:var(--text-2);margin:14px 0 0}
-.sync{margin:12px 0 0;padding:14px 16px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-1)}
-.sync .row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
-.sync .row b{font-weight:500}.sync .row span{font-family:var(--mono);font-size:12px;color:var(--text-2)}
+.tally{font-size:12.5px;color:var(--muted);margin:16px 0 0}
+.sync{margin:12px 0 0;padding:16px 18px;border-radius:14px;background:var(--card);box-shadow:var(--frame)}
+.sync .row{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.sync .row b{display:inline-flex;align-items:center;gap:10px;font-weight:500}.sync .row span{font-family:var(--mono);font-size:12px;color:var(--text-2)}
 .sync p{margin:8px 0 0;font-size:12.5px;color:var(--faint)}
-.bar{height:4px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:10px}
-.bar i{display:block;height:100%;background:var(--text);border-radius:99px;transition:width .6s var(--ease)}
-.bar.busy i{animation:busy 1.4s var(--ease) infinite alternate}@keyframes busy{from{margin-left:0}to{margin-left:70%}}
-.spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
+.sync .bar{height:4px;border-radius:99px;background:var(--bg-3);overflow:hidden;margin-top:12px;display:block;width:auto}
+.sync .bar i{display:block;height:100%;background:linear-gradient(90deg,#b8794a,#f0cda5);border-radius:99px;transition:width .6s var(--ease)}
+.sync .bar.busy i{animation:busy 1.4s var(--ease) infinite alternate}@keyframes busy{from{margin-left:0}to{margin-left:70%}}
+.empty .orb{margin-bottom:16px}
 `
 
 /** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
@@ -605,7 +632,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       <button type="button" class="ign">${c.synced ? "Ignore" : "Ignored"}</button>
     </div>`
   }).join("")
-  const loading = `<div class="empty"><div class="spin"></div><b>Loading your chats</b>Fetching them from ${esc(name)}… this can take a minute after linking.</div>`
+  const loading = `<div class="empty">${orb(28)}<b>Loading your chats</b>Fetching them from ${esc(name)}… this can take a minute after linking.</div>`
   const number = waNumber(conn.handle)
   const st = connectionState(conn)
   const banner = conn.haltedReason
@@ -617,7 +644,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
     body: `${pageHead({
       title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
-      sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="mono faint">${name.toLowerCase()}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
+      sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
       actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
         <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
     })}
@@ -633,7 +660,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
           </div>
         </div>
         <div id="status">${syncing ? `<div class="sync">
-            <div class="row"><b>Syncing your chats from ${esc(name)}${pct !== null ? ` · ${pct}%` : "…"}</b><span>${counts.direct} people · ${counts.group} groups so far</span></div>
+            <div class="row"><b>${orb(16)}Syncing your chats from ${esc(name)}${pct !== null ? ` · ${pct}%` : "…"}</b><span>${counts.direct} people · ${counts.group} groups so far</span></div>
             <div class="bar${pct === null ? " busy" : ""}"><i style="width:${pct ?? 30}%"></i></div>
             <p>Just linked: recent chats, names and calls are still arriving. The list fills in on its own.</p>
           </div>` : counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}</div>
@@ -705,13 +732,13 @@ export function consentPage(opts: { clientName: string | null; redirectUri: stri
   return shell("Allow access · Parley", `
     <div class="focus"><header>${LOGO}</header><main><div>
       <form class="fc" method="post" action="/oauth/authorize">${hidden}
-        <div class="fc-h"><div class="pair">${agentMark(opts.clientName, 34)}<span class="dots"></span><span class="pm">${mark(18)}</span></div>
+        <div class="fc-h"><div class="pair">${agentMark(opts.clientName, 40)}<span class="dots"></span>${pmark(40)}</div>
           <h1>Allow ${esc(name)} to use Parley?</h1><p>Signed in as <span class="mono" style="color:var(--text)">${esc(opts.email)}</span></p></div>
         <div class="fc-b">
           <ul class="can">
-            ${can("read", "Messages in your chats, except ones you ignore")}
-            ${can("send", "Queue messages from your connected accounts, at a human pace")}
-            ${can("link", "Start linking a new account (you still scan the QR)")}
+            ${can("Read", "Messages in your chats, except ones you ignore")}
+            ${can("Send", "Queue messages from your connected accounts, at a human pace")}
+            ${can("Link", "Start linking a new account (you still scan the QR)")}
           </ul>
           <div class="acts"><button class="btn line lg" type="submit" name="decision" value="deny">Cancel</button><button class="btn lg" type="submit" name="decision" value="allow">Allow</button></div>
         </div>
@@ -719,10 +746,10 @@ export function consentPage(opts: { clientName: string | null; redirectUri: stri
       <p class="fine">${host ? `Returns to <code>${esc(host)}</code>. ` : ""}Disconnect it any time from Agents in your dashboard.</p>
     </div></main></div>`, {
     css: FOCUS_CSS + `
-      .pair{display:flex;align-items:center;gap:10px}.dots{width:36px;height:1px;background:repeating-linear-gradient(90deg,var(--line-3) 0 3px,transparent 3px 6px)}
-      .pm{display:grid;place-items:center;width:34px;height:34px;border-radius:5px;border:1px solid var(--line-2);background:var(--bg-2)}
-      .can{list-style:none;margin:0;padding:0;display:grid}.can li{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--text-2)}
-      .can li:first-child{border-top:1px solid var(--line)}.can .label{padding-top:2px}
+      .pair{display:flex;align-items:center;gap:12px}.pair .glyph{border-radius:12px}
+      .dots{position:relative;width:44px;height:2px;border-radius:2px;background:repeating-linear-gradient(90deg,rgba(227,185,141,.5) 0 4px,transparent 4px 8px);background-size:16px 2px;animation:flow 1.2s linear infinite}@keyframes flow{to{background-position:16px 0}}
+      .can{list-style:none;margin:0;padding:0;display:grid}.can li{display:grid;grid-template-columns:60px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--text-2)}
+      .can li:first-child{border-top:1px solid var(--line)}.can .label{color:var(--sand);font-weight:500}
       .acts{display:grid;grid-template-columns:1fr 1fr;gap:10px}`,
   })
 }
