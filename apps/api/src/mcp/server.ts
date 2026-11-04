@@ -3,7 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
-import type { StoredMessage } from "../sessions/chats.ts"
+import { markRead, newReactions, type InboxFilter, type StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -63,10 +63,15 @@ const safeName = (name: string) => name.replace(/[^\w.\-]+/g, "_").replace(/^\.+
 function messageOut(m: StoredMessage) {
   return {
     id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
+    ...(m.isNew ? { new: true } : {}),
     ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null, size: m.media.size ?? null, width: m.media.width ?? null, height: m.media.height ?? null, seconds: m.media.seconds ?? null } } : {}),
-    ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at })) } : {}),
+    ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at, ...(r.isNew ? { new: true } : {}) })) } : {}),
   }
 }
+
+/** At most this many new reactions are listed in one answer; the rest stay new for the next read. */
+const NEW_REACTIONS_LISTED = 100
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
 
 /** What send_message, react_to_message and delete_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
@@ -196,30 +201,92 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   const labels = async (userId: string) => new Map((await ctx.sessions.list(userId)).map((c) => [c.id, accountLabel(c)]))
   const ACCOUNT_REF = "Which of your accounts: a connection id from list_connections, or the account's number. Optional when only one account fits."
   const pickUrl = `${base}/app`
+  const MARK_READ = z.boolean().optional().describe("Mark what this returns as read (default true). Pass false to look without changing what counts as new.")
+
+  /**
+   * What came in since the chats in scope were last read: totals, per-chat counts, and the new reactions themselves
+   * (a reaction to an old message wouldn't show up otherwise). Call before marking anything read.
+   */
+  const newSince = async (userId: string, where: InboxFilter, account: Map<string, string | null>) => {
+    const [chats, reactions] = await Promise.all([
+      ctx.sessions.inboxChats(userId, { ...where, onlyNew: true }),
+      newReactions(ctx.sql, userId, { ...where, limit: NEW_REACTIONS_LISTED }),
+    ])
+    const messages = chats.reduce((n, c) => n + c.newMessages, 0)
+    const reactionCount = chats.reduce((n, c) => n + c.newReactions, 0)
+    const total = messages + reactionCount
+    return {
+      reactions,
+      summary: {
+        events: total, messages, reactions: reactionCount,
+        text: total
+          ? `${total} new since last read: ${plural(messages, "message")}, ${plural(reactionCount, "reaction")}${chats.length > 1 ? ` across ${chats.length} chats` : ""}.`
+          : "Nothing new since last read.",
+        chats: chats.map((c) => ({ connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, messages: c.newMessages, reactions: c.newReactions })),
+      },
+      newReactionsOut: reactions.map((r) => ({
+        connection_id: r.connectionId, account: account.get(r.connectionId) ?? null, chat_id: r.chatId, chat_name: r.chatName,
+        message_id: r.messageId, message_text: r.messageText, on_my_message: r.onMyMessage, from: r.from, emoji: r.emoji, at: r.at,
+      })),
+    }
+  }
+
+  /** Mark read what an answer showed: per chat, its newest shown message, and the new reactions listed. */
+  const markShown = async (userId: string, messages: Array<StoredMessage & { connectionId: string }>, reactions: Array<{ connectionId: string; chatId: string; seq: number }>) => {
+    const marks = new Map<string, { connectionId: string; chatId: string; messageSeq?: number; seenUntil?: string; reactionSeq?: number }>()
+    const mark = (connectionId: string, chatId: string) => {
+      const key = `${connectionId} ${chatId}`
+      if (!marks.has(key)) marks.set(key, { connectionId, chatId })
+      return marks.get(key)!
+    }
+    for (const m of messages) {
+      const x = mark(m.connectionId, m.chatId)
+      x.messageSeq = Math.max(x.messageSeq ?? 0, m.seq)
+      if (!x.seenUntil || m.at > x.seenUntil) x.seenUntil = m.at
+    }
+    for (const r of reactions) {
+      const x = mark(r.connectionId, r.chatId)
+      x.reactionSeq = Math.max(x.reactionSeq ?? 0, r.seq)
+    }
+    await markRead(ctx.sql, userId, [...marks.values()])
+  }
 
   server.registerTool(
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what.",
+      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what. `new_since_last_read` says how much came in from the other side since these chats were last read (messages and reactions, per chat); new messages and reactions carry `new: true`, and `new_reactions` lists every new reaction with the message it's on (even one on an old message not shown). Reading marks what it shows as read, for every agent on the account; pass mark_read: false to just look. Paging back with `before` never marks anything.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
         limit: z.number().int().min(1).max(200).optional().describe("How many messages (default 50)."),
         before: z.string().datetime().optional().describe("Only messages sent before this ISO time — pass the `at` of the oldest message you have to page back."),
+        mark_read: MARK_READ,
       },
     },
-    async ({ channel, connection_id, chat_id, limit, before }, extra) => {
+    async ({ channel, connection_id, chat_id, limit, before, mark_read }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const where = await scope(userId, { channel, connection_id })
-        const [messages, account] = await Promise.all([ctx.sessions.inbox(userId, { ...where, chatId: chat_id, limit: limit ?? 50, before }), labels(userId)])
+        const where = { ...(await scope(userId, { channel, connection_id })), chatId: chat_id }
+        const account = await labels(userId)
+        const [messages, fresh] = await Promise.all([ctx.sessions.inbox(userId, { ...where, limit: limit ?? 50, before }), newSince(userId, where, account)])
+        const shownNew = messages.filter((m) => m.isNew).length
         const out: Record<string, unknown> = {
+          new_since_last_read: fresh.summary,
           messages: messages.map((m) => ({
             channel: m.channel, connection_id: m.connectionId, account: account.get(m.connectionId) ?? null, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
             ...messageOut(m),
           })),
+          ...(fresh.newReactionsOut.length ? { new_reactions: fresh.newReactionsOut } : {}),
         }
+        const marking = mark_read !== false && !before
+        if (fresh.summary.messages > shownNew) {
+          const unshown = fresh.summary.messages - shownNew
+          out.more_new = before
+            ? `${plural(unshown, "new message")} ${unshown === 1 ? "is" : "are"} outside this page.`
+            : `${plural(unshown, "new message")} didn't fit in this answer${marking ? " (chats shown here still count as read up to their newest message)" : ""}: page back with \`before\`, raise \`limit\`, or read one chat with chat_id.`
+        }
+        if (marking) await markShown(userId, messages, fresh.reactions)
         if (!messages.length) {
           const chats = await ctx.sessions.inboxChats(userId, where)
           out.note = chats.length
@@ -237,16 +304,29 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_chats",
     {
       title: "List chats",
-      description: "List the chats (people and groups) agents can see (everything except what the account holder ignored), across all connected accounts, most recent first (the same person can appear once per account). `awaiting` says who owes the next message: \"you\" when the last word was theirs. Set awaiting_reply to get just the conversations waiting on you.",
-      inputSchema: { ...filters, awaiting_reply: z.boolean().optional().describe("Only chats whose last message came from the other side.") },
+      description: "List the chats (people and groups) agents can see (everything except what the account holder ignored), across all connected accounts, most recent first (the same person can appear once per account). `awaiting` says who owes the next message: \"you\" when the last word was theirs. `new` counts the messages and reactions from the other side since the chat was last read (read_inbox or load_history mark it read; listing doesn't). Set awaiting_reply to get just the conversations waiting on you, only_new for just the ones with something new.",
+      inputSchema: {
+        ...filters,
+        awaiting_reply: z.boolean().optional().describe("Only chats whose last message came from the other side."),
+        only_new: z.boolean().optional().describe("Only chats with new messages or reactions since they were last read."),
+      },
     },
-    async ({ channel, connection_id, awaiting_reply }, extra) => {
+    async ({ channel, connection_id, awaiting_reply, only_new }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const [chats, account] = await Promise.all([ctx.sessions.inboxChats(userId, { ...(await scope(userId, { channel, connection_id })), awaitingReply: awaiting_reply }), labels(userId)])
+        const [chats, account] = await Promise.all([ctx.sessions.inboxChats(userId, { ...(await scope(userId, { channel, connection_id })), awaitingReply: awaiting_reply, onlyNew: only_new }), labels(userId)])
+        const messages = chats.reduce((n, c) => n + c.newMessages, 0)
+        const reactions = chats.reduce((n, c) => n + c.newReactions, 0)
+        const withNew = chats.filter((c) => c.newMessages + c.newReactions > 0).length
         return json({
-          chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt, awaiting: c.awaiting })),
-          ...(chats.length ? {} : { note: awaiting_reply ? "Nothing is waiting on you." : `No chats are visible. The account holder may have ignored them all; their chats are at ${pickUrl}` }),
+          new_since_last_read: messages + reactions
+            ? `${messages + reactions} new in ${plural(withNew, "chat")}: ${plural(messages, "message")}, ${plural(reactions, "reaction")}. read_inbox with a chat_id to read them.`
+            : "Nothing new since last read.",
+          chats: chats.map((c) => ({
+            channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt, awaiting: c.awaiting,
+            new: { messages: c.newMessages, reactions: c.newReactions },
+          })),
+          ...(chats.length ? {} : { note: only_new ? "Nothing new since last read." : awaiting_reply ? "Nothing is waiting on you." : `No chats are visible. The account holder may have ignored them all; their chats are at ${pickUrl}` }),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list chats")
@@ -296,20 +376,27 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "load_history",
     {
       title: "Load a chat's history",
-      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too.",
+      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false.",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the chat.`),
         chat_id: z.string().describe("The chat (chat_id from list_chats or read_inbox)."),
         count: z.number().int().min(1).max(50).optional().describe("How many of the latest messages (default 20, at most 50)."),
+        mark_read: MARK_READ,
       },
     },
-    async ({ connection_id, chat_id, count }, extra) => {
+    async ({ connection_id, chat_id, count, mark_read }, extra) => {
       const { userId } = principalOf(extra)
       try {
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id })
         const { answered, messages } = await ctx.sessions.loadHistory(userId, conn.id, chat_id, count ?? 20)
+        const account = new Map([[conn.id, accountLabel(conn)]])
+        const fresh = await newSince(userId, { connectionId: conn.id, chatId: chat_id }, account)
+        const shownNew = messages.filter((m) => m.isNew).length
+        if (mark_read !== false) await markShown(userId, messages.map((m) => ({ ...m, connectionId: conn.id })), fresh.reactions)
         return json({
-          account: accountLabel(conn), chat_id, answered, messages: messages.map(messageOut),
+          account: accountLabel(conn), chat_id, answered, new_since_last_read: fresh.summary, messages: messages.map(messageOut),
+          ...(fresh.newReactionsOut.length ? { new_reactions: fresh.newReactionsOut } : {}),
+          ...(fresh.summary.messages > shownNew ? { more_new: `${plural(fresh.summary.messages - shownNew, "new message")} didn't fit in \`count\`: read_inbox with this chat_id and a bigger limit shows them.` } : {}),
           ...(answered ? {} : { note: "The phone didn't answer in time (it may be offline or asleep). These are the messages Parley already has; try again later." }),
         })
       } catch (e) {
