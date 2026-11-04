@@ -275,14 +275,16 @@ export function dashboardPage(opts: {
     const st = connectionState(c)
     const s = opts.summaries?.get(c.id)
     const number = waNumber(c.handle)
-    return `<tr class="link" data-href="/app/connections/${esc(c.id)}">
+    // Until it's linked, the row opens the QR page; the detail page (pacing, disconnect) is still one click on the arrow.
+    const detail = `/app/connections/${esc(c.id)}`
+    return `<tr class="link" data-href="${c.status === "connected" ? detail : `/link/${esc(c.id)}`}">
       <td><div class="who">${channelMark(c.channel, 18)}<div><b>${esc(number || channelName(c.channel))}</b><small>${channelName(c.channel).toLowerCase()}${c.displayName ? ` · ${esc(c.displayName)}` : ""}</small></div></div></td>
       <td>${status(st.tone, st.text, st.live)}</td>
       <td class="m">${s ? `${bar(s.sentToday, s.allowanceToday)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.allowanceToday}</span>` : `<span class="faint">—</span>`}</td>
       <td class="m">${s ? s.queued : "—"}</td>
       <td class="m">${s?.nextAt ? esc(until(s.nextAt, c.timezone)) : `<span class="faint">—</span>`}</td>
       <td class="m">${c.status === "connected" ? `<a href="/app/connections/${esc(c.id)}/chats">${c.chatsChosen ? `${opts.syncedCounts?.get(c.id) ?? 0} chats` : "choose chats"}</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
-      <td class="r">${icon("arrow", 14)}</td>
+      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<a href="${detail}" title="Connection settings">${icon("arrow", 14)}</a>`}</td>
     </tr>`
   }).join("")
 
@@ -298,7 +300,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your AI." })}
     ${alerts}
-    ${section("Link a channel", hasChannel ? table : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Nothing syncs until you choose chats.", stepNo(1, hasChannel))}
+    ${section("Link a channel", hasChannel ? `${table}${connectorCards(linked, true)}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Nothing syncs until you choose chats.", stepNo(1, hasChannel))}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
   }
 
