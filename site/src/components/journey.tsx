@@ -55,8 +55,6 @@ function Avatar({ initials, tone, size = 26 }: { initials: string; tone: string;
 
 /* ---------- the panels ---------- */
 
-const PANEL = "rounded-[18px] bg-[#161513] shadow-[inset_0_1px_0_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.075),0_40px_80px_-32px_rgb(0_0_0/0.95)]"
-
 const PMark = ({ size = 22 }: { size?: number }) => (
   <span className="grid place-items-center rounded-[7px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9)]" style={{ width: size, height: size }}>
     <ParleyMark size={Math.round(size * 0.6)} />
@@ -81,39 +79,89 @@ function Wires({ stage, paths }: { stage: Stage; paths: Array<{ d: string; on: S
 
 /* ---------- the agent ---------- */
 
-function AgentCard({ stage }: { stage: Stage }) {
+/** Claude's own desktop app, dark theme: the ask, the Parley tool call it makes, and what it tells you afterwards. */
+function ClaudeWindow({ stage }: { stage: Stage }) {
+  const ran = stage >= 1
   return (
-    <div className={`w-[300px] overflow-hidden ${PANEL}`}>
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
-        <Claude size={14} />
-        <span className="text-[12.5px] font-medium">Claude</span>
-        <span className="ml-auto flex items-center gap-1.5 text-[10.5px] text-faint"><span className="size-1.5 rounded-full bg-[#5fd38d]" />Parley connected</span>
+    <div className="flex h-[470px] w-[460px] flex-col overflow-hidden rounded-[14px] bg-[#262624] font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',sans-serif] text-[#c2c0b6] shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(0_0_0/0.5),0_0_0_1.5px_rgb(255_255_255/0.06),0_50px_100px_-40px_rgb(0_0_0/0.95)]">
+      <div className="relative flex h-9 shrink-0 items-center gap-1.5 bg-[#1f1e1d] px-3.5">
+        {["#ff5f57", "#febc2e", "#28c840"].map((c) => <i key={c} className="size-[11px] rounded-full opacity-80" style={{ background: c }} />)}
+        <p className="absolute left-1/2 -translate-x-1/2 text-[11.5px] text-[#8d8b83]">Send the Q4 deck to Maya</p>
       </div>
-      <div className="space-y-3 p-4">
-        <p className="ml-auto w-fit max-w-[92%] rounded-[14px] rounded-br-[4px] bg-white/[0.08] px-3 py-2 text-[12.5px] leading-snug">
+      <div className="flex flex-1 flex-col gap-4 overflow-hidden px-6 pt-6">
+        <p className="ml-auto max-w-[84%] rounded-[14px] bg-[#141413] px-3.5 py-2.5 text-[13.5px] leading-snug text-[#f5f4ee]">
           Send Maya the Q4 deck and ask if Thursday at 3 still works
         </p>
-        <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.035] px-2.5 py-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
-          <span className={`grid size-4 place-items-center rounded-full transition-colors duration-300 ${stage >= 1 ? "bg-[#5fd38d] text-[#0d1a12]" : "bg-white/10"}`}>
-            {stage >= 1 ? <Check size={9} /> : <motion.span className="size-2 rounded-full border border-ink-2 border-t-transparent" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }} />}
-          </span>
-          <code className="font-mono text-[11px] text-ink-2">send_message</code>
-          <span className="ml-auto truncate text-[10.5px] text-faint">Maya Okafor · 1 file</span>
-        </div>
-        <div className="h-[40px]">
-        <AnimatePresence mode="wait" initial={false}>
-          {stage === 0 ? (
-            <motion.div key="typing" exit={{ opacity: 0 }} className="flex gap-1 px-1 py-1.5">
-              {[0, 1, 2].map((i) => <motion.i key={i} className="size-1.5 rounded-full bg-muted" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: i * 0.15 }} />)}
-            </motion.div>
-          ) : (
-            <motion.p key={stage >= 4 ? "reply" : "done"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="text-[12.5px] leading-relaxed text-ink-2">
-              {stage >= 4 ? <>Maya replied: <span className="text-ink">&ldquo;Perfect, see you then&rdquo;</span></> : "Queued. It goes out from your account in about two minutes."}
-            </motion.p>
-          )}
-        </AnimatePresence>
+        <div className="flex gap-3">
+          <Claude size={18} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1 space-y-3 text-[13.5px] leading-[1.55]">
+            <p>I&apos;ll send it from your account through Parley.</p>
+            <div className="overflow-hidden rounded-[10px] bg-[#1f1e1d] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+              <div className="flex items-center gap-2 px-3 py-2 text-[12.5px]">
+                <PMark size={16} />
+                <span className="text-[#f5f4ee]">send_message</span>
+                <span className="text-[#8d8b83]">· Parley</span>
+                <span className="ml-auto">
+                  {ran ? <span className="text-[#79d79f]"><Check size={11} /></span> : <motion.span className="block size-3 rounded-full border-[1.5px] border-[#8d8b83] border-t-transparent" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }} />}
+                </span>
+              </div>
+              <pre className="border-t border-white/[0.06] px-3 py-2.5 font-mono text-[11px] leading-[1.7] text-[#a3a199]">
+                <span className="text-[#8d8b83]">to</span>{"     "}<span className="text-[#e6c7a1]">&quot;Maya Okafor&quot;</span>{"\n"}
+                <span className="text-[#8d8b83]">text</span>{"   "}<span className="text-[#e6c7a1]">&quot;Here&apos;s the deck. Does *Thursday at 3*…&quot;</span>{"\n"}
+                <span className="text-[#8d8b83]">media</span>{"  "}<span className="text-[#e6c7a1]">&quot;Q4 review.pdf&quot;</span>
+              </pre>
+              <AnimatePresence initial={false}>
+                {ran && (
+                  <motion.p key="res" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} transition={{ duration: 0.35, ease }} className="overflow-hidden border-t border-white/[0.06] px-3 font-mono text-[11px] text-[#8d8b83]">
+                    <span className="block py-2">queued · goes out 08:12, inside your hours</span>
+                  </motion.p>
+                )}
+              </AnimatePresence>
+            </div>
+            <AnimatePresence mode="wait" initial={false}>
+              {stage >= 1 && (
+                <motion.p key={stage >= 4 ? "reply" : "done"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+                  {stage >= 4 ? <>Maya replied: <span className="text-[#f5f4ee]">&ldquo;Perfect, see you then 👍&rdquo;</span></> : "Done. It goes out in about two minutes, spaced like you'd send it yourself."}
+                </motion.p>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
+      <div className="m-3 mt-0 flex items-center gap-2 rounded-[14px] bg-[#30302e] px-3 py-2.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+        <span className="text-[13px] text-[#8d8b83]">Reply to Claude…</span>
+        <span className="ml-auto grid size-7 place-items-center rounded-[8px] bg-[#d97757] text-white"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" /></svg></span>
+      </div>
+    </div>
+  )
+}
+
+/** Parley between the two: its mark, ringed by the countdown to a natural moment to send. */
+function ParleyNode({ stage }: { stage: Stage }) {
+  const { left, label } = useCountdown(stage === 1)
+  const done = stage >= 2
+  const f = done ? 1 : stage === 1 ? 1 - left / HOLD : 0
+  return (
+    <div className="flex flex-col items-center">
+      <div className="relative grid size-[120px] place-items-center">
+        <motion.div aria-hidden className="absolute inset-[-30px] rounded-full bg-[radial-gradient(closest-side,rgb(227_185_141/0.28),transparent)]" animate={{ opacity: stage === 1 ? 1 : 0.45, scale: stage === 1 ? 1.06 : 1 }} transition={{ duration: 0.6 }} />
+        <svg viewBox="0 0 120 120" className="absolute inset-0 -rotate-90" aria-hidden>
+          <circle cx="60" cy="60" r="54" fill="none" stroke="rgb(255 246 232 / .08)" strokeWidth="2" />
+          <circle cx="60" cy="60" r="54" fill="none" stroke={done ? "#5fd38d" : "rgb(240 205 165)"} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={339.3} strokeDashoffset={339.3 * (1 - f)} style={{ transition: "stroke .4s" }} />
+        </svg>
+        <span className="relative grid size-[68px] place-items-center rounded-[20px] bg-[linear-gradient(180deg,#fffaf3,#e3c9a6)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.95),inset_0_-2px_0_rgb(140_95_50/0.2),0_0_0_1px_rgb(227_185_141/0.6),0_18px_40px_-12px_rgb(227_185_141/0.55)]">
+          <ParleyMark size={34} />
+        </span>
+      </div>
+      <div className="mt-5 flex h-8 items-center gap-2 rounded-full bg-[#1d1b18] px-3.5 text-[12.5px] shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.08)]">
+        <span className={`size-1.5 rounded-full ${done ? "bg-[#5fd38d]" : stage === 1 ? "bg-sand" : "bg-faint"}`} />
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span key={done ? "s" : stage === 1 ? "h" : "w"} initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={{ duration: 0.2 }} className="text-ink-2">
+            {done ? "Sent 08:12" : stage === 1 ? <>Holding <span className="font-mono tabular-nums text-ink">{label}</span></> : "Waiting for your agent"}
+          </motion.span>
+        </AnimatePresence>
+      </div>
+      <p className="mt-2 text-[11.5px] text-faint">as Alex Rivera · inside your hours</p>
     </div>
   )
 }
@@ -257,13 +305,13 @@ export function Journey() {
         <Wires
           stage={stage}
           paths={[
-            { d: "M380 290 C 420 290, 420 290, 462 290", on: [0] },
-            { d: "M722 290 C 770 290, 770 300, 818 300", on: [2] },
+            { d: "M500 276 C 540 276, 540 250, 596 250", on: [1] },
+            { d: "M716 250 C 770 250, 770 290, 826 290", on: [2] },
           ]}
         />
-        <div className="absolute left-[80px] top-[176px]"><AgentCard stage={stage} /></div>
-        <div className="absolute left-[462px] top-[256px] w-[260px]"><ParleyPill stage={stage} /></div>
-        <div className="absolute left-[818px] top-[6px]"><Phone stage={stage} /></div>
+        <div className="absolute left-[40px] top-[44px]"><ClaudeWindow stage={stage} /></div>
+        <div className="absolute left-[556px] top-[190px] w-[200px]"><ParleyNode stage={stage} /></div>
+        <div className="absolute left-[826px] top-[6px]"><Phone stage={stage} /></div>
       </Fitted>
       <Fitted w={350} h={576} className="md:hidden">
         <MobileScene stage={stage} />
