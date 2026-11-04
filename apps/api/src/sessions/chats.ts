@@ -5,7 +5,7 @@ import type { CallKind, Chat, InboundMessage, MediaInfo, Reaction } from "@parle
 
 export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null }
 /** A message's attachment as readers see it: what it is, without the channel's fetch handle. */
-export type MediaView = Omit<MediaInfo, "ref">
+export type MediaView = Omit<MediaInfo, "ref" | "thumbnail">
 export type ReactionView = { from: string; fromMe: boolean; emoji: string; at: string }
 export type StoredMessage = {
   id: string; chatId: string; sender: string; fromMe: boolean; text: string; at: string
@@ -17,7 +17,8 @@ const MESSAGE_COLS = `m.id, m.chat_id, m.sender, m.from_me, m.body, m.sent_at, m
   (select jsonb_agg(jsonb_build_object('from', r.reactor, 'from_me', r.reactor = 'me', 'emoji', r.emoji, 'at', r.reacted_at) order by r.reacted_at)
      from parley.reaction r where r.connection_id = m.connection_id and r.chat_id = m.chat_id and r.message_id = m.id and r.emoji <> '') as reactions`
 const messageView = (r: RawMessage): StoredMessage => {
-  const { ref: _ref, ...media } = r.media ?? ({} as MediaInfo)
+  // Neither the fetch handle nor the preview goes out with every message: get_media has those.
+  const { ref: _ref, thumbnail: _thumb, ...media } = r.media ?? ({} as MediaInfo)
   return {
     id: r.id, chatId: r.chat_id, sender: r.sender, fromMe: r.from_me, text: r.body, at: r.sent_at.toISOString(),
     media: r.media ? media : null,

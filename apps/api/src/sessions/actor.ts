@@ -5,7 +5,9 @@ import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { Transactor } from "../db/transactor.ts"
 import { Exits, ExitError } from "./exits.ts"
 import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
-import type { InboundMessage } from "@parley/channels"
+import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
+import type { MediaFetcher } from "./fetch-media.ts"
+import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, setHistorySync, type Connection, type Locale } from "./store.ts"
 import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
@@ -35,9 +37,28 @@ export type StatusView = { status: string; channel: string; handle: string | nul
 export type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
 /** A message's attachment, fetched from the channel. `data` is base64 (it crosses the RPC wire as JSON). */
 export type MediaFile = { data: string; mimetype: string; kind: string; fileName: string | null; size: number }
+/** What a message's attachment is, without fetching it: kind, type, size, and its preview when there is one. */
+export type MediaDetails = Omit<MediaInfo, "ref">
+/** An attachment as a stream, for download links: any size, never held in memory whole. */
+export type MediaStream = { body: ReadableStream<Uint8Array>; mimetype: string; kind: string; fileName: string | null }
 
-/** The largest attachment Parley fetches for an agent, or takes from one to send. */
+/** The largest attachment fetched whole (to hand an agent inline). Bigger ones go through a download link. */
 export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
+
+/** Read a stream whole, refusing past `max` bytes. */
+export async function readAll(body: ReadableStream<Uint8Array>, max: number): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    size += chunk.byteLength
+    if (size > max) { await body.cancel().catch(() => {}); throw new ConnectError("not_found", `the attachment is over ${max / 1024 / 1024} MB; use its download link`) }
+    chunks.push(chunk)
+  }
+  const out = new Uint8Array(size)
+  let at = 0
+  for (const c of chunks) { out.set(c, at); at += c.byteLength }
+  return out
+}
 
 /**
  * What the HTTP app needs from the session pool. Two implementations: `Sessions` (the pool itself — runs where the
@@ -46,7 +67,8 @@ export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
  */
 export type SessionsApi = Pick<
   Sessions,
-  | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats" | "media"
+  | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
+  | "media" | "mediaInfo" | "mediaStream"
   | "enqueue" | "setLocale"
 >
 
@@ -91,7 +113,11 @@ export class ConnectError extends Error {
 /** How often a worker looks for due messages on the connections it holds. */
 export const DISPATCH_INTERVAL_MS = 3_000
 
-type SessionsContext = { sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator; tx?: Transactor; exits?: Exits }
+type SessionsContext = {
+  sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator; tx?: Transactor; exits?: Exits
+  /** Downloads a URL an agent asked to send (see `fetch-media.ts`). Without one, files must come as bytes. */
+  fetchMedia?: MediaFetcher
+}
 
 export class Sessions {
   readonly #live = new Map<string, Entry>()
@@ -138,16 +164,17 @@ export class Sessions {
    */
   async enqueue(
     accountId: string, connectionId: string,
-    req: Omit<EnqueueRequest, "accountId" | "connectionId">,
+    request: Omit<EnqueueRequest, "accountId" | "connectionId" | "media"> & { media?: MediaSend | undefined },
     now?: Date
   ): Promise<{ message: Queued; replayed: boolean }> {
     const at = now ?? new Date()
-    if (req.media) {
+    let req: Omit<EnqueueRequest, "accountId" | "connectionId"> = { ...request, media: undefined }
+    if (request.media) {
       const conn = await getConnection(this.ctx.sql, connectionId)
-      const channel = conn && channelById(this.ctx.channels, conn.channel)
+      if (!conn || conn.accountId !== accountId) throw new OutboxError(conn ? "forbidden" : "not_found", conn ? "not your connection" : "no such connection")
+      const channel = channelById(this.ctx.channels, conn.channel)
       if (channel && !channel.capabilities.media) throw new OutboxError("action_unsupported", `${channel.id} can't send files`)
-      if (req.media.data.byteLength > MAX_MEDIA_BYTES) throw new OutboxError("action_unsupported", `files can be at most ${MAX_MEDIA_BYTES / 1024 / 1024} MB`)
-      if (!req.media.data.byteLength) throw new OutboxError("action_unsupported", "the file is empty")
+      req = { ...req, media: await this.#fileToSend(request.media) }
     }
     if (req.reactTo) {
       const [found] = await this.ctx.sql<{ yes: boolean }>(
@@ -218,6 +245,20 @@ export class Sessions {
     }
   }
 
+  /** The bytes to queue: as given, or downloaded now from the agent's URL (so a bad link fails the call, not the send). */
+  async #fileToSend(media: MediaSend): Promise<NonNullable<EnqueueRequest["media"]>> {
+    try {
+      if (!("url" in media)) return describeMedia(media)
+      if (!this.ctx.fetchMedia) throw new MediaInputError("this server can't download files; send the file as `data`")
+      const got = await this.ctx.fetchMedia(media.url, maxBytesFor(media.kind))
+      return describeMedia({ data: got.data, kind: media.kind, mimetype: media.mimetype, served: got.contentType, fileName: media.fileName ?? got.fileName })
+    } catch (e) {
+      // Over the wire as an outbox refusal, so the agent sees why.
+      if (e instanceof MediaInputError) throw new OutboxError("action_unsupported", e.message)
+      throw e
+    }
+  }
+
   /** Who sent the message a reaction is for: the channel needs it to address the reaction. */
   async #reactTarget(connectionId: string, chatId: string, messageId: string): Promise<{ messageId: string; fromMe: boolean; sender?: string }> {
     const [m] = await this.ctx.sql<{ from_me: boolean; sender: string }>(`select from_me, sender from parley.message where connection_id = $1 and chat_id = $2 and id = $3`, [connectionId, chatId, messageId])
@@ -229,24 +270,53 @@ export class Sessions {
    * it needs the connection live, since the file comes down through the account's own session.
    */
   async media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
-    await this.#owned(accountId, connectionId)
-    const chat = await getChat(this.ctx.sql, connectionId, chatId)
-    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
-    const info = await messageMedia(this.ctx.sql, connectionId, chatId, messageId)
-    if (!info) throw new ConnectError("not_found", "that message has no attachment Parley can fetch")
-    if ((info.size ?? 0) > MAX_MEDIA_BYTES) throw new ConnectError("not_found", `the attachment is ${Math.round(info.size! / 1024 / 1024)} MB; Parley fetches at most ${MAX_MEDIA_BYTES / 1024 / 1024} MB`)
+    const info = await this.#attachment(accountId, connectionId, chatId, messageId)
+    if ((info.size ?? 0) > MAX_MEDIA_BYTES) throw new ConnectError("not_found", `the attachment is ${Math.round(info.size! / 1024 / 1024)} MB; use its download link`)
     const routed = await this.#route(connectionId, { op: "media", args: { ref: info.ref } })
     const file = routed.ok ? (routed.result as { data: string; mimetype: string }) : await this.#localMedia(connectionId, info.ref)
     return { ...file, kind: info.kind, fileName: info.fileName ?? null, size: Buffer.from(file.data, "base64").byteLength }
   }
 
-  async #localMedia(connectionId: string, ref: string): Promise<{ data: string; mimetype: string }> {
+  /** What a message's attachment is, from the database alone (no download). */
+  async mediaInfo(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaDetails> {
+    const { ref: _ref, ...details } = await this.#attachment(accountId, connectionId, chatId, messageId)
+    return details
+  }
+
+  /** The attachment as a stream, for a download link. Same checks as `media`, no size cap. */
+  async mediaStream(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaStream> {
+    const info = await this.#attachment(accountId, connectionId, chatId, messageId)
+    const about = { kind: info.kind, fileName: info.fileName ?? null }
+    // Held by another worker: it hands the file over whole (the RPC is JSON), then it's streamed from here.
+    const routed = await this.#route(connectionId, { op: "media", args: { ref: info.ref } })
+    if (routed.ok) {
+      const file = routed.result as { data: string; mimetype: string }
+      return { ...about, mimetype: file.mimetype, body: new Blob([Buffer.from(file.data, "base64")]).stream() }
+    }
+    const file = await this.#liveMedia(connectionId, info.ref)
+    return { ...about, mimetype: info.mimetype ?? file.mimetype, body: file.body }
+  }
+
+  async #attachment(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaInfo> {
+    await this.#owned(accountId, connectionId)
+    const chat = await getChat(this.ctx.sql, connectionId, chatId)
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
+    const info = await messageMedia(this.ctx.sql, connectionId, chatId, messageId)
+    if (!info) throw new ConnectError("not_found", "that message has no attachment Parley can fetch")
+    return info
+  }
+
+  async #liveMedia(connectionId: string, ref: string): Promise<{ body: ReadableStream<Uint8Array>; mimetype: string }> {
     let entry = this.#live.get(connectionId)
     if (!entry?.live) entry = await this.#hydrate(connectionId)
     if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
     if (!entry.live.media) throw new ConnectError("not_found", "this channel can't fetch attachments")
-    const file = await entry.live.media(ref)
-    return { data: Buffer.from(file.data).toString("base64"), mimetype: file.mimetype }
+    return entry.live.media(ref)
+  }
+
+  async #localMedia(connectionId: string, ref: string): Promise<{ data: string; mimetype: string }> {
+    const file = await this.#liveMedia(connectionId, ref)
+    return { data: Buffer.from(await readAll(file.body, MAX_MEDIA_BYTES)).toString("base64"), mimetype: file.mimetype }
   }
 
   async status(accountId: string, connectionId: string): Promise<StatusView> {

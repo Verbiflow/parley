@@ -6,6 +6,7 @@ import { redisLimiter } from "./ratelimit-redis.ts"
 import { Sessions, type SessionsApi } from "./sessions/actor.ts"
 import { RedisCoordinator } from "./sessions/coordinator.ts"
 import { Exits } from "./sessions/exits.ts"
+import { fetchPublicMedia, type MediaFetcher } from "./sessions/fetch-media.ts"
 
 import { ACCESS_TOKEN_SECONDS } from "./access.ts"
 
@@ -37,7 +38,7 @@ export type AppContext = {
 /** The in-process context: the session pool lives here, so callers can start it and re-open connections. */
 export type NodeAppContext = AppContext & { sessions: Sessions }
 
-export function makeContext(config: IdentityConfig, db?: RequestDatabase, channels: Channel[] = CHANNELS, opts: { limiter?: RateLimiter } = {}): NodeAppContext {
+export function makeContext(config: IdentityConfig, db?: RequestDatabase, channels: Channel[] = CHANNELS, opts: { limiter?: RateLimiter; fetchMedia?: MediaFetcher } = {}): NodeAppContext {
   if (!config.databaseUrl && !db) throw new Error("DATABASE_URL is required")
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required for the outbox")
   const database = db ?? new RequestDatabase(config.databaseUrl)
@@ -45,7 +46,7 @@ export function makeContext(config: IdentityConfig, db?: RequestDatabase, channe
   const tx = new Transactor(config.databaseUrl)
   const exits = new Exits(config)
   const coordinator = config.redisUrl ? new RedisCoordinator(config.redisUrl) : undefined
-  const sessions = new Sessions({ sql: database.query, channels, config, tx, exits, ...(coordinator ? { coordinator } : {}) })
+  const sessions = new Sessions({ sql: database.query, channels, config, tx, exits, fetchMedia: opts.fetchMedia ?? fetchPublicMedia, ...(coordinator ? { coordinator } : {}) })
   const limiter = opts.limiter ?? (config.redisUrl ? redisLimiter(config.redisUrl) : memoryLimiter())
   return {
     config,

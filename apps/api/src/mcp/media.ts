@@ -1,8 +1,9 @@
 import type { OutboundMediaInfo } from "../sessions/outbox.ts"
 
-/** The largest file an agent can send (WhatsApp's own limit for photos and videos is 16 MB). */
+/** The largest photo, and the largest file sent inline as base64. */
 export const MAX_SEND_BYTES = 16 * 1024 * 1024
-const FETCH_TIMEOUT_MS = 30_000
+/** The largest video, audio file or document (downloaded from a URL by the sessions service). */
+export const MAX_FILE_BYTES = 100 * 1024 * 1024
 
 export class MediaInputError extends Error {}
 
@@ -38,27 +39,6 @@ export function isPrivateHost(host: string): boolean {
   return false
 }
 
-/** Read a response body, refusing past `max` bytes without buffering the rest. */
-async function readCapped(res: Response, max: number): Promise<Uint8Array> {
-  const declared = Number(res.headers.get("content-length") ?? 0)
-  if (declared > max) throw new MediaInputError(`the file is ${Math.round(declared / 1024 / 1024)} MB; at most ${max / 1024 / 1024} MB can be sent`)
-  if (!res.body) return new Uint8Array(await res.arrayBuffer())
-  const chunks: Uint8Array[] = []
-  let size = 0
-  const reader = res.body.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > max) { await reader.cancel().catch(() => {}); throw new MediaInputError(`the file is over ${max / 1024 / 1024} MB, the most that can be sent`) }
-    chunks.push(value)
-  }
-  const out = new Uint8Array(size)
-  let at = 0
-  for (const c of chunks) { out.set(c, at); at += c.byteLength }
-  return out
-}
-
 function decodeBase64(data: string): Uint8Array {
   const clean = data.replace(/^data:[^,]*,/, "").replace(/\s+/g, "")
   if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(clean)) throw new MediaInputError("`data` isn't valid base64")
@@ -68,34 +48,41 @@ function decodeBase64(data: string): Uint8Array {
   return out
 }
 
+/** The most a file of this kind may be. Photos are WhatsApp's 16 MB; videos, audio and documents go up to 100 MB here. */
+export const maxBytesFor = (kind: OutboundMediaInfo["kind"] | undefined): number => (kind === "image" ? MAX_SEND_BYTES : MAX_FILE_BYTES)
+
 /**
- * Turn an agent's `media` argument into the bytes to queue: downloaded from a public http(s) URL, or decoded from
- * base64. The type comes from what the agent said, else the server's content type, else the file name.
+ * What a file is, from what the agent said, else what its server said, else its name; and how it shows in the chat.
+ * Checks it isn't empty or too big for its kind.
  */
-export async function resolveMedia(input: MediaInput, fetchFn: typeof fetch = fetch): Promise<OutboundMediaInfo & { data: Uint8Array }> {
+export function describeMedia(f: { data: Uint8Array; kind?: OutboundMediaInfo["kind"] | undefined; mimetype?: string | undefined; served?: string | undefined; fileName?: string | undefined }): OutboundMediaInfo & { data: Uint8Array } {
+  if (!f.data.byteLength) throw new MediaInputError("the file is empty")
+  const generic = (t?: string) => !t || t === "application/octet-stream" || t === "binary/octet-stream"
+  const mimetype = f.mimetype || (!generic(f.served) ? f.served : undefined) || fromName(f.fileName) || "application/octet-stream"
+  const kind = f.kind ?? kindOf(mimetype)
+  const max = maxBytesFor(kind)
+  if (f.data.byteLength > max) throw new MediaInputError(`a ${kind} can be at most ${max / 1024 / 1024} MB (this one is ${Math.ceil(f.data.byteLength / 1024 / 1024)} MB)`)
+  return { kind, mimetype, ...(f.fileName ? { fileName: f.fileName.slice(0, 200) } : {}), data: f.data }
+}
+
+/** A file to send, as it travels to the sessions service: the bytes already, or a URL it downloads itself. */
+export type MediaSend = (OutboundMediaInfo & { data: Uint8Array }) | { url: string; kind?: OutboundMediaInfo["kind"] | undefined; mimetype?: string | undefined; fileName?: string | undefined }
+
+/**
+ * Turn an agent's `media` argument into what to queue. Base64 is decoded here. A URL is only checked (http(s), not an
+ * obviously private host): the sessions service downloads it, re-checking every address it resolves to, so large
+ * files never pass through the edge.
+ */
+export function resolveMedia(input: MediaInput): MediaSend {
   if (Boolean(input.url) === Boolean(input.data)) throw new MediaInputError("give the file as exactly one of `url` or `data`")
-  let data: Uint8Array
-  let served: string | undefined
-  let name = input.file_name
   if (input.url) {
     let url: URL
     try { url = new URL(input.url) } catch { throw new MediaInputError("`url` isn't a valid URL") }
     if (url.protocol !== "https:" && url.protocol !== "http:") throw new MediaInputError("`url` must be http(s)")
     if (isPrivateHost(url.hostname)) throw new MediaInputError("`url` must be on the public internet")
-    const res = await fetchFn(url, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(() => undefined)
-    if (!res?.ok) throw new MediaInputError(`couldn't download the file (${res ? `HTTP ${res.status}` : "no response"})`)
-    // A redirect can't land on a private address either.
-    if (res.url && isPrivateHost(new URL(res.url).hostname)) throw new MediaInputError("`url` must be on the public internet")
-    served = res.headers.get("content-type")?.split(";")[0]?.trim() || undefined
-    data = await readCapped(res, MAX_SEND_BYTES)
-    name ??= decodeURIComponent(url.pathname.split("/").pop() || "") || undefined
-  } else {
-    data = decodeBase64(input.data!)
-    if (data.byteLength > MAX_SEND_BYTES) throw new MediaInputError(`the file is over ${MAX_SEND_BYTES / 1024 / 1024} MB, the most that can be sent`)
+    return { url: url.href, kind: input.kind, mimetype: input.mimetype, fileName: input.file_name }
   }
-  if (!data.byteLength) throw new MediaInputError("the file is empty")
-  const generic = (t?: string) => !t || t === "application/octet-stream" || t === "binary/octet-stream"
-  const mimetype = input.mimetype || (!generic(served) ? served : undefined) || fromName(name) || "application/octet-stream"
-  const kind = input.kind ?? kindOf(mimetype)
-  return { kind, mimetype, ...(name ? { fileName: name.slice(0, 200) } : {}), data }
+  const data = decodeBase64(input.data!)
+  if (data.byteLength > MAX_SEND_BYTES) throw new MediaInputError(`files sent as \`data\` can be at most ${MAX_SEND_BYTES / 1024 / 1024} MB; pass a \`url\` for bigger ones`)
+  return describeMedia({ data, kind: input.kind, mimetype: input.mimetype, fileName: input.file_name })
 }

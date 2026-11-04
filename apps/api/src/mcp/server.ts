@@ -5,6 +5,7 @@ import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { OutboxError, availability, cancel, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
+import { signMediaLink } from "../media-link.ts"
 
 /** The principal a verified bearer token carries into a tool call (set by the /mcp bearer middleware). */
 export type McpPrincipal = { userId: string; sessionId: string }
@@ -37,6 +38,12 @@ const outboundView = (m: Outbound) => ({
   scheduled_for: m.scheduledFor, sent_at: m.sentAt, error: m.error, created_at: m.createdAt,
 })
 
+/** Sizes up to which get_media hands a file over inline (bigger ones: the download link). Claude's own image limit is 5 MB. */
+const INLINE_IMAGE_BYTES = 5 * 1024 * 1024
+const INLINE_FILE_BYTES = 10 * 1024 * 1024
+const INLINE_TEXT_BYTES = 512 * 1024
+const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javascript)$)/
+
 /** What send_message and react_to_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
   const now = !message.held && message.scheduledFor && Date.parse(message.scheduledFor) <= Date.now() + 1000
@@ -55,9 +62,9 @@ function queuedView(message: Queued, replayed: boolean) {
  * from the verified token and is channel-generic: `connect` and `list_channels` enumerate the registry, so a new
  * integration appears here with no changes to this file.
  */
-export function buildMcpServer(ctx: AppContext): McpServer {
+export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   const server = new McpServer({ name: "parley", version: ctx.config.version })
-  const base = ctx.config.publicUrl ?? ""
+  const base = ctx.config.publicUrl ?? origin ?? ""
 
   server.registerTool(
     "list_channels",
@@ -205,7 +212,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
           kind: z.enum(["image", "video", "audio", "document"]).optional().describe("How it shows in the chat. Defaults from the file type: JPEG/PNG/WebP photos and MP4 videos inline, audio as audio (OGG/Opus as a voice note), anything else as a document."),
           mimetype: z.string().max(200).optional().describe("The file's type, e.g. \"image/jpeg\". Defaults to what the URL serves, or the file name's extension."),
           file_name: z.string().max(200).optional().describe("Shown for documents."),
-        }).optional().describe("A file to send (at most 16 MB). Give exactly one of url or data."),
+        }).optional().describe("A file to send: photos up to 16 MB; videos, audio and documents up to 100 MB from a url (16 MB as data). Give exactly one of url or data."),
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),
         idempotency_key: z.string().min(1).max(200).optional().describe("Retrying with the same key returns the original message instead of sending twice."),
@@ -215,7 +222,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
       const { userId, sessionId } = principalOf(extra)
       try {
         if (!text && !media) return fail("give `text`, `media`, or both")
-        const file = media ? await resolveMedia(media) : undefined
+        const file = media ? resolveMedia(media) : undefined
         const { message, replayed } = await ctx.sessions.enqueue(userId, connection_id, {
           to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId,
         })
@@ -256,7 +263,8 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     "get_media",
     {
       title: "Get a message's media",
-      description: "Fetch the photo, video, voice note, document or sticker a message carries (a message from read_inbox with `media`). Photos and stickers come back as images you can see; audio as audio; anything else as a file. Needs the connection online; very old files may take a moment while the sender's phone uploads them again.",
+      description:
+        "Open the photo, video, voice note, document or sticker a message carries (a message from read_inbox with `media`). Always returns a `download_url` (any size, valid for an hour; fetch it with curl or code). Photos and stickers also come back as images you can see, voice notes and audio as audio, videos as their preview frame, PDFs as a document, and text files (txt, csv, json, …) as text. Needs the connection online; an old file may take a moment while the sender's phone uploads it again.",
       inputSchema: {
         connection_id: z.string(),
         chat_id: z.string(),
@@ -266,12 +274,34 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     async ({ connection_id, chat_id, message_id }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const file = await ctx.sessions.media(userId, connection_id, chat_id, message_id)
-        const mimeType = file.mimetype.split(";")[0]!.trim()
-        const about = { type: "text" as const, text: JSON.stringify({ kind: file.kind, mimetype: file.mimetype, file_name: file.fileName, size: file.size }) }
-        if (mimeType.startsWith("image/")) return { content: [about, { type: "image" as const, data: file.data, mimeType }] }
-        if (mimeType.startsWith("audio/")) return { content: [about, { type: "audio" as const, data: file.data, mimeType }] }
-        return { content: [about, { type: "resource" as const, resource: { uri: `parley://media/${encodeURIComponent(connection_id)}/${encodeURIComponent(chat_id)}/${encodeURIComponent(message_id)}`, mimeType, blob: file.data } }] }
+        const info = await ctx.sessions.mediaInfo(userId, connection_id, chat_id, message_id)
+        const link = await signMediaLink(ctx.config.signInKey, { accountId: userId, connectionId: connection_id, chatId: chat_id, messageId: message_id })
+        const mimeType = (info.mimetype ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase()
+        const size = info.size ?? 0
+        const about = {
+          kind: info.kind, mimetype: info.mimetype, file_name: info.fileName ?? null, size: info.size ?? null,
+          width: info.width ?? null, height: info.height ?? null, seconds: info.seconds ?? null,
+          download_url: `${base}/media/${link.token}`, download_expires_at: link.expiresAt,
+        }
+        type Part = { type: "text"; text: string } | { type: "image" | "audio"; data: string; mimeType: string } | { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }
+        const parts: Part[] = []
+        const fetchInline = async () => (await ctx.sessions.media(userId, connection_id, chat_id, message_id)).data
+        if ((info.kind === "image" || info.kind === "sticker") && size <= INLINE_IMAGE_BYTES) {
+          parts.push({ type: "image", data: await fetchInline(), mimeType: mimeType.startsWith("image/") ? mimeType : "image/jpeg" })
+        } else if (info.kind === "audio" && size <= INLINE_FILE_BYTES) {
+          parts.push({ type: "audio", data: await fetchInline(), mimeType })
+        } else if (info.kind === "document" && TEXTUAL.test(mimeType) && size <= INLINE_TEXT_BYTES) {
+          parts.push({ type: "text", text: new TextDecoder().decode(Uint8Array.from(atob(await fetchInline()), (ch) => ch.charCodeAt(0))) })
+        } else if (info.kind === "document" && mimeType === "application/pdf" && size <= INLINE_FILE_BYTES) {
+          parts.push({ type: "resource", resource: { uri: about.download_url, mimeType, blob: await fetchInline() } })
+        } else if (info.thumbnail) {
+          // A video (or a file too big to inline): its preview, and the link for the real thing.
+          parts.push({ type: "image", data: info.thumbnail, mimeType: "image/jpeg" })
+          Object.assign(about, { note: info.kind === "video" ? "This is the video's preview frame; the full video is at download_url." : "This is a preview; the full file is at download_url." })
+        } else {
+          Object.assign(about, { note: "Download the file from download_url." })
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(about) }, ...parts] }
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not fetch the media")
       }

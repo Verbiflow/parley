@@ -40,6 +40,8 @@ export type MediaKind = "image" | "video" | "audio" | "document" | "sticker"
 export type MediaInfo = {
   kind: MediaKind; mimetype: string | null; fileName?: string | null; size?: number | null
   width?: number | null; height?: number | null; seconds?: number | null; ref: string
+  /** A small JPEG preview (base64) when the channel sends one: a video's first frame, a photo or a document's page. */
+  thumbnail?: string | null
 }
 
 /**
@@ -61,7 +63,7 @@ export type Chat = { id: string; name: string | null; kind: "direct" | "group"; 
  */
 export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined }
 /** A file to send, already fetched: the bytes and what they are. */
-export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined }
+export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined; seconds?: number | undefined }
 /** The message a reaction is for, as stored: its id, whether the account sent it, and (in a group) who did. */
 export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
@@ -95,8 +97,8 @@ export type Emit = (event: ChannelEvent) => void
 /** A live connection the host holds (one per connected account, multiplexed many-per-worker). */
 export interface LiveConnection {
   send(to: string, content: OutboundContent): Promise<{ id: string }>
-  /** Fetch a message's attachment by its `MediaInfo.ref`. Channels without media leave this out. */
-  media?(ref: string): Promise<{ data: Uint8Array; mimetype: string }>
+  /** Fetch a message's attachment by its `MediaInfo.ref`, as a stream (files can be large). Channels without media leave this out. */
+  media?(ref: string): Promise<{ body: ReadableStream<Uint8Array>; mimetype: string }>
   /** Unlink the account on the channel; the saved state becomes useless afterward. */
   logout(): Promise<void>
   /** Drop the connection locally (e.g. idle eviction) without unlinking. */

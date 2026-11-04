@@ -1,15 +1,17 @@
 import type { Sql } from "@parley/auth/db"
 import type { LinkMethod } from "@parley/channels"
-import { ConnectError, type LiveOp, type MediaFile, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
+import { ConnectError, type LiveOp, type MediaDetails, type MediaFile, type MediaStream, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
 import { OutboxError, type Queued } from "./outbox.ts"
 import { getConnection, listConnections, type Connection, type Locale } from "./store.ts"
-import { listChats, getChat, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { listChats, getChat, readMessages, inbox, inboxChats, messageMedia, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CONNECT_ERRORS = new Set(["unknown_channel", "not_found", "forbidden", "not_connected", "not_synced", "no_exit"])
 type EnqueueRequest = Parameters<Sessions["enqueue"]>[2]
 const RPC_TIMEOUT_MS = 20_000
 /** A download can wait on the sender's phone re-uploading an expired file. */
 const MEDIA_TIMEOUT_MS = 60_000
+/** Sending from a URL: the sessions service downloads up to 100 MB first. */
+const DOWNLOAD_TIMEOUT_MS = 120_000
 
 /** Base64 without Node's Buffer (this runs on the edge). */
 function base64(bytes: Uint8Array): string {
@@ -42,8 +44,38 @@ export class RemoteSessions implements SessionsApi {
   }
   /** `now` isn't forwarded: the sessions service's clock decides pacing. */
   enqueue(accountId: string, connectionId: string, req: EnqueueRequest): Promise<{ message: Queued; replayed: boolean }> {
-    const media = req.media && { ...req.media, data: base64(req.media.data) }
-    return this.#call("enqueue", [accountId, connectionId, { ...req, notBefore: req.notBefore?.toISOString(), media }])
+    const media = req.media && ("data" in req.media ? { ...req.media, data: base64(req.media.data) } : req.media)
+    // A URL is downloaded by the sessions service before it answers: give it time.
+    return this.#call("enqueue", [accountId, connectionId, { ...req, notBefore: req.notBefore?.toISOString(), media }], media && "url" in media ? DOWNLOAD_TIMEOUT_MS : RPC_TIMEOUT_MS)
+  }
+  async mediaInfo(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaDetails> {
+    await this.#owned(accountId, connectionId)
+    const chat = await getChat(this.#sql, connectionId, chatId)
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
+    const info = await messageMedia(this.#sql, connectionId, chatId, messageId)
+    if (!info) throw new ConnectError("not_found", "that message has no attachment Parley can fetch")
+    const { ref: _ref, ...details } = info
+    return details
+  }
+  /** Streamed straight through from the sessions service: the edge never holds the whole file. */
+  async mediaStream(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaStream> {
+    const { fetch, baseUrl, secret } = this.#transport
+    // The timeout covers getting started (the phone may have to re-upload), not the transfer: a big video streams for a while.
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), MEDIA_TIMEOUT_MS)
+    const res = await fetch(`${baseUrl}/rpc-stream/media`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ args: [accountId, connectionId, chatId, messageId] }),
+      signal: abort.signal,
+    }).finally(() => clearTimeout(timer))
+    if (!res.ok || !res.body) {
+      const err = ((await res.json().catch(() => undefined)) as { error?: { code: string; message: string } } | undefined)?.error
+      if (err && CONNECT_ERRORS.has(err.code)) throw new ConnectError(err.code as ConstructorParameters<typeof ConnectError>[0], err.message)
+      throw new Error(`sessions service mediaStream failed: ${res.status}`)
+    }
+    const about = JSON.parse(res.headers.get("x-parley-media") ?? "{}") as { mimetype?: string; kind?: string; fileName?: string | null }
+    return { body: res.body, mimetype: about.mimetype ?? "application/octet-stream", kind: about.kind ?? "document", fileName: about.fileName ?? null }
   }
   /** Fetching an attachment needs the live socket, so it runs on the sessions service. */
   media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {

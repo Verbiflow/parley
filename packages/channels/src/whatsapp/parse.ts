@@ -34,8 +34,11 @@ const MEDIA_FIELDS: Array<[keyof proto.IMessage, MediaKind]> = [
 type MediaFields = {
   url?: string | null; directPath?: string | null; mediaKey?: Uint8Array | null; mimetype?: string | null
   fileEncSha256?: Uint8Array | null; fileSha256?: Uint8Array | null; fileLength?: unknown; mediaKeyTimestamp?: unknown
-  fileName?: string | null; width?: number | null; height?: number | null; seconds?: number | null
+  fileName?: string | null; width?: number | null; height?: number | null; seconds?: number | null; jpegThumbnail?: Uint8Array | null
 }
+
+/** Previews past this are dropped rather than stored with every message (WhatsApp's are a few KB). */
+const MAX_THUMBNAIL_BYTES = 32 * 1024
 
 /**
  * The attachment a message carries, with a `ref` that can fetch it later: the message key (needed to ask the sender's
@@ -55,10 +58,11 @@ export function mediaOf(m: WAMessage): MediaInfo | undefined {
     }
     const message = Buffer.from(proto.Message.encode({ [field]: slim } as proto.IMessage).finish()).toString("base64")
     const key: WAMessageKey = { remoteJid: m.key.remoteJid, id: m.key.id, fromMe: m.key.fromMe, participant: m.key.participant }
+    const thumb = media.jpegThumbnail?.length && media.jpegThumbnail.length <= MAX_THUMBNAIL_BYTES ? Buffer.from(media.jpegThumbnail).toString("base64") : null
     return {
       kind, mimetype: media.mimetype ?? null, fileName: media.fileName ?? null, size: num(media.fileLength) || null,
       width: media.width ?? null, height: media.height ?? null, seconds: media.seconds ?? null,
-      ref: JSON.stringify({ v: 1, key, message }),
+      ref: JSON.stringify({ v: 1, key, message }), thumbnail: thumb,
     }
   }
   return undefined
@@ -85,4 +89,36 @@ export function reactionOf(m: WAMessage): RawReaction | undefined {
 export function embeddedReactions(m: WAMessage): RawReaction[] {
   if (!m.key.id) return []
   return (m.reactions ?? []).flatMap((r) => (r.key ? [{ reactor: r.key, target: m.key.id!, emoji: r.text ?? "", atMs: num(r.senderTimestampMs) }] : []))
+}
+
+/**
+ * An MP4/MOV's length in whole seconds, from its movie header (`moov` > `mvhd`), so a sent video shows its duration.
+ * Undefined when the file isn't one, or the header is missing or past what was read.
+ */
+export function mp4Seconds(buf: Uint8Array): number | undefined {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const find = (start: number, end: number, type: string): [number, number] | undefined => {
+    for (let i = start; i + 8 <= end;) {
+      let size = view.getUint32(i)
+      let header = 8
+      if (size === 1) {
+        if (i + 16 > end) return undefined
+        size = Number(view.getBigUint64(i + 8))
+        header = 16
+      } else if (size === 0) size = end - i
+      if (size < header) return undefined
+      if (String.fromCharCode(buf[i + 4]!, buf[i + 5]!, buf[i + 6]!, buf[i + 7]!) === type) return [i + header, Math.min(i + size, end)]
+      i += size
+    }
+    return undefined
+  }
+  const moov = find(0, buf.byteLength, "moov")
+  const mvhd = moov && find(moov[0], moov[1], "mvhd")
+  if (!mvhd) return undefined
+  const p = mvhd[0]
+  const v1 = buf[p] === 1
+  if (p + (v1 ? 32 : 20) > mvhd[1]) return undefined
+  const timescale = view.getUint32(p + (v1 ? 20 : 12))
+  const duration = v1 ? Number(view.getBigUint64(p + 24)) : view.getUint32(p + 16)
+  return timescale ? Math.max(1, Math.round(duration / timescale)) : undefined
 }
