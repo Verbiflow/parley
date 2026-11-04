@@ -1,17 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { chatsPage, dashboardPage, landingPage, type AgentView } from "../src/web/pages.ts"
-import { marketingPage } from "../src/web/site.ts"
 import type { Connection } from "../src/sessions/store.ts"
 import type { Outbound } from "../src/sessions/outbox.ts"
-
-test("the marketing site only links to the app; it never starts sign-in itself", () => {
-  const html = marketingPage({ appUrl: "https://app.itsparley.com" })
-  assert.match(html, /Messaging infrastructure<br>for AI agents/)
-  assert.match(html, /href="https:\/\/app\.itsparley\.com"[^>]*>Get started/)
-  assert.match(html, /data-copy="https:\/\/app\.itsparley\.com\/mcp"/)
-  assert.doesNotMatch(html, /\/auth\/start/)
-})
 
 test("the app's sign-in page is the centered panel with one Google button", () => {
   const html = landingPage({ workos: true, dev: false })

@@ -9,10 +9,8 @@
   "workers_dev": false,
   "preview_urls": false,
   "routes": [
-    { "pattern": "app.itsparley.com", "custom_domain": true },
-    // Marketing site (landing page only; every other path redirects to the app). See site() in src/worker.ts.
-    { "pattern": "itsparley.com", "custom_domain": true },
-    { "pattern": "www.itsparley.com", "custom_domain": true }
+    // itsparley.com and www are the marketing site, a Worker of its own: see site/wrangler.jsonc.
+    { "pattern": "app.itsparley.com", "custom_domain": true }
   ],
   "observability": { "enabled": true },
   // Run next to the database: RDS and the EC2 sessions service are in us-east-1, and a dashboard page makes several
@@ -20,8 +18,7 @@
   "placement": { "mode": "targeted", "region": "aws:us-east-1" },
   "vars": {
     "PARLEY_ENV": "production",
-    "PUBLIC_URL": "https://app.itsparley.com",
-    "SITE_HOST": "itsparley.com"
+    "PUBLIC_URL": "https://app.itsparley.com"
   },
   // Postgres: Hyperdrive → Workers VPC service `parley-db` → Cloudflare Tunnel → private RDS.
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2b6f68bccc8945f7ba79eed9cfbe7d0b" }],
