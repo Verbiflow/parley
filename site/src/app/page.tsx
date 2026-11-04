@@ -201,8 +201,8 @@ function Closing() {
   return (
     <Shell className="relative isolate pb-36 pt-44 text-center">
       <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-[520px] bg-[radial-gradient(50%_60%_at_50%_100%,rgb(217_130_91/0.09),transparent)]" />
-      <h2 className="mx-auto max-w-[18ch] text-[clamp(30px,3.6vw,44px)] leading-[1.08] font-normal tracking-[-0.035em] text-balance">Your agent&apos;s first message, a few minutes from now</h2>
-      <p className="mx-auto mt-4 max-w-[40ch] text-[15.5px] leading-[1.65] text-muted">Connect your account, paste one URL into your agent, then ask it to reply to someone. That&apos;s the whole setup.</p>
+      <h2 className="mx-auto max-w-[24ch] text-[clamp(30px,3.6vw,44px)] leading-[1.08] font-normal tracking-[-0.035em] text-balance">Your agent&apos;s first message, a few minutes from now</h2>
+      <p className="mx-auto mt-4 max-w-[50ch] text-[15.5px] text-balance leading-[1.65] text-muted">Connect your account, paste one URL into your agent, then ask it to reply to someone. That&apos;s the whole setup.</p>
       <div className="mt-8 flex flex-wrap justify-center gap-2">
         <Button href={APP_URL}>Get started <Arrow /></Button>
         <a href={GITHUB_URL} className={buttonClass()}><GitHub size={14} />Star on GitHub</a>

@@ -105,6 +105,69 @@
   to { stroke-dashoffset: -160; }
 }
 
+/* Parley's orb: sand and cream light turning inside a glass sphere, quick and breathing while it holds a message. */
+.orb {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 50% 60%, #3a2516 0%, #140d08 75%);
+  box-shadow: 0 0 0 0.5px rgb(255 236 210 / 0.3), 0 0 14px rgb(227 185 141 / 0.45), 0 0 34px rgb(227 185 141 / 0.18);
+}
+.orb::before,
+.orb > i {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  mix-blend-mode: screen;
+  filter: blur(4px);
+  animation: orb-turn 3.2s linear infinite;
+}
+.orb::before {
+  background:
+    radial-gradient(circle at 28% 30%, #fff1dc 0, rgb(255 241 220 / 0) 30%),
+    radial-gradient(circle at 74% 58%, #e3b98d 0, rgb(227 185 141 / 0) 34%),
+    radial-gradient(circle at 42% 84%, #b8794a 0, rgb(184 121 74 / 0) 34%);
+}
+.orb > i {
+  background:
+    radial-gradient(circle at 70% 24%, #f8d6ac 0, rgb(248 214 172 / 0) 28%),
+    radial-gradient(circle at 22% 66%, #f0cda5 0, rgb(240 205 165 / 0) 30%);
+  opacity: 0.85;
+  animation-duration: 4.6s;
+  animation-direction: reverse;
+}
+.orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 33% 24%, rgb(255 255 255 / 0.9), rgb(255 255 255 / 0) 22%),
+    radial-gradient(circle at 50% 50%, rgb(255 246 232 / 0.35) 0, transparent 34%),
+    radial-gradient(circle at 50% 50%, transparent 60%, rgb(20 13 8 / 0.55) 82%, rgb(255 226 190 / 0.4) 98%);
+}
+.orb-halo {
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgb(240 205 165 / 0.42), rgb(227 185 141 / 0) 66%);
+  animation: orb-breathe 2.4s ease-in-out infinite;
+}
+.orb[data-calm]::before,
+.orb[data-calm] > i {
+  animation-duration: 12s;
+}
+.orb-halo[data-calm] {
+  animation-duration: 6s;
+  opacity: 0.6;
+}
+@keyframes orb-turn {
+  to { transform: rotate(1turn); }
+}
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(0.85); opacity: 0.55; }
+  50% { transform: scale(1.1); opacity: 1; }
+}
+
 @keyframes blink {
   50% {
     opacity: 0.25;

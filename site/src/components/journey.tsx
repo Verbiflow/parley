@@ -7,7 +7,6 @@ import { Claude, ParleyMark } from "./logos"
 /** Claude asks → Parley holds it for a natural moment → sent → delivered → read, and Maya answers. Then it loops. */
 type Stage = 0 | 1 | 2 | 3 | 4
 const TIMELINE: Array<[Stage, number]> = [[0, 2600], [1, 3400], [2, 1500], [3, 1500], [4, 5200]]
-const HOLD = 108
 
 function useStage(running: boolean): Stage {
   const reduced = useReducedMotion()
@@ -20,17 +19,6 @@ function useStage(running: boolean): Stage {
     return () => clearTimeout(t)
   }, [stage, reduced, running])
   return stage
-}
-
-function useCountdown(running: boolean) {
-  const [left, setLeft] = useState(HOLD)
-  useEffect(() => {
-    if (!running) return setLeft(HOLD)
-    const start = performance.now()
-    const id = setInterval(() => setLeft(Math.max(0, Math.round(HOLD * (1 - (performance.now() - start) / 3200)))), 50)
-    return () => clearInterval(id)
-  }, [running])
-  return { left, label: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` }
 }
 
 const ease = [0.2, 0.8, 0.2, 1] as const
@@ -49,17 +37,64 @@ function Ticks({ n, read, className = "" }: { n: 1 | 2; read: boolean; className
   )
 }
 
-function Avatar({ initials, tone, size = 26 }: { initials: string; tone: string; size?: number }) {
-  return <span className="grid shrink-0 place-items-center rounded-full text-[10px] font-medium" style={{ width: size, height: size, background: tone, color: "rgb(255 246 232 / .85)" }}>{initials}</span>
-}
-
 const PMark = ({ size = 22 }: { size?: number }) => (
   <span className="grid place-items-center rounded-[7px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9)]" style={{ width: size, height: size }}>
     <ParleyMark size={Math.round(size * 0.6)} />
   </span>
 )
 
-/* ---------- the phone ---------- */
+/* ---------- the phone: an iPhone in dark mode, WhatsApp's iOS chat ---------- */
+
+const SF = "font-[-apple-system,BlinkMacSystemFont,'SF_Pro_Text','Helvetica_Neue',sans-serif]"
+const TITANIUM = "bg-[linear-gradient(150deg,#77716a_0%,#3b3834_14%,#1c1b19_38%,#2c2a27_62%,#57524b_88%,#2a2825_100%)]"
+
+const icon = (d: React.ReactNode, size = 18, extra = {}) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...extra}>{d}</svg>
+)
+
+function StatusBar() {
+  return (
+    <div className="relative flex h-[40px] shrink-0 items-center text-[13px] font-semibold tracking-[-0.01em] text-white">
+      <span className="flex-1 pl-2 text-center">8:12</span>
+      <span className="h-[24px] w-[80px] rounded-full bg-black" />
+      <span className="flex flex-1 items-center justify-center gap-[5px] pr-1">
+        <svg viewBox="0 0 18 12" width="16" height="11" fill="currentColor" aria-hidden><rect x="0" y="8" width="3" height="4" rx="1" /><rect x="5" y="5.5" width="3" height="6.5" rx="1" /><rect x="10" y="3" width="3" height="9" rx="1" /><rect x="15" y="0" width="3" height="12" rx="1" /></svg>
+        <svg viewBox="0 0 16 12" width="14" height="11" fill="currentColor" aria-hidden><path d="M8 2.3c2.3 0 4.4.9 5.9 2.4l1.3-1.3A10.1 10.1 0 0 0 8 .4C5.2.4 2.6 1.5.8 3.4l1.3 1.3A8.3 8.3 0 0 1 8 2.3Zm0 3.5c1.3 0 2.5.5 3.4 1.3l1.3-1.3A6.6 6.6 0 0 0 8 4c-1.8 0-3.5.7-4.7 1.8l1.3 1.3c.9-.8 2.1-1.3 3.4-1.3Zm0 3.4c.5 0 .9.2 1.2.5L8 11 6.8 9.7c.3-.3.7-.5 1.2-.5Z" /></svg>
+        <svg viewBox="0 0 27 13" width="24" height="12" aria-hidden><rect x=".5" y=".5" width="23" height="12" rx="3.6" fill="none" stroke="currentColor" strokeOpacity=".4" /><rect x="2" y="2" width="16" height="9" rx="2.2" fill="currentColor" /><path d="M25 4.5v4c.8-.3 1.4-1.1 1.4-2s-.6-1.7-1.4-2Z" fill="currentColor" fillOpacity=".45" /></svg>
+      </span>
+    </div>
+  )
+}
+
+/** WhatsApp's iOS bubble tail, drawn at the bottom corner of the bubble it belongs to. */
+function Tail({ side, color }: { side: "in" | "out"; color: string }) {
+  return (
+    <svg viewBox="0 0 8 13" width="8" height="13" aria-hidden className={`absolute bottom-0 ${side === "in" ? "-left-[5px]" : "-right-[5px] -scale-x-100"}`}>
+      <path d="M8 0v13H2.2C.6 13-.3 11.7.7 11 3.6 9 5 6 5 2.5V0Z" fill={color} />
+    </svg>
+  )
+}
+
+const IN = "#262628"
+const OUT = "#144d37"
+const WALLPAPER = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="132" height="132" fill="none" stroke="#fff" stroke-opacity=".03" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M8 16a6 6 0 0 1 6-6h8a6 6 0 0 1 0 12h-6l-4 3v-3.4A6 6 0 0 1 8 16Z"/>'
+  + '<path d="M78 14c2-3 7-2 7 2 0 4-7 8-7 8s-7-4-7-8c0-4 5-5 7-2Z"/>'
+  + '<circle cx="112" cy="46" r="5"/>'
+  + '<path d="M40 52l3 6 6 1-4.5 4 1 6-5.5-3-5.5 3 1-6-4.5-4 6-1Z" transform="rotate(-12 40 60)"/>'
+  + '<path d="M74 70c3 2 6-2 9 0s6-2 9 0"/>'
+  + '<path d="M18 92v8M14 96h8"/>'
+  + '<path d="M100 98h14a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-14a4 4 0 0 1-4-4v-8a4 4 0 0 1 4-4Zm4 0v-3h6v3"/>'
+  + '<path d="M56 108a7 7 0 1 0 14 0 7 7 0 0 0-14 0Zm4.5-1.5h.01M65.5 106.5h.01M60 111c1.6 1.6 4.4 1.6 6 0"/>'
+  + '<path d="M118 6l2 4 4 .6-3 2.8.8 4-3.8-2-3.8 2 .8-4-3-2.8 4-.6Z"/>'
+  + '</svg>',
+)}")`
+
+/** The time and ticks, tucked into the bubble's bottom-right corner the way WhatsApp lays them out. */
+function Time({ out, children }: { out?: boolean; children: React.ReactNode }) {
+  return <span className={`float-right ml-2 mt-[5px] -mb-[2px] inline-flex items-center gap-0.5 text-[10px] ${out ? "text-[#a3c9b8]" : "text-[#8e8e93]"}`}>{children}</span>
+}
 
 function Phone({ stage }: { stage: Stage }) {
   const [replied, setReplied] = useState(false)
@@ -68,51 +103,66 @@ function Phone({ stage }: { stage: Stage }) {
     const t = setTimeout(() => setReplied(true), 1600)
     return () => clearTimeout(t)
   }, [stage])
+  const bubble = "relative max-w-[80%] px-2.5 py-[6px] text-[13.5px] leading-[1.3] text-[#f2f2f2]"
   return (
-    <div className="relative w-[272px] rounded-[46px] bg-[linear-gradient(160deg,#3a3631,#151412_40%,#0c0b0a)] p-[3px] shadow-[0_60px_100px_-40px_rgb(0_0_0/0.95),0_0_0_1px_rgb(0_0_0/0.6)]">
-      <div className="rounded-[43px] bg-[#070707] p-[7px]">
-        <div className="relative flex h-[540px] flex-col overflow-hidden rounded-[36px] bg-[#0b141a] font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Helvetica,sans-serif]">
-          <div className="flex items-center justify-between px-6 pb-1 pt-3 text-[12px] font-semibold text-[#e9edef]">
-            <span>08:12</span>
-            <span className="absolute left-1/2 top-2.5 h-[22px] w-[78px] -translate-x-1/2 rounded-full bg-black" />
-            <span className="inline-flex items-end gap-[2px]">{[4, 6, 8, 10].map((h) => <i key={h} className="w-[3px] rounded-[1px] bg-[#e9edef]" style={{ height: h }} />)}</span>
-          </div>
-          <div className="flex items-center gap-2.5 border-b border-black/30 bg-[#202c33] px-3 py-2.5">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#e9edef" strokeWidth="2.2" strokeLinecap="round" aria-hidden><path d="m15 18-6-6 6-6" /></svg>
-            <Avatar initials="MO" tone="#4a3f30" size={30} />
-            <div className="leading-tight">
-              <p className="text-[13.5px] font-medium text-[#e9edef]">Maya Okafor</p>
-              <p className="text-[11px] text-[#8696a0]">{stage === 4 && !replied ? "typing…" : stage >= 3 ? "online" : "last seen today at 07:58"}</p>
+    <div className="relative w-[272px]">
+      {[[96, 20], [136, 40], [186, 40]].map(([top, h]) => <i key={top} className={`absolute -left-[2.5px] w-[3px] rounded-l-[2px] ${TITANIUM}`} style={{ top, height: h }} />)}
+      <i className={`absolute -right-[2.5px] top-[150px] h-[64px] w-[3px] rounded-r-[2px] ${TITANIUM}`} />
+      <div className={`relative rounded-[50px] p-[3px] shadow-[inset_0_0_0_0.5px_rgb(255_255_255/0.25),0_0_0_0.5px_rgb(0_0_0/0.8),0_60px_100px_-40px_rgb(0_0_0/0.95),0_20px_40px_-20px_rgb(0_0_0/0.8)] ${TITANIUM}`}>
+        <div className="rounded-[47px] bg-black p-[7px] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.04)]">
+          <div className={`relative flex h-[540px] flex-col overflow-hidden rounded-[40px] bg-[#0b0b0b] ${SF}`} style={{ backgroundImage: WALLPAPER }}>
+            <div className="relative z-10 bg-[rgb(22_22_22/0.86)] shadow-[0_0.5px_0_rgb(255_255_255/0.08)] backdrop-blur-xl">
+              <StatusBar />
+              <div className="flex h-[46px] items-center gap-2 pl-1.5 pr-3 text-white">
+                <span className="flex items-center">{icon(<path d="m15 5-7 7 7 7" />, 22, { strokeWidth: 2.2 })}<span className="-ml-1 text-[13px]">3</span></span>
+                <span className="grid size-[30px] shrink-0 place-items-center rounded-full bg-[linear-gradient(160deg,#c89f78,#7a573c)] text-[11px] font-semibold text-white/90">MO</span>
+                <div className="min-w-0 flex-1 leading-tight">
+                  <p className="truncate text-[14px] font-semibold tracking-[-0.01em]">Maya Okafor</p>
+                  <p className="truncate text-[10.5px] text-[#8e8e93]">{stage === 4 && !replied ? "typing…" : stage >= 3 ? "online" : "last seen today"}</p>
+                </div>
+                {icon(<><rect x="2.5" y="6" width="13" height="12" rx="3" /><path d="m15.5 10.5 5-3v9l-5-3" /></>, 21)}
+                <span className="ml-2.5">{icon(<path d="M5 3.5h3.2l1.6 4.2-2.2 1.4a11 11 0 0 0 5.3 5.3l1.4-2.2 4.2 1.6V17a2.5 2.5 0 0 1-2.7 2.5A15.5 15.5 0 0 1 2.5 6.2 2.5 2.5 0 0 1 5 3.5Z" />, 19)}</span>
+              </div>
             </div>
-          </div>
-          <div className="flex flex-1 flex-col justify-end gap-1.5 px-2.5 pb-3 [background-image:radial-gradient(rgb(255_255_255/.028)_1px,transparent_1.2px)] [background-size:15px_15px]">
-            <span className="mb-1 self-center rounded-md bg-[#182229] px-2.5 py-1 text-[10.5px] text-[#8696a0]">Today</span>
-            <p className="max-w-[84%] self-start rounded-[9px] rounded-tl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-snug text-[#e9edef]">
-              Can you send the deck before we meet?<span className="ml-2 inline-block translate-y-1 text-[10px] text-[#8696a0]">07:58</span>
-            </p>
-            <AnimatePresence>
-              {stage >= 2 && (
-                <motion.div key="out" initial={{ opacity: 0, y: 14, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }} transition={spring} style={{ originX: 1, originY: 1 }} className="max-w-[88%] self-end overflow-hidden rounded-[9px] rounded-tr-[3px] bg-[#005c4b] text-[13px] leading-snug text-[#e9edef]">
-                  <div className="m-1 flex items-center gap-2.5 rounded-[6px] bg-[#025144] p-2">
-                    <span className="grid h-9 w-7 place-items-center rounded-[3px] bg-[#e5533c] text-[7.5px] font-bold text-white">PDF</span>
-                    <div className="leading-tight"><p className="text-[12.5px]">Q4 review.pdf</p><p className="text-[10.5px] text-[#8fbcb0]">12 pages · 2.4 MB</p></div>
-                  </div>
-                  <p className="px-2.5 pb-1.5 pt-0.5">
-                    Here&apos;s the deck. Does <b className="font-semibold">Thursday at 3</b> still work?
-                    <span className="ml-1.5 inline-flex translate-y-[3px] items-center gap-0.5 text-[10px] text-[#8fbcb0]">08:12 <Ticks n={stage >= 3 ? 2 : 1} read={stage >= 4} /></span>
-                  </p>
-                </motion.div>
-              )}
-              {replied && (
-                <motion.p key="in" initial={{ opacity: 0, y: 14, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }} transition={spring} style={{ originX: 0, originY: 1 }} className="max-w-[84%] self-start rounded-[9px] rounded-tl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-snug text-[#e9edef]">
-                  Perfect, see you then 👍<span className="ml-2 inline-block translate-y-1 text-[10px] text-[#8696a0]">08:14</span>
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
-          <div className="flex items-center gap-2 bg-[#0b141a] px-2.5 pb-5 pt-1.5">
-            <span className="h-9 flex-1 rounded-full bg-[#202c33] px-4 text-[12.5px] leading-9 text-[#8696a0]">Message</span>
-            <span className="grid size-9 place-items-center rounded-full bg-[#00a884]"><svg viewBox="0 0 24 24" width="16" height="16" fill="#0b141a" aria-hidden><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-2.1a7 7 0 0 0 6-6.9Z" /></svg></span>
+
+            <div className="flex flex-1 flex-col justify-end gap-[5px] px-3.5 pb-2.5">
+              <span className="mb-1.5 self-center rounded-full bg-[#1c1c1e]/90 px-2.5 py-[3px] text-[10.5px] font-medium text-[#98989f]">Today</span>
+              <p className={`${bubble} self-start rounded-[15px] rounded-bl-[4px]`} style={{ background: IN }}>
+                Can you send the deck before we meet?<Time>7:58</Time>
+                <Tail side="in" color={IN} />
+              </p>
+              <AnimatePresence>
+                {stage >= 2 && (
+                  <motion.div key="out" initial={{ opacity: 0, y: 14, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }} transition={spring} style={{ originX: 1, originY: 1, background: OUT }} className="relative max-w-[84%] self-end rounded-[15px] rounded-br-[4px] p-[3px] text-[13.5px] leading-[1.3] text-[#f2f2f2]">
+                    <div className="flex items-center gap-2.5 rounded-[12px] bg-black/20 p-2">
+                      <span className="relative grid h-[34px] w-[27px] shrink-0 place-items-end justify-center rounded-[4px] bg-white pb-1 text-[6.5px] font-bold text-[#e5533c] [clip-path:polygon(0_0,72%_0,100%_22%,100%_100%,0_100%)]">PDF</span>
+                      <div className="min-w-0 leading-tight"><p className="truncate text-[12.5px] font-medium">Q4 review.pdf</p><p className="mt-0.5 text-[10px] text-[#a3c9b8]">12 pages · PDF · 2.4 MB</p></div>
+                    </div>
+                    <p className="px-2 pb-[4px] pt-[5px]">
+                      Here&apos;s the deck. Does <b className="font-semibold">Thursday at 3</b> still work?
+                      <Time out>8:12 <Ticks n={stage >= 3 ? 2 : 1} read={stage >= 4} /></Time>
+                    </p>
+                    <Tail side="out" color={OUT} />
+                  </motion.div>
+                )}
+                {replied && (
+                  <motion.p key="in" initial={{ opacity: 0, y: 14, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }} transition={spring} style={{ originX: 0, originY: 1, background: IN }} className={`${bubble} self-start rounded-[15px] rounded-bl-[4px]`}>
+                    Perfect, see you then 👍<Time>8:14</Time>
+                    <Tail side="in" color={IN} />
+                  </motion.p>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <div className="relative bg-[rgb(22_22_22/0.86)] px-2.5 pb-[22px] pt-2 text-white shadow-[0_-0.5px_0_rgb(255_255_255/0.08)] backdrop-blur-xl">
+              <div className="flex items-center gap-3">
+                {icon(<path d="M12 5v14M5 12h14" />, 22)}
+                <span className="flex h-[30px] flex-1 items-center justify-end rounded-full bg-[#2c2c2e] pr-2 text-[#8e8e93]">{icon(<><rect x="4" y="4" width="16" height="16" rx="5" /><path d="M9 14c.8 1 1.8 1.5 3 1.5s2.2-.5 3-1.5M9.5 9.5h.01M14.5 9.5h.01" /></>, 17)}</span>
+                {icon(<><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5Z" /><circle cx="12" cy="12.5" r="3.5" /></>, 21)}
+                {icon(<><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" /></>, 21)}
+              </div>
+              <i className="absolute bottom-[7px] left-1/2 h-[4px] w-[96px] -translate-x-1/2 rounded-full bg-white/90" />
+            </div>
           </div>
         </div>
       </div>
@@ -126,16 +176,13 @@ const GLASS = "rounded-[16px] bg-[rgb(30_28_25/0.92)] shadow-[inset_0_1px_0_rgb(
 
 /** Parley holding the message for a natural moment, then confirming it went out from your number. */
 function ParleyPill({ stage, className = "" }: { stage: Stage; className?: string }) {
-  const { left, label } = useCountdown(stage === 1)
   const done = stage >= 2
+  const calm = done || undefined
   return (
     <div className={`flex items-center gap-3 p-3 ${GLASS} ${className}`}>
-      <div className="relative grid size-11 shrink-0 place-items-center">
-        <svg viewBox="0 0 40 40" className="absolute inset-0 -rotate-90" aria-hidden>
-          <circle cx="20" cy="20" r="17" fill="none" stroke="rgb(255 246 232 / .1)" strokeWidth="3" />
-          <circle cx="20" cy="20" r="17" fill="none" stroke={done ? "#5fd38d" : "rgb(227 185 141)"} strokeWidth="3" strokeLinecap="round" strokeDasharray={106.8} strokeDashoffset={106.8 * (done ? 0 : stage === 0 ? 1 : 1 - left / HOLD)} style={{ transition: "stroke .4s" }} />
-        </svg>
-        {done ? <span className="text-[#5fd38d]"><Check size={13} /></span> : <span className="font-mono text-[10.5px] tabular-nums text-ink">{stage === 0 ? "–" : label}</span>}
+      <div aria-hidden className="relative grid size-11 shrink-0 place-items-center">
+        <span className="orb-halo absolute -inset-3" data-calm={calm} />
+        <motion.span className="orb size-10" data-calm={calm} initial={false} animate={{ scale: done ? [1, 1.12, 1] : 1 }} transition={{ duration: 0.6, ease }}><i /></motion.span>
       </div>
       <div className="min-w-0 leading-tight">
         <p className="flex items-center gap-1.5 text-[11px] text-muted"><PMark size={14} />Parley</p>
