@@ -3,7 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
-import { agentBehaviour } from "../sessions/settings.ts"
+import { getConnection } from "../sessions/store.ts"
 import { markRead, newByChat, newReactions, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
@@ -254,20 +254,24 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   const pickUrl = `${base}/app`
   const MARK_READ = z.boolean().optional().describe("Mark what this returns as read (default true). Pass false to look without changing what counts as new.")
   const READ_RECEIPTS = z.boolean().optional().describe(
-    "Also mark the messages this returns read on WhatsApp itself, as opening the chat on the phone would. On by default whenever this marks them read (the account holder's setting in Parley); pass false to read without telling the sender. The senders see blue ticks only if the account holder's WhatsApp has read receipts on; otherwise only their own devices mark the chat read. If the account holder turned read receipts off in Parley, none are sent."
+    "Also mark the messages this returns read on WhatsApp itself, as opening the chat on the phone would. On by default whenever this marks them read (each number's setting in Parley); pass false to read without telling the sender. The senders see blue ticks only if that number's WhatsApp has read receipts on; otherwise only its own devices mark the chat read. On a number whose read receipts the account holder turned off in Parley, none are sent."
   )
 
   /**
-   * Send platform read receipts for the shown messages from the other side, per connection. Best effort: the read
-   * itself never fails over it; the answer says how many were marked, or why none were.
+   * Read receipts for what a read showed: sent when asked for, or by default when the read marks it read; per number,
+   * and never on a number whose receipts the account holder turned off (an agent that asked is told). Best effort:
+   * the read itself never fails over it; the answer says how many were marked, or why none were. Undefined when none
+   * were wanted.
    */
-  const RECEIPTS_OFF = "The account holder turned read receipts off in Parley's settings, so none were sent."
-  /** Whether to send receipts for a read: asked for, or by default when it marks read; never if the account holder said no. */
-  const receiptsFor = async (userId: string, asked: boolean | undefined, marking: boolean) => {
-    const want = asked ?? marking
-    if (!want) return { send: false as const }
-    if (!(await agentBehaviour(ctx.sql, userId)).readReceipts) return { send: false as const, off: asked === true }
-    return { send: true as const }
+  const receiptsFor = async (userId: string, asked: boolean | undefined, marking: boolean, messages: Array<{ connectionId: string; chatId: string; id: string; fromMe: boolean }>) => {
+    if (!(asked ?? marking)) return undefined
+    const result = await sendReceipts(userId, messages)
+    // Only worth saying when something went out or went wrong, or to an agent that asked (and why none went).
+    if (asked !== true) {
+      delete result.off
+      if (!result.marked && !result.error) return undefined
+    }
+    return result
   }
 
   const sendReceipts = async (userId: string, messages: Array<{ connectionId: string; chatId: string; id: string; fromMe: boolean }>) => {
@@ -279,14 +283,24 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     }
     let marked = 0
     const errors: string[] = []
+    const off: string[] = []
     for (const [connectionId, list] of byConn) {
+      const conn = await getConnection(ctx.sql, connectionId)
+      if (!conn || conn.accountId !== userId) continue
+      if (!conn.readReceipts) {
+        off.push(accountLabel(conn) ?? connectionId)
+        continue
+      }
       try {
         marked += (await ctx.sessions.sendReadReceipts(userId, connectionId, list)).marked
       } catch (e) {
         errors.push(known(e) ? (e as Error).message : "could not send read receipts")
       }
     }
-    return { marked, ...(errors.length ? { error: [...new Set(errors)].join("; ") } : {}) }
+    const out: { marked: number; error?: string; off?: string } = { marked }
+    if (errors.length) out.error = [...new Set(errors)].join("; ")
+    if (off.length) out.off = `The account holder turned read receipts off for ${off.join(", ")} in Parley, so none were sent there.`
+    return out
   }
 
   /**
@@ -341,7 +355,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what. `new_since_last_read` says how much came in from the other side since these chats were last read (messages and reactions, per chat); new messages and reactions carry `new: true`, and `new_reactions` lists every new reaction with the message it's on (even one on an old message not shown). Reading marks what it shows as read, for every agent on the account; pass mark_read: false to just look. Paging back with `before` never marks anything. Reading that marks read also sends read receipts on WhatsApp by default (blue ticks, if the account holder has them on; they can turn this off in Parley): pass read_receipts: false to read without telling the sender. Looking (mark_read: false) or paging back sends none unless read_receipts is true.",
+      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what. `new_since_last_read` says how much came in from the other side since these chats were last read (messages and reactions, per chat); new messages and reactions carry `new: true`, and `new_reactions` lists every new reaction with the message it's on (even one on an old message not shown). Reading marks what it shows as read, for every agent on the account; pass mark_read: false to just look. Paging back with `before` never marks anything. Reading that marks read also sends read receipts on WhatsApp by default (blue ticks, if that number's WhatsApp has them on; the account holder can turn this off per number in Parley): pass read_receipts: false to read without telling the sender. Looking (mark_read: false) or paging back sends none unless read_receipts is true.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
@@ -374,9 +388,8 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
             : `${plural(unshown, "new message")} didn't fit in this answer${marking ? " (chats shown here still count as read up to their newest message)" : ""}: page back with \`before\`, raise \`limit\`, or read one chat with chat_id.`
         }
         if (marking) await markShown(userId, messages, fresh.reactions)
-        const receipts = await receiptsFor(userId, read_receipts, marking)
-        if (receipts.send) out.read_receipts = await sendReceipts(userId, messages)
-        else if (receipts.off) out.read_receipts = { marked: 0, off: RECEIPTS_OFF }
+        const receipts = await receiptsFor(userId, read_receipts, marking, messages)
+        if (receipts) out.read_receipts = receipts
         if (!messages.length) {
           const chats = await ctx.sessions.inboxChats(userId, where)
           out.note = chats.length
@@ -468,7 +481,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),
         idempotency_key: z.string().min(1).max(200).optional().describe("Retrying with the same key returns the original message instead of sending twice."),
-        typing: z.boolean().optional().describe("Show \"typing…\" in the chat first (\"recording…\" before a voice note), for about as long as a person would take: ~24s per 100 characters (50 words a minute), at most a minute, then send. On by default (the account holder's setting in Parley); pass false when it should just go. If the account holder turned typing off, it never shows."),
+        typing: z.boolean().optional().describe("Show \"typing…\" in the chat first (\"recording…\" before a voice note), for about as long as a person would take: ~24s per 100 characters (50 words a minute), at most a minute, then send. On by default (the number's setting in Parley); pass false when it should just go. On a number whose typing the account holder turned off, it never shows."),
       },
     },
     async ({ connection_id, to, text, media, kind, not_before, idempotency_key, typing }, extra) => {
@@ -477,14 +490,14 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         if (!text && !media) return fail("give `text`, `media`, or both")
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: to })
         const file = media ? resolveMedia(media) : undefined
-        const typingOn = (await agentBehaviour(ctx.sql, userId)).typing
+        const typingOn = conn.typing
         const showTyping = typingOn && typing !== false
         const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
           to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId, typing: showTyping,
         })
         return json({
           ...queuedView(message, replayed), account: accountLabel(conn),
-          ...(typing === true && !typingOn ? { typing_note: "The account holder turned typing off in Parley's settings, so it sends without it." } : {}),
+          ...(typing === true && !typingOn ? { typing_note: `The account holder turned typing off for ${accountLabel(conn) ?? "this number"} in Parley, so it sends without it.` } : {}),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not send")
@@ -514,8 +527,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         const fresh = await newSince(userId, { connectionId: conn.id, chatId: chat_id }, account)
         const shownNew = messages.filter((m) => m.isNew).length
         if (mark_read !== false) await markShown(userId, messages.map((m) => ({ ...m, connectionId: conn.id })), fresh.reactions)
-        const want = await receiptsFor(userId, read_receipts, mark_read !== false)
-        const receipts = want.send ? await sendReceipts(userId, messages.map((m) => ({ ...m, connectionId: conn.id }))) : want.off ? { marked: 0, off: RECEIPTS_OFF } : undefined
+        const receipts = await receiptsFor(userId, read_receipts, mark_read !== false, messages.map((m) => ({ ...m, connectionId: conn.id })))
         return json({
           account: accountLabel(conn), chat_id, answered, new_since_last_read: fresh.summary, messages: messages.map(messageOut),
           ...(receipts ? { read_receipts: receipts } : {}),

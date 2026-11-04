@@ -10,6 +10,13 @@ export type Connection = {
   timezone: string; country: string | null; haltedReason: string | null; pausedUntil: string | null
   /** Sends a local day may hold, every kind together. */
   dailyLimit: number
+  /**
+   * How agents behave on this number, both on unless the person turns them off: reading a chat marks it read on the
+   * channel too (blue ticks, if the number's own WhatsApp setting allows), and a message shows "typing…" first. An
+   * agent can skip either on a call, never turn one on that's off here.
+   */
+  readReceipts: boolean
+  typing: boolean
 }
 /**
  * Where the account appears to live (its active hours follow the time zone, its exit IP the country), and how many
@@ -22,15 +29,16 @@ type Row = {
   history_started_at: Date | null; history_progress: number | null; history_done_at: Date | null
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
   daily_limit: number
+  read_receipts: boolean; typing: boolean
 }
 const row = (r: Row): Connection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, handle: r.handle, displayName: r.display_name,
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
-  dailyLimit: r.daily_limit,
+  dailyLimit: r.daily_limit, readReceipts: r.read_receipts, typing: r.typing,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, read_receipts, typing"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(
@@ -38,6 +46,15 @@ export async function createConnection(sql: Sql, accountId: string, channel: str
     [accountId, channel, locale.timezone ?? null, locale.country?.toUpperCase() ?? null]
   )
   return row(r!)
+}
+
+/** Turn read receipts and typing on or off for one number. Only the account's own connections. */
+export async function setBehaviour(sql: Sql, accountId: string, connectionId: string, b: { readReceipts: boolean; typing: boolean }): Promise<boolean> {
+  const rows = await sql<{ id: string }>(
+    `update parley.connection set read_receipts = $3, typing = $4 where id = $2 and account_id = $1 returning id`,
+    [accountId, connectionId, b.readReceipts, b.typing]
+  )
+  return rows.length > 0
 }
 
 export async function getConnection(sql: Sql, id: string): Promise<Connection | undefined> {

@@ -123,6 +123,30 @@ test("the chat picker: sign-in required (and resumes after), owner only, saves t
   assert.equal((await sessions.chats(accountId, connectionId, { syncedOnly: true })).length, 2)
 })
 
+test("each number has its own read receipts and typing: both start on; the owner turns either off and back on, nobody else can", async () => {
+  const { connectionId } = await linked("switches@parley.test")
+  const { connectionId: otherNumber } = await linked("switches@parley.test")
+  const cookie = await browser("switches@parley.test")
+  const intruder = await browser("not-switches@parley.test")
+  const page = async (id: string) => (await fetch(`${base}/app/connections/${id}`, { headers: { cookie } })).text()
+  const checked = (html: string, name: string) => new RegExp(`name="${name}" value="on" checked`).test(html)
+  const save = (who: string, id: string, fields: Record<string, string>) => fetch(`${base}/app/connections/${id}/behaviour`, { method: "POST", redirect: "manual", headers: { cookie: who, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) })
+
+  const first = await page(connectionId)
+  assert.ok(checked(first, "read_receipts") && checked(first, "typing"))
+  // An unchecked box isn't sent: only typing left on, on this number only.
+  const res = await save(cookie, connectionId, { typing: "on" })
+  assert.equal(res.headers.get("location"), `/app/connections/${connectionId}`)
+  const after = await page(connectionId)
+  assert.ok(!checked(after, "read_receipts") && checked(after, "typing"))
+  assert.ok(checked(await page(otherNumber), "read_receipts"))
+  // Someone else can't touch it.
+  assert.equal((await save(intruder, connectionId, { read_receipts: "on", typing: "on" })).status, 404)
+  assert.ok(!checked(await page(connectionId), "read_receipts"))
+  await save(cookie, connectionId, { read_receipts: "on", typing: "on" })
+  assert.ok(checked(await page(connectionId), "read_receipts"))
+})
+
 test("relink signs the old link out and opens a fresh QR for the same account; nobody else can relink it", async () => {
   const { accountId, connectionId: oldId } = await linked("relinker@parley.test")
   const cookie = await browser("relinker@parley.test")
