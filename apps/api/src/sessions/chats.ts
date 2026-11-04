@@ -25,6 +25,17 @@ export async function upsertChats(sql: Sql, connectionId: string, chats: Chat[])
   )
 }
 
+/** Name one-to-one chats already on the connection (an address book is far bigger than the chat list: no inserts). */
+export async function nameChats(sql: Sql, connectionId: string, names: Array<{ id: string; name: string }>): Promise<void> {
+  if (!names.length) return
+  await sql(
+    `update parley.chat c set name = left(n.name, 200), updated_at = now()
+       from jsonb_to_recordset($2::jsonb) as n(id text, name text)
+      where c.connection_id = $1 and c.id = n.id and c.kind = 'direct' and nullif(n.name, '') is not null and c.name is distinct from left(n.name, 200)`,
+    [connectionId, JSON.stringify(names)]
+  )
+}
+
 /**
  * Record activity in a chat a message just arrived in. Channels normally report the chat first (with its kind and
  * name); if one didn't, it's listed as a direct chat until a `chats` event corrects it.

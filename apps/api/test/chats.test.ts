@@ -3,6 +3,7 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { testServer } from "./support.ts"
+import { nameChats } from "../src/sessions/chats.ts"
 
 const fake = makeFakeChannel("fake")
 const { ctx, sql, base } = await testServer([fake.channel])
@@ -121,4 +122,35 @@ test("the chat picker: sign-in required (and resumes after), owner only, saves t
   assert.equal(saved.headers.get("location"), `${path}?saved=1`)
   assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id), ["team"])
   assert.match(await (await fetch(`${base}${path}?saved=1`, { headers: { cookie } })).text(), /value="team" checked/)
+})
+
+test("relink signs the old link out and opens a fresh QR for the same account; nobody else can relink it", async () => {
+  const { accountId, connectionId: oldId } = await linked("relinker@parley.test")
+  const cookie = await browser("relinker@parley.test")
+  const intruder = await browser("not-relinker@parley.test")
+  assert.equal((await fetch(`${base}/app/connections/${oldId}/relink`, { method: "POST", redirect: "manual", headers: { cookie: intruder } })).status, 404)
+
+  // An account with no people yet (groups only) is offered the relink.
+  fake.simulator.announceChats(oldId, [{ id: "club", name: "Club", kind: "group" }])
+  await waitUntil(() => sessions.chats(accountId, oldId), (c) => c.length === 1)
+  assert.match(await (await fetch(`${base}/app/connections/${oldId}/chats`, { headers: { cookie } })).text(), new RegExp(`action="/app/connections/${oldId}/relink"`))
+
+  const res = await fetch(`${base}/app/connections/${oldId}/relink`, { method: "POST", redirect: "manual", headers: { cookie } })
+  assert.equal(res.status, 302)
+  const newId = res.headers.get("location")!.match(/\/link\/([0-9a-f-]{36})/)![1]!
+  assert.notEqual(newId, oldId)
+  const all = await sessions.list(accountId)
+  assert.equal(all.find((c) => c.id === oldId)?.status, "logged_out")
+  assert.ok(all.find((c) => c.id === newId))
+})
+
+test("address-book names fill in chats already listed, never add new ones, and leave groups alone", async () => {
+  const { accountId, connectionId } = await linked("namer@parley.test")
+  fake.simulator.announceChats(connectionId, [{ id: "p1", name: null, kind: "direct" }, { id: "g1", name: "Club", kind: "group" }])
+  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 2)
+  await nameChats(sql, connectionId, [{ id: "p1", name: "Priya" }, { id: "g1", name: "Renamed" }, { id: "stranger", name: "Not a chat" }])
+  const byId = new Map((await sessions.chats(accountId, connectionId)).map((c) => [c.id, c]))
+  assert.equal(byId.size, 2)
+  assert.equal(byId.get("p1")?.name, "Priya")
+  assert.equal(byId.get("g1")?.name, "Club")
 })

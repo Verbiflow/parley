@@ -1,5 +1,5 @@
 import makeWASocket, {
-  DisconnectReason, makeCacheableSignalKeyStore, proto, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
+  DisconnectReason, makeCacheableSignalKeyStore, proto, ALL_WA_PATCH_NAMES, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
   type WAMessage, type Contact,
 } from "@whiskeysockets/baileys"
 import { proxyAgent } from "@parley/proxies/agent"
@@ -109,18 +109,35 @@ export const whatsappChannel: Channel = {
       return { id, kind: isJidGroup(id) ? "group" : "direct", name: name || names.get(id) || names.get(jid) || null, lastMessageAt: at }
     }
 
+    // Ids whose name is the one saved in the address book: someone's own WhatsApp name never replaces it.
+    const saved = new Set<string>()
+    /** Remember a name for these ids; returns the ids whose name changed. */
+    const learnName = (ids: string[], name: string, isSaved: boolean): string[] => {
+      const changed: string[] = []
+      for (const id of ids) {
+        if (!isSaved && saved.has(id)) continue
+        if (isSaved) saved.add(id)
+        if (names.get(id) !== name) { names.set(id, name); changed.push(id) }
+      }
+      return changed
+    }
+    /** Tell the host about new names, so chats it already has (from before a restart, too) get them. */
+    const announceNames = (ids: string[]) => {
+      const out = ids.filter((id) => !isJidGroup(id)).map((id) => ({ id, name: names.get(id)! })).filter((n) => n.name)
+      for (let i = 0; i < out.length; i += 500) emit({ type: "names", names: out.slice(i, i + 500) })
+    }
+
     const learnContacts = (contacts: Array<Partial<Contact>>) => {
-      const renamed: Chat[] = []
+      const changed: string[] = []
       for (const ct of contacts) {
         pair(ct.id, ct.lid); pair(ct.id, ct.jid); pair(ct.jid, ct.lid)
         const name = ct.name || ct.notify || ct.verifiedName
         if (!ct.id || !name) continue
-        for (const id of new Set([ct.id, ct.jid, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser).map(canon))) {
-          names.set(id, name)
-          if (known.has(id)) renamed.push(chatOf(id, name))
-        }
+        const raw = [ct.id, ct.jid, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser)
+        changed.push(...learnName([...new Set([...raw, ...raw.map(canon)])], name, Boolean(ct.name)))
       }
-      report(renamed)
+      report(changed.filter((id) => known.has(id)).map((id) => chatOf(id, names.get(id))))
+      announceNames(changed)
     }
 
     const messageOf = (m: WAMessage): InboundMessage | undefined => {
@@ -156,6 +173,41 @@ export const whatsappChannel: Channel = {
       }
     }
 
+    /**
+     * Address-book names live in WhatsApp's app-state sync. Baileys runs it the moment history lands, often before its
+     * keys arrive, and doesn't retry, so one-to-one chats end up nameless. Run it ourselves once the link is open (and
+     * once more later if that fails); it emits contacts, which name the chats. Then pair saved numbers with private ids.
+     */
+    const syncNames = (s: typeof sock, wait: number, triesLeft: number) => {
+      setTimeout(async () => {
+        if (stopped || sock !== s) return
+        try { await s.resyncAppState(ALL_WA_PATCH_NAMES, true) }
+        catch { if (triesLeft > 1) syncNames(s, 30_000, triesLeft - 1); return }
+        await pairSavedNumbers(s)
+      }, wait).unref?.()
+    }
+    /**
+     * Some chats come only under a private id. WhatsApp answers number → private id (not the reverse), so ask it for
+     * the private ids of saved numbers we can't pair yet, a few at a time, and name those private-id chats.
+     */
+    const pairSavedNumbers = async (s: typeof sock) => {
+      const paired = new Set(phoneOfLid.values())
+      const todo = [...saved].filter((j) => j.endsWith("@s.whatsapp.net") && !paired.has(j))
+      const lids: string[] = []
+      for (let i = 0; i < todo.length && !stopped && sock === s; i += 50) {
+        try {
+          for (const r of (await s.onWhatsApp(...todo.slice(i, i + 50))) ?? []) {
+            const lid = (r as { lid?: string }).lid
+            pair(r.jid, lid)
+            const name = names.get(jidNormalizedUser(r.jid))
+            if (lid && name) lids.push(...learnName([jidNormalizedUser(lid)], name, true))
+          }
+        } catch { break }
+        await new Promise((r) => setTimeout(r, 1500))
+      }
+      announceNames(lids)
+    }
+
     const connect = () => {
       sock = makeWASocket({
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
@@ -181,6 +233,7 @@ export const whatsappChannel: Channel = {
           sock.groupFetchAllParticipating()
             .then((groups) => report(Object.values(groups).map((g) => chatOf(g.id, g.subject))))
             .catch(() => {})
+          syncNames(sock, 8000, 2)
         }
         if (u.connection === "close") {
           if (stopped) return

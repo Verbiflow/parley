@@ -43,6 +43,8 @@ export type ChannelEvent =
   | { type: "state"; state: string }
   /** Chats the channel learned of (initial history sync, a new conversation, a name change). An upsert, not a full list. */
   | { type: "chats"; chats: Chat[] }
+  /** Names for one-to-one chats (e.g. the address book). Only names chats the host already has; never adds any. */
+  | { type: "names"; names: Array<{ id: string; name: string }> }
   /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
   | { type: "message"; message: InboundMessage }
   /** The connection closed. `reason` is for logs/UI, not control flow. */
