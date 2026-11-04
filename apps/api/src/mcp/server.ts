@@ -3,6 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
+import type { StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -47,6 +48,15 @@ const INLINE_TEXT_BYTES = 512 * 1024
 const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javascript)$)/
 
 const FOLLOW_UP = "Call message_status with this id to see whether it has gone out."
+
+/** A message as agents see it (read_inbox, load_history). */
+function messageOut(m: StoredMessage) {
+  return {
+    id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
+    ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null, size: m.media.size ?? null, width: m.media.width ?? null, height: m.media.height ?? null, seconds: m.media.seconds ?? null } } : {}),
+    ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at })) } : {}),
+  }
+}
 
 /** What send_message and react_to_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
@@ -197,9 +207,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         const out: Record<string, unknown> = {
           messages: messages.map((m) => ({
             channel: m.channel, connection_id: m.connectionId, account: account.get(m.connectionId) ?? null, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
-            id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
-            ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null, size: m.media.size ?? null, width: m.media.width ?? null, height: m.media.height ?? null, seconds: m.media.seconds ?? null } } : {}),
-            ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at })) } : {}),
+            ...messageOut(m),
           })),
         }
         if (!messages.length) {
@@ -270,6 +278,32 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not send")
+      }
+    }
+  )
+
+  server.registerTool(
+    "load_history",
+    {
+      title: "Load a chat's history",
+      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too.",
+      inputSchema: {
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the chat.`),
+        chat_id: z.string().describe("The chat (chat_id from list_chats or read_inbox)."),
+        count: z.number().int().min(1).max(50).optional().describe("How many of the latest messages (default 20, at most 50)."),
+      },
+    },
+    async ({ connection_id, chat_id, count }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id })
+        const { answered, messages } = await ctx.sessions.loadHistory(userId, conn.id, chat_id, count ?? 20)
+        return json({
+          account: accountLabel(conn), chat_id, answered, messages: messages.map(messageOut),
+          ...(answered ? {} : { note: "The phone didn't answer in time (it may be offline or asleep). These are the messages Parley already has; try again later." }),
+        })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not load the history")
       }
     }
   )

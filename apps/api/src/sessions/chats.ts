@@ -251,20 +251,13 @@ export async function saveReactions(sql: Sql, connectionId: string, reactions: R
   )
 }
 
-/**
- * Where to backfill from: for each synced chat with messages since `since`, its newest message (the anchor history
- * is fetched back from) and how many came since (how far back to ask).
- */
-export async function backfillAnchors(sql: Sql, connectionId: string, since: Date): Promise<Array<{ chatId: string; messageId: string; fromMe: boolean; sender: string; at: string; count: number }>> {
-  const rows = await sql<{ chat_id: string; id: string; from_me: boolean; sender: string; sent_at: Date; n: number }>(
-    `select distinct on (m.chat_id) m.chat_id, m.id, m.from_me, m.sender, m.sent_at,
-            count(*) over (partition by m.chat_id)::int as n
-       from parley.message m join parley.chat c on c.connection_id = m.connection_id and c.id = m.chat_id and c.synced
-      where m.connection_id = $1 and m.sent_at >= $2
-      order by m.chat_id, m.sent_at desc, m.seq desc`,
-    [connectionId, since]
+/** A chat's newest stored message: where fetching older history from the phone starts. */
+export async function newestMessage(sql: Sql, connectionId: string, chatId: string): Promise<{ messageId: string; fromMe: boolean; sender: string; at: string } | undefined> {
+  const [r] = await sql<{ id: string; from_me: boolean; sender: string; sent_at: Date }>(
+    `select id, from_me, sender, sent_at from parley.message where connection_id = $1 and chat_id = $2 order by sent_at desc, seq desc limit 1`,
+    [connectionId, chatId]
   )
-  return rows.map((r) => ({ chatId: r.chat_id, messageId: r.id, fromMe: r.from_me, sender: r.sender, at: r.sent_at.toISOString(), count: r.n }))
+  return r && { messageId: r.id, fromMe: r.from_me, sender: r.sender, at: r.sent_at.toISOString() }
 }
 
 /** A stored message's attachment, with the channel's fetch handle. Undefined when there's no such message or no media. */

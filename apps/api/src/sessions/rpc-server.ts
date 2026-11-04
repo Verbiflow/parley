@@ -58,7 +58,7 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
       if (req?.media && typeof req.media.data === "string") req.media.data = Buffer.from(req.media.data, "base64")
     }
     if (op === "setLocale") args.length = Math.min(args.length, 3)
-    if (op === "media") args.length = Math.min(args.length, 4)
+    if (op === "media" || op === "loadHistory") args.length = Math.min(args.length, 4)
 
     try {
       const fn = sessions[op] as (...a: unknown[]) => Promise<unknown>

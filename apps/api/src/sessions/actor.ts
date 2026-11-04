@@ -9,7 +9,7 @@ import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../
 import type { MediaFetcher } from "./fetch-media.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, backfillAnchors, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -42,8 +42,11 @@ export type MediaDetails = Omit<MediaInfo, "ref">
 /** An attachment as a stream, for download links: any size, never held in memory whole. */
 export type MediaStream = { body: ReadableStream<Uint8Array>; mimetype: string; kind: string; fileName: string | null }
 
-/** Between one chat's history request and the next, so a backfill doesn't hammer the phone. */
-const BACKFILL_SPACING_MS = 3_000
+/** The most messages load_history asks the phone for at once (WhatsApp's own page size). */
+const HISTORY_MAX = 50
+/** How long load_history waits for the phone; then, once the first of its messages land, for the rest of the batch. */
+const HISTORY_WAIT_MS = 20_000
+const HISTORY_SETTLE_MS = 2_000
 
 /** The largest attachment fetched whole (to hand an agent inline). Bigger ones go through a download link. */
 export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
@@ -71,7 +74,7 @@ export async function readAll(body: ReadableStream<Uint8Array>, max: number): Pr
 export type SessionsApi = Pick<
   Sessions,
   | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
-  | "media" | "mediaInfo" | "mediaStream" | "backfill"
+  | "media" | "mediaInfo" | "mediaStream" | "loadHistory"
   | "enqueue" | "setLocale"
 >
 
@@ -80,7 +83,7 @@ export type SessionsApi = Pick<
  * (`enqueue`, `setLocale`) so pacing, its row locks and the dispatcher stay in one place. Everything else is a plain
  * Postgres read the edge does itself.
  */
-export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media", "backfill"] as const
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media", "loadHistory"] as const
 export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
@@ -124,6 +127,8 @@ type SessionsContext = {
 
 export class Sessions {
   readonly #live = new Map<string, Entry>()
+  /** load_history calls waiting for a chat's older messages to arrive, by connection + chat. */
+  readonly #arrivals = new Map<string, Set<(at: number) => void>>()
   #seal: SecretSeal | undefined
   #dispatcher: ReturnType<typeof setInterval> | undefined
   #dispatching: Promise<number> | undefined
@@ -281,35 +286,55 @@ export class Sessions {
   }
 
   /**
-   * Re-fetch recent history from the platform, to fill in what older code didn't keep (attachments, previews,
-   * reactions). For each synced chat with messages since `since`, asks for that many messages before its newest one,
-   * one chat every few seconds (in the background: this returns the plan). Messages already stored are filled in,
-   * never duplicated.
+   * The last `count` messages of a chat, fetched from the account holder's phone: ones Parley never stored (before it
+   * was linked, or that failed to decrypt) are added, ones it has are filled in (attachments, reactions). Asks for the
+   * messages before the newest one stored, waits for the phone's answer (it must be online), and returns the chat's
+   * last `count` messages either way, with `answered` saying whether the phone replied in time.
    */
-  async backfill(accountId: string, connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
+  async loadHistory(accountId: string, connectionId: string, chatId: string, count: number): Promise<{ answered: boolean; messages: StoredMessage[] }> {
     await this.#owned(accountId, connectionId)
-    const routed = await this.#route(connectionId, { op: "backfill", args: { since } })
-    if (routed.ok) return routed.result as { chats: number; messages: number }
-    return this.#localBackfill(connectionId, since)
+    const chat = await getChat(this.ctx.sql, connectionId, chatId)
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
+    const n = Math.max(1, Math.min(HISTORY_MAX, Math.floor(count)))
+    const routed = await this.#route(connectionId, { op: "loadHistory", args: { chatId, count: n } })
+    if (routed.ok) return routed.result as { answered: boolean; messages: StoredMessage[] }
+    return this.#localLoadHistory(connectionId, chatId, n)
   }
 
-  async #localBackfill(connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
+  async #localLoadHistory(connectionId: string, chatId: string, n: number): Promise<{ answered: boolean; messages: StoredMessage[] }> {
     let entry = this.#live.get(connectionId)
     if (!entry?.live) entry = await this.#hydrate(connectionId)
     if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
-    const live = entry.live
-    if (!live.backfill) throw new ConnectError("not_found", "this channel can't fetch history")
-    const anchors = await backfillAnchors(this.ctx.sql, connectionId, new Date(since))
-    void (async () => {
-      for (const [i, a] of anchors.entries()) {
-        if (i) await new Promise((r) => setTimeout(r, BACKFILL_SPACING_MS))
-        if (this.#live.get(connectionId)?.live !== live) return
-        await live.backfill!({ threadId: a.chatId, messageId: a.messageId, fromMe: a.fromMe, sender: a.sender, at: a.at }, a.count)
-          .catch((e: unknown) => console.error(JSON.stringify({ msg: "backfill request failed", connectionId, error: e instanceof Error ? e.message : String(e) })))
+    if (!entry.live.backfill) throw new ConnectError("not_found", "this channel can't fetch history")
+    const anchor = await newestMessage(this.ctx.sql, connectionId, chatId)
+    if (!anchor) throw new ConnectError("not_found", "Parley has no message in this chat yet to fetch history back from; it can once one arrives")
+    const before = Date.parse(anchor.at)
+    const key = `${connectionId}\n${chatId}`
+    // Resolves once older messages for this chat land (plus a moment for the rest of the batch), or on timeout.
+    let stop!: (answered: boolean) => void
+    const answered = new Promise<boolean>((resolve) => {
+      let settling: ReturnType<typeof setTimeout> | undefined
+      const listeners = this.#arrivals.get(key) ?? new Set()
+      this.#arrivals.set(key, listeners)
+      const onArrive = (at: number) => { if (at < before && !settling) settling = setTimeout(() => stop(true), HISTORY_SETTLE_MS) }
+      const timer = setTimeout(() => stop(false), HISTORY_WAIT_MS)
+      stop = (ok) => {
+        clearTimeout(timer)
+        if (settling) clearTimeout(settling)
+        listeners.delete(onArrive)
+        if (!listeners.size) this.#arrivals.delete(key)
+        resolve(ok)
       }
-      console.log(JSON.stringify({ msg: "backfill requested", connectionId, chats: anchors.length }))
-    })()
-    return { chats: anchors.length, messages: anchors.reduce((n, a) => n + Math.min(50, a.count), 0) }
+      listeners.add(onArrive)
+    })
+    try {
+      // The newest stored message is one of the `n`; ask for the rest before it.
+      await entry.live.backfill({ threadId: chatId, ...anchor }, Math.max(1, n - 1))
+    } catch (e) {
+      stop(false)
+      throw e
+    }
+    return { answered: await answered, messages: await readMessages(this.ctx.sql, connectionId, chatId, { limit: n }) }
   }
 
   /** What a message's attachment is, from the database alone (no download). */
@@ -479,8 +504,8 @@ export class Sessions {
         return null
       case "media":
         return this.#localMedia(connId, String(args.ref))
-      case "backfill":
-        return this.#localBackfill(connId, String(args.since))
+      case "loadHistory":
+        return this.#localLoadHistory(connId, String(args.chatId), Number(args.count))
       case "flushHistory":
         await this.#flushHistory(connId, (args.chatIds as string[]) ?? [])
         return null
@@ -565,6 +590,8 @@ export class Sessions {
         await touchChats(this.ctx.sql, connectionId, ms.map((m) => ({ id: m.threadId, at: m.at })))
         await saveMessages(this.ctx.sql, connectionId, ms)
         if (entry.history) for (const m of ms) this.#hold(entry.history, m)
+        // A load_history waiting on this chat hears that (older) messages arrived.
+        for (const m of ms) for (const fn of this.#arrivals.get(`${connectionId}\n${m.threadId}`) ?? []) fn(Date.parse(m.at))
         break
       }
       case "reactions":
