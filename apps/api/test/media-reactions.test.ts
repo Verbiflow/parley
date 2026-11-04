@@ -187,7 +187,8 @@ test("files of every kind: videos give their preview and a download link, text f
   deliver("csv", { kind: "document", mimetype: "text/csv", fileName: "people.csv", size: 20, ref: "name,age\nana,30" })
   deliver("pdf", { kind: "document", mimetype: "application/pdf", fileName: "deck.pdf", size: 9, ref: "%PDF-deck" })
   deliver("zip", { kind: "document", mimetype: "application/zip", fileName: "a.zip", size: 3, ref: "zip" })
-  await waitUntil(() => sessions.inbox(account.id, { limit: 10 }), (m) => m.length === 4)
+  deliver("vn", { kind: "audio", mimetype: "audio/ogg; codecs=opus", size: 11, seconds: 5, ref: "OggS-voice" })
+  await waitUntil(() => sessions.inbox(account.id, { limit: 10 }), (m) => m.length === 5)
 
   // read_inbox stays lean: no preview bytes in the listing.
   const listed = (await callTool(base, token, "read_inbox", {})).result.messages
@@ -197,7 +198,9 @@ test("files of every kind: videos give their preview and a download link, text f
   const about = JSON.parse(video.content[0]!.text!)
   assert.equal(about.seconds, 42)
   assert.match(about.download_url, /\/media\//)
+  // Too big to attach (80 MB): the preview, and the link to save it from.
   assert.deepEqual(video.content.slice(1).map((c) => [c.type, c.data]), [["image", thumb]])
+  assert.match(about.note, /Too big to attach/)
 
   const csv = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "csv" })
   assert.equal(csv.content[1]!.text, "name,age\nana,30")
@@ -205,7 +208,18 @@ test("files of every kind: videos give their preview and a download link, text f
   assert.equal(pdf.content[1]!.type, "resource")
   assert.equal(Buffer.from(pdf.content[1]!.resource!.blob, "base64").toString(), "%PDF-deck")
   const zip = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "zip" })
-  assert.equal(zip.content.length, 1)
+  assert.equal(zip.content[1]!.type, "resource")
+
+  // A voice note comes back as the file itself (named, so a client saves it as such), plus a ready save command.
+  const vn = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "vn" })
+  const vnAbout = JSON.parse(vn.content[0]!.text!)
+  assert.equal(vnAbout.file_name, "voice-note-vn.ogg")
+  assert.equal(vnAbout.save_with, `curl -fsSL -o 'voice-note-vn.ogg' '${vnAbout.download_url}'`)
+  const file = vn.content[1] as { type: string; resource: { uri: string; mimeType: string; blob: string } }
+  assert.deepEqual([file.type, file.resource.uri, file.resource.mimeType], ["resource", "parley://media/voice-note-vn.ogg", "audio/ogg"])
+  assert.equal(Buffer.from(file.resource.blob, "base64").toString(), "OggS-voice")
+  assert.ok(!vn.content.some((b) => b.type === "audio"))
+  assert.equal(await (await fetch(vnAbout.download_url)).text(), "OggS-voice")
 
   // The link: the whole file, as a download that can't render as a page here; anything else is refused.
   const res = await fetch(about.download_url)
