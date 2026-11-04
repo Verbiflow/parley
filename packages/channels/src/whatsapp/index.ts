@@ -1,5 +1,5 @@
 import makeWASocket, {
-  DisconnectReason, makeCacheableSignalKeyStore, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
+  DisconnectReason, makeCacheableSignalKeyStore, proto, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
   type WAMessage, type Contact,
 } from "@whiskeysockets/baileys"
 import { proxyAgent } from "@parley/proxies/agent"
@@ -77,6 +77,16 @@ export const whatsappChannel: Channel = {
     // Names learned from contacts / push names, and the chats we've reported — so a name that arrives later updates them.
     const names = new Map<string, string>()
     const known = new Map<string, Chat>()
+    // WhatsApp addresses a person by phone number (…@s.whatsapp.net) or by a private id (…@lid). Private ids we've
+    // seen paired with a number, so a person is one chat under their number, not two (or one opaque id).
+    const phoneOfLid = new Map<string, string>()
+    const pair = (a?: string | null, b?: string | null) => {
+      const ids = [a, b].filter((x): x is string => Boolean(x)).map(jidNormalizedUser)
+      const lid = ids.find((j) => j.endsWith("@lid")), pn = ids.find((j) => j.endsWith("@s.whatsapp.net"))
+      if (lid && pn) phoneOfLid.set(lid, pn)
+    }
+    /** The id a direct chat is kept under: its phone-number form when we know it. Groups are unchanged. */
+    const canon = (jid: string): string => (jid.endsWith("@lid") ? phoneOfLid.get(jidNormalizedUser(jid)) ?? jid : jid)
 
     const report = (chats: Chat[]) => {
       const out: Chat[] = []
@@ -94,15 +104,18 @@ export const whatsappChannel: Channel = {
       }
       if (out.length) emit({ type: "chats", chats: out })
     }
-    const chatOf = (jid: string, name?: string | null, at?: string): Chat =>
-      ({ id: jid, kind: isJidGroup(jid) ? "group" : "direct", name: name || null, lastMessageAt: at })
+    const chatOf = (jid: string, name?: string | null, at?: string): Chat => {
+      const id = canon(jid)
+      return { id, kind: isJidGroup(id) ? "group" : "direct", name: name || names.get(id) || names.get(jid) || null, lastMessageAt: at }
+    }
 
     const learnContacts = (contacts: Array<Partial<Contact>>) => {
       const renamed: Chat[] = []
       for (const ct of contacts) {
+        pair(ct.id, ct.lid); pair(ct.id, ct.jid); pair(ct.jid, ct.lid)
         const name = ct.name || ct.notify || ct.verifiedName
         if (!ct.id || !name) continue
-        for (const id of new Set([ct.id, ct.jid, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser))) {
+        for (const id of new Set([ct.id, ct.jid, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser).map(canon))) {
           names.set(id, name)
           if (known.has(id)) renamed.push(chatOf(id, name))
         }
@@ -111,13 +124,19 @@ export const whatsappChannel: Channel = {
     }
 
     const messageOf = (m: WAMessage): InboundMessage | undefined => {
-      const jid = m.key.remoteJid
-      if (!isChatJid(jid)) return undefined
+      const raw = m.key.remoteJid
+      if (!isChatJid(raw)) return undefined
+      // The message itself often carries the sender's number next to their private id: learn it before keying the chat.
+      const k = m.key as typeof m.key & { senderPn?: string; senderLid?: string; participantPn?: string; participantLid?: string }
+      if (isJidGroup(raw)) { pair(k.participant, k.participantPn); pair(k.participant, k.participantLid) }
+      else { pair(raw, k.senderPn); pair(raw, k.senderLid) }
+      const jid = canon(raw)
       const text = textOf(m)
       if (text === undefined) return undefined
       const fromMe = Boolean(m.key.fromMe)
+      const sender = m.key.participant ? canon(m.key.participant) : jid
       return {
-        id: m.key.id ?? crypto.randomUUID(), threadId: jid, from: fromMe ? "me" : (m.key.participant ?? jid), text, fromMe,
+        id: m.key.id ?? crypto.randomUUID(), threadId: jid, from: fromMe ? "me" : sender, text, fromMe,
         at: seconds(m.messageTimestamp) ?? new Date().toISOString(),
       }
     }
@@ -142,7 +161,13 @@ export const whatsappChannel: Channel = {
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
         logger: SILENT,
         browser: ["Parley", "Chrome", "1.0"],
+        // Don't mark the account online on connect, or the phone stops getting notifications.
+        markOnlineOnConnect: false,
         syncFullHistory: false,
+        // With syncFullHistory off, Baileys skips *every* history batch, including the one-time recent-chats sync
+        // WhatsApp sends at link time. That's where one-to-one chats come from (groups are fetched separately), so
+        // without it the list is groups only. Take the recent sync; still decline the full archive.
+        shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncNotification.HistorySyncType.FULL,
         ...(agent ? { agent, fetchAgent } : {}),
       })
 
@@ -173,10 +198,19 @@ export const whatsappChannel: Channel = {
       })
 
       sock.ev.on("messaging-history.set", ({ chats, contacts, messages }) => {
+        for (const c of chats) pair(c.id, (c as { pnJid?: string }).pnJid ?? (c as { lidJid?: string }).lidJid)
         learnContacts(contacts)
-        report(chats.filter((c) => isChatJid(c.id)).map((c) => chatOf(c.id, c.name, seconds(c.conversationTimestamp ?? c.lastMessageRecvTimestamp))))
+        // A one-to-one chat with no activity is one WhatsApp keeps for people you share a group with: not a conversation.
+        report(chats.filter((c) => isChatJid(c.id))
+          .map((c) => chatOf(c.id, c.name || (c as { displayName?: string }).displayName, seconds(c.conversationTimestamp ?? c.lastMessageRecvTimestamp)))
+          .filter((c) => c.kind === "group" || c.lastMessageAt))
         handleMessages(messages)
       })
+      // A call (either way) is as recent as a message. Only who and when; nothing is stored about the call itself.
+      sock.ev.on("call", (calls) => report(calls
+        .map((c) => ({ jid: c.groupJid || c.chatId || c.from, at: c.date ? new Date(c.date).toISOString() : new Date().toISOString() }))
+        .filter((c) => isChatJid(c.jid))
+        .map((c) => chatOf(c.jid, null, c.at))))
       sock.ev.on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id)).map((c) => chatOf(c.id, c.name, seconds(c.conversationTimestamp)))))
       sock.ev.on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))
       sock.ev.on("contacts.upsert", learnContacts)
