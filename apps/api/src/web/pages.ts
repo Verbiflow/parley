@@ -669,6 +669,9 @@ const CHATS_CSS = `
 .tag .n{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:5px}
 .older{display:block;width:100%;padding:14px 0;border:0;background:none;color:var(--text-2);font:inherit;font-size:13px;cursor:pointer;text-align:center}
 .older:hover{color:var(--text)}
+.stale{margin:10px 0 0;font-size:12.5px;color:var(--faint)}
+.stale button{font:inherit;color:var(--text-2);background:none;border:0;padding:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.stale button:hover{color:var(--text)}
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
@@ -714,7 +717,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
             <button type="button" class="tag" data-t="on" aria-pressed="false">Selected</button>
           </div>
         </div>
-        ${counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : ""}
+        ${counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}
         <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div>${recentCount && recentCount < chats.length ? `<button type="button" class="older" id="older">Show ${chats.length - recentCount} older chats</button>` : ""}</div>
         <div class="save"><span class="grow" id="count"></span>
           <button class="btn quiet sm" type="button" id="all">select shown</button>

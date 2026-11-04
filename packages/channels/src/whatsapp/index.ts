@@ -17,7 +17,12 @@ function toJid(to: string): string {
 
 /** Chats a person can pick: direct and group conversations. Status updates, broadcast lists and channels are not chats. */
 function isChatJid(jid: string | null | undefined): jid is string {
-  return Boolean(jid) && !isJidBroadcast(jid!) && !isJidNewsletter(jid!) && jid !== "status@broadcast"
+  return Boolean(jid) && !isJidBroadcast(jid!) && !isJidNewsletter(jid!) && jid !== "status@broadcast" && !isServiceNumber(jid!)
+}
+
+/** WhatsApp's own system ids (e.g. `0@s.whatsapp.net`, shown as "+0"): no real phone number is under five digits. */
+function isServiceNumber(jid: string): boolean {
+  return /^\d{1,4}(:\d+)?@s\.whatsapp\.net$/.test(jid)
 }
 
 /**
@@ -253,10 +258,16 @@ export const whatsappChannel: Channel = {
       sock.ev.on("messaging-history.set", ({ chats, contacts, messages }) => {
         for (const c of chats) pair(c.id, (c as { pnJid?: string }).pnJid ?? (c as { lidJid?: string }).lidJid)
         learnContacts(contacts)
-        // A one-to-one chat with no activity is one WhatsApp keeps for people you share a group with: not a conversation.
-        report(chats.filter((c) => isChatJid(c.id))
-          .map((c) => chatOf(c.id, c.name || (c as { displayName?: string }).displayName, seconds(c.conversationTimestamp ?? c.lastMessageRecvTimestamp)))
-          .filter((c) => c.kind === "group" || c.lastMessageAt))
+        // Recency comes only from real messages (below) and calls. A chat's own timestamp also moves for group notices
+        // (someone joined, left, changed the icon), which floats groups you never touch to the top. So: groups are listed
+        // with their names; a person becomes a chat only once a real message with them turns up, and their name from
+        // the chat list is kept for then. (A 1:1 with no messages is one WhatsApp keeps for people you share a group with.)
+        const listed = chats.filter((c) => isChatJid(c.id))
+        for (const c of listed) {
+          const name = c.name || (c as { displayName?: string }).displayName
+          if (name && !isJidGroup(c.id)) learnName([...new Set([jidNormalizedUser(c.id), canon(c.id)])], name, Boolean(c.name))
+        }
+        report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
         handleMessages(messages)
       })
       // A call (either way) is as recent as a message. Only who and when; nothing is stored about the call itself.
@@ -264,7 +275,8 @@ export const whatsappChannel: Channel = {
         .map((c) => ({ jid: c.groupJid || c.chatId || c.from, at: c.date ? new Date(c.date).toISOString() : new Date().toISOString() }))
         .filter((c) => isChatJid(c.jid))
         .map((c) => chatOf(c.jid, null, c.at))))
-      sock.ev.on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id)).map((c) => chatOf(c.id, c.name, seconds(c.conversationTimestamp)))))
+      // New chats: a group is listed now; a person when a real message arrives (messages.upsert). No timestamps (see above).
+      sock.ev.on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id) && isJidGroup(c.id)).map((c) => chatOf(c.id, c.name))))
       sock.ev.on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))
       sock.ev.on("contacts.upsert", learnContacts)
       sock.ev.on("contacts.update", learnContacts)
