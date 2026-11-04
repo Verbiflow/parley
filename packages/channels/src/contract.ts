@@ -51,6 +51,8 @@ export type ChannelEvent =
   | { type: "merge"; pairs: Array<{ from: string; to: string }> }
   /** The link-time history sync: `progress` 0–100 when the channel knows it; `done` once it has settled. */
   | { type: "sync"; progress: number | null; done: boolean }
+  /** Many messages at once (a history batch): same as that many `message` events, stored in one go. */
+  | { type: "messages"; messages: InboundMessage[] }
   /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
   | { type: "message"; message: InboundMessage }
   /** The connection closed. `reason` is for logs/UI, not control flow. */

@@ -7,7 +7,7 @@ import { Exits, ExitError } from "./exits.ts"
 import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, type Claimed, type Queued } from "./outbox.ts"
 import type { InboundMessage } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChat, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -355,7 +355,10 @@ export class Sessions {
     }
     this.#live.set(connectionId, entry)
     const emit = (event: ChannelEvent) => {
-      entry.queue = entry.queue.then(() => this.#onEvent(connectionId, event)).catch(() => {})
+      entry.queue = entry.queue.then(() => this.#onEvent(connectionId, event)).catch((e: unknown) => {
+        // One bad event mustn't stall the connection, but it mustn't vanish silently either.
+        console.error(JSON.stringify({ msg: "session event failed", connectionId, event: event.type, error: e instanceof Error ? e.message : String(e) }))
+      })
     }
     const live = await channel.open({ connectionId, state, proxy, emit })
     entry.live = live
@@ -390,11 +393,12 @@ export class Sessions {
       case "sync":
         await setHistorySync(this.ctx.sql, connectionId, event.progress, event.done)
         break
-      case "message": {
-        const m = event.message
-        await touchChat(this.ctx.sql, connectionId, m.threadId, m.at)
-        await saveMessages(this.ctx.sql, connectionId, [m])
-        if (entry.history) this.#hold(entry.history, m)
+      case "message":
+      case "messages": {
+        const ms = event.type === "message" ? [event.message] : event.messages
+        await touchChats(this.ctx.sql, connectionId, ms.map((m) => ({ id: m.threadId, at: m.at })))
+        await saveMessages(this.ctx.sql, connectionId, ms)
+        if (entry.history) for (const m of ms) this.#hold(entry.history, m)
         break
       }
       case "closed":

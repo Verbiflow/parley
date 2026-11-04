@@ -1,14 +1,27 @@
 import makeWASocket, {
   DisconnectReason, makeCacheableSignalKeyStore, proto, ALL_WA_PATCH_NAMES, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
-  type WAMessage, type Contact,
+  type WAMessage, type Contact, type BaileysEventMap,
 } from "@whiskeysockets/baileys"
 import { proxyAgent } from "@parley/proxies/agent"
 import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
-// Baileys wants a pino-like logger; we keep it silent. Cast once, here.
-const SILENT: any = { level: "silent", child: () => SILENT, trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {} }
+// Baileys wants a pino-like logger. Keep it quiet except errors, which go to the service log as one JSON line (Baileys'
+// error objects carry ids and protocol detail, not message text).
+const errorLine = (obj: unknown, msg?: string) => {
+  const o = obj as { err?: unknown; error?: unknown } | undefined
+  const err = o && typeof o === "object" ? o.err ?? o.error : obj
+  console.error(JSON.stringify({ msg: `baileys: ${msg ?? (typeof obj === "string" ? obj : "error")}`, error: err instanceof Error ? err.message : typeof err === "string" ? err : undefined }))
+}
+const SILENT: any = { level: "error", child: () => SILENT, trace() {}, debug() {}, info() {}, warn() {}, error: errorLine, fatal: errorLine }
+
+/** A Baileys event handler that can't take a history batch down with it: a throw is logged, not propagated. */
+function guard(event: string, fn: (arg: any) => void): (arg: any) => void {
+  return (arg) => {
+    try { fn(arg) } catch (e) { console.error(JSON.stringify({ msg: "whatsapp: event handler failed", event, error: e instanceof Error ? e.stack : String(e) })) }
+  }
+}
 
 /** Normalize a recipient to a WhatsApp JID: a bare phone number becomes `<digits>@s.whatsapp.net`. */
 function toJid(to: string): string {
@@ -187,10 +200,10 @@ export const whatsappChannel: Channel = {
         chats.push(chatOf(msg.threadId, pushName, msg.at))
       }
       report(chats)
-      for (const m of messages) {
-        const msg = messageOf(m)
-        if (msg) emit({ type: "message", message: msg })
-      }
+      const out = messages.map(messageOf).filter((m): m is InboundMessage => Boolean(m))
+      // History arrives in batches of thousands: hand them over in chunks the host stores in one write each.
+      if (out.length === 1) emit({ type: "message", message: out[0]! })
+      else for (let i = 0; i < out.length; i += 500) emit({ type: "messages", messages: out.slice(i, i + 500) })
     }
 
     /**
@@ -273,9 +286,16 @@ export const whatsappChannel: Channel = {
         ...(agent ? { agent, fetchAgent } : {}),
       })
 
-      sock.ev.on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
+      // Every handler goes through guard(). Typed by Baileys' events; the two patched-in ones (call-log.set,
+      // lid-mapping.set) aren't in its map, so they get the plain overload.
+      function on<K extends keyof BaileysEventMap>(event: K, fn: (arg: BaileysEventMap[K]) => void): void
+      function on(event: "call-log.set" | "lid-mapping.set", fn: (arg: any) => void): void
+      function on(event: string, fn: (arg: any) => void): void {
+        (sock.ev as unknown as { on(e: string, f: (a: any) => void): void }).on(event, guard(event, fn))
+      }
+      on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
 
-      sock.ev.on("connection.update", (u) => {
+      on("connection.update", (u) => {
         if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
         if (u.connection === "open") {
           emit({ type: "open", handle: sock.user?.id ?? "" })
@@ -300,8 +320,9 @@ export const whatsappChannel: Channel = {
         }
       })
 
-      sock.ev.on("messaging-history.set", ({ chats, contacts, messages, progress }) => {
-        historyBatch(typeof progress === "number" ? progress : null)
+      on("messaging-history.set", ({ chats, contacts, messages, progress, syncType }) => {
+        // Sizes only (no names or text), so a sync that stalls shows up in the service log.
+        console.log(JSON.stringify({ msg: "whatsapp: history batch", syncType, progress, chats: chats?.length ?? 0, contacts: contacts?.length ?? 0, messages: messages?.length ?? 0 }))
         for (const c of chats) pair(c.id, (c as { pnJid?: string }).pnJid ?? (c as { lidJid?: string }).lidJid)
         learnContacts(contacts)
         // Recency comes only from real messages (below) and calls. A chat's own timestamp also moves for group notices
@@ -315,10 +336,12 @@ export const whatsappChannel: Channel = {
         }
         report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
         handleMessages(messages)
+        // After the batch's chats and messages, so the host has stored them before it hears the progress (or "done").
+        historyBatch(typeof progress === "number" ? progress : null)
       })
       // Calls: someone you're talking to by phone is as recent as a message. Only who, when and which way; nothing about
       // the call itself. A call ringing this account now:
-      sock.ev.on("call", (calls) => report(calls.flatMap((c) => {
+      on("call", (calls) => report(calls.flatMap((c) => {
         const jid = c.groupJid || c.chatId || c.from
         if (!isChatJid(jid)) return []
         const kind: CallKind = c.status === "timeout" || c.status === "reject" ? "missed" : "incoming"
@@ -326,8 +349,7 @@ export const whatsappChannel: Channel = {
       })))
       // The call log (both directions, patched in by scripts/patch-baileys.ts): the past log arrives with the
       // link-time history, then each call made or taken on any of the account's devices.
-      const ev = sock.ev as unknown as { on(event: string, fn: (arg: any) => void): void }
-      ev.on("call-log.set", ({ records }: { records?: CallRecord[] }) => report((records ?? []).flatMap((r) => {
+      on("call-log.set", ({ records }: { records?: CallRecord[] }) => report((records ?? []).flatMap((r) => {
         const peer = callPeer(r)
         const t = typeof r.startTime === "object" && r.startTime ? r.startTime.toNumber() : Number(r.startTime ?? 0)
         if (!peer || !(t > 0)) return []
@@ -336,17 +358,17 @@ export const whatsappChannel: Channel = {
       })))
       // Private-id <-> phone-number pairs from the link-time history (patched in): how WhatsApp's own apps name people
       // it addresses by private id. Arrives before that history's messages, so those land under the phone number.
-      ev.on("lid-mapping.set", ({ mappings }: { mappings?: Array<{ lidJid?: string; pnJid?: string }> }) => {
+      on("lid-mapping.set", ({ mappings }: { mappings?: Array<{ lidJid?: string; pnJid?: string }> }) => {
         for (const m of mappings ?? []) pair(m.lidJid, m.pnJid)
         announceNames([...phoneOfLid].filter(([, pn]) => names.has(pn)).map(([lid, pn]) => (learnName([lid], names.get(pn)!, saved.has(pn)), lid)))
       })
       // New chats: a group is listed now; a person when a real message arrives (messages.upsert). No timestamps (see above).
-      sock.ev.on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id) && isJidGroup(c.id)).map((c) => chatOf(c.id, c.name))))
-      sock.ev.on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))
-      sock.ev.on("contacts.upsert", learnContacts)
-      sock.ev.on("contacts.update", learnContacts)
-      sock.ev.on("groups.update", (groups) => report(groups.filter((g) => g.id && g.subject).map((g) => chatOf(g.id!, g.subject))))
-      sock.ev.on("messages.upsert", ({ messages }) => handleMessages(messages))
+      on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id) && isJidGroup(c.id)).map((c) => chatOf(c.id, c.name))))
+      on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))
+      on("contacts.upsert", learnContacts)
+      on("contacts.update", learnContacts)
+      on("groups.update", (groups) => report(groups.filter((g) => g.id && g.subject).map((g) => chatOf(g.id!, g.subject))))
+      on("messages.upsert", ({ messages }) => handleMessages(messages))
     }
 
     connect()
