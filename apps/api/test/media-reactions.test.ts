@@ -290,7 +290,8 @@ test("deleting a sent message for everyone: by its outbox id or its inbox id, pa
   const { accountId, connectionId } = await linked(email)
   const hour = 60 * 60 * 1000
   const at = (ms: number) => new Date(T0.getTime() + ms)
-  fake.simulator.deliver(connectionId, { id: "mine", threadId: "ana", from: "me", fromMe: true, text: "typo", at: at(-hour).toISOString() })
+  // "mine" is deleted over MCP below, which judges the two-day window by the real clock, so it's an hour old by that clock.
+  fake.simulator.deliver(connectionId, { id: "mine", threadId: "ana", from: "me", fromMe: true, text: "typo", at: new Date(Date.now() - hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "hers", threadId: "ana", from: "ana", text: "hi", at: at(-hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "me", fromMe: true, text: "ages ago", at: at(-49 * hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: at(-2 * hour).toISOString() })
@@ -314,7 +315,10 @@ test("deleting a sent message for everyone: by its outbox id or its inbox id, pa
   const viaMcp = await callTool(base, token, "delete_message", { connection_id: connectionId, chat_id: "ana", message_id: "mine" })
   assert.equal(viaMcp.isError, false, String(viaMcp.result))
   assert.equal(viaMcp.result.deletes, "mine")
+  // In the account's active hours its slot is now, and the worker sends it right away in the background; otherwise
+  // the pass at its slot does. Either way, wait for it to be out.
   await dispatch({ message: { scheduledFor: viaMcp.result.scheduled_for } })
+  await waitUntil(() => getOutbound(sql, accountId, viaMcp.result.id), (m) => m.status === "sent")
   assert.deepEqual(fake.simulator.sent(connectionId).at(-1)!.content.unsend, { messageId: "mine", fromMe: true })
   assert.ok(!(await sessions.inbox(accountId, { limit: 10 })).some((m) => m.id === "mine"))
   assert.match((await callTool(base, token, "message_status", { message_id: viaMcp.result.id })).result.note, /The deletion went out/)

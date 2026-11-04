@@ -20,13 +20,18 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   const [conn] = (await callTool(base, token, "list_connections")).result.connections
   assert.deepEqual([conn.timezone, conn.country], ["Europe/London", "GB"])
 
-  const sent = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900123", text: "Hello!", idempotency_key: "first" })
+  // Every send here waits for a slot far off, so what's queued doesn't depend on the hour in London: inside its
+  // active hours a send with no not_before goes out at once. The first gets a day of its own, so its slot doesn't
+  // push back the ones below.
+  const later = "2099-01-01T12:00:00Z"
+  const first = "2098-06-01T12:00:00Z"
+  const sent = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900123", text: "Hello!", idempotency_key: "first", not_before: first })
   assert.equal(sent.isError, false)
   assert.equal(sent.result.status, "scheduled")
   assert.equal(sent.result.kind, "first_message")
   assert.ok(sent.result.scheduled_for)
   assert.match(sent.result.note, /^Queued/)
-  const again = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900123", text: "Hello!", idempotency_key: "first" })
+  const again = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900123", text: "Hello!", idempotency_key: "first", not_before: first })
   assert.equal(again.result.id, sent.result.id)
   assert.equal(again.result.replayed, true)
 
@@ -35,13 +40,13 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   assert.ok("first_message" in avail.result.actions)
   assert.equal(avail.result.daily_limit, 100)
 
-  const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: "2099-01-01T12:00:00Z" })
+  const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: later })
   // Typing is on by default (the account holder's setting); an agent can skip it.
   assert.equal(second.result.typing, true)
-  const plain = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900790", text: "plain", typing: false, not_before: "2099-01-01T12:00:00Z" })
+  const plain = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900790", text: "plain", typing: false, not_before: later })
   assert.equal(plain.result.typing, undefined)
   await callTool(base, token, "cancel_message", { message_id: plain.result.id })
-  const typed = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900789", text: "typed", typing: true, not_before: "2099-01-01T12:00:00Z" })
+  const typed = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900789", text: "typed", typing: true, not_before: later })
   assert.equal(typed.result.typing, true)
   await callTool(base, token, "cancel_message", { message_id: typed.result.id })
   const queued = (await callTool(base, token, "list_outbox", { status: "scheduled" })).result.messages
