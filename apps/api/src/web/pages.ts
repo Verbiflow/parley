@@ -1,7 +1,8 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js"
+import { policyFor } from "@parley/pacing"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
-import type { Availability, Outbound } from "../sessions/outbox.ts"
+import type { DailyUsage, Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
   CHANNELS, LOGO, agentMark, ago, appShell, avatar, bar, brandMark, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
@@ -16,15 +17,10 @@ export type AgentView = {
 }
 export type BrowserSessionView = { id: string; method: string | null; userAgent: string | null; createdAt: string; lastSeenAt: string }
 /** What the overview shows about a connection's sending: today's usage, what's waiting, and when the next one goes. */
-export type ConnectionSummary = { sentToday: number; allowanceToday: number; queued: number; nextAt: string | null }
+export type ConnectionSummary = { sentToday: number; dailyLimit: number; queued: number; nextAt: string | null }
 
 const METHOD: Record<string, string> = { google: "Google", github: "GitHub", local: "Email (dev login)", proof: "Test account" }
-const ACTION_LABEL: Record<string, string> = { message: "Replies", first_message: "New conversations", invite: "Connection requests" }
 const KIND_LABEL: Record<string, string> = { message: "reply", first_message: "opener", invite: "invite" }
-const WAIT_LABEL: Record<string, string> = {
-  paused: "paused", queued: "behind earlier sends", gap: "gap after last send", outside_active_hours: "outside active hours", break: "taking a break",
-  action_spacing: "spacing openers", daily_cap: "daily limit reached", weekly_cap: "weekly limit reached",
-}
 const HALT_TEXT: Record<string, string> = {
   challenge: "WhatsApp asked the account to verify itself. Open WhatsApp on the phone, clear any prompt, then resume.",
   auth_expired: "The linked session stopped working. Relink the device, then resume.",
@@ -287,15 +283,15 @@ export function dashboardPage(opts: {
     const st = connectionState(c)
     const s = opts.summaries?.get(c.id)
     const number = waNumber(c.handle)
-    // Until it's linked, the row opens the QR page; the detail page (pacing, disconnect) is still one click on the arrow.
+    // A live row opens the account (its chats and sending settings); until it's linked, the QR page.
     const detail = `/app/connections/${esc(c.id)}`
     return `<tr class="link" data-href="${c.status === "connected" ? detail : `/link/${esc(c.id)}`}">
       <td><div class="who">${channelMark(c.channel, 18)}<div><b>${esc(number || channelName(c.channel))}</b><small>${channelName(c.channel).toLowerCase()}${c.displayName ? ` · ${esc(c.displayName)}` : ""}</small></div></div></td>
       <td>${status(st.tone, st.text, st.live)}</td>
-      <td class="m">${s ? `${bar(s.sentToday, s.allowanceToday)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.allowanceToday}</span>` : `<span class="faint">—</span>`}</td>
+      <td class="m">${s ? `${bar(s.sentToday, s.dailyLimit)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.dailyLimit}</span>` : `<span class="faint">—</span>`}</td>
       <td class="m">${s ? s.queued : "—"}</td>
       <td class="m">${s?.nextAt ? esc(until(s.nextAt, c.timezone)) : `<span class="faint">—</span>`}</td>
-      <td class="m">${c.status === "connected" ? `<a href="/app/connections/${esc(c.id)}/chats">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
+      <td class="m">${c.status === "connected" ? `<a href="${detail}">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
       <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<a href="${detail}" title="Connection settings">${icon("arrow", 14)}</a>`}</td>
     </tr>`
   }).join("")
@@ -333,129 +329,6 @@ export function dashboardPage(opts: {
     ${section("Channels", `${table}${connectorCards(linked, true)}`)}
     ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">all activity</a>`)}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: false })}`)
-}
-
-// ---- Connection detail --------------------------------------------------------------------------------------------
-
-/** Hours since local midnight (0–24) of an instant, in a time zone. */
-function localHour(iso: string, timeZone: string): number {
-  const p = new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "numeric", minute: "numeric" }).formatToParts(new Date(iso))
-  const h = Number(p.find((x) => x.type === "hour")?.value ?? 0)
-  const m = Number(p.find((x) => x.type === "minute")?.value ?? 0)
-  return h + m / 60
-}
-
-/** The next 24 hours as a strip: the active window, now, and every queued send placed where it will go out. */
-function timeline(opts: { start: number; end: number; tz: string; queued: Outbound[]; activeToday: boolean }): string {
-  const now = new Date().toISOString()
-  const nowH = localHour(now, opts.tz)
-  const pct = (h: number) => `${((h / 24) * 100).toFixed(3)}%`
-  const soon = opts.queued.filter((m) => m.scheduledFor && Date.parse(m.scheduledFor) - Date.now() < 24 * 3600_000)
-  const ticks = soon.map((m) => {
-    const h = localHour(m.scheduledFor!, opts.tz)
-    const tomorrow = Date.parse(m.scheduledFor!) - Date.now() > (24 - nowH) * 3600_000
-    return `<i class="tk${m.kind === "first_message" ? " open" : ""}${tomorrow ? " tmr" : ""}" style="left:${pct(h)}" title="${esc(recipient(m.chatId))} · ${clock(m.scheduledFor!, opts.tz)}${tomorrow ? " tomorrow" : ""}"></i>`
-  }).join("")
-  return `<div class="tl">
-    <div class="tl-track">
-      <span class="win${opts.activeToday ? "" : " off"}" style="left:${pct(opts.start)};width:${pct(opts.end - opts.start)}"></span>
-      ${ticks}
-      <span class="now" style="left:${pct(nowH)}"><em>now ${clock(now, opts.tz)}</em></span>
-    </div>
-    <div class="tl-axis">${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((h) => `<span style="left:${pct(h)}">${String(h).padStart(2, "0")}</span>`).join("")}</div>
-    <div class="tl-key"><span><i class="k-win"></i>active hours</span><span><i class="k-tk"></i>reply</span><span><i class="k-tk open"></i>opener</span><span><i class="k-tk tmr"></i>tomorrow</span></div>
-  </div>`
-}
-
-const CONNECTION_CSS = `
-.tl{padding-top:22px}
-.tl-track{position:relative;height:44px;border:1px solid var(--line-2);border-radius:8px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/24 - 1px),var(--line) calc(100%/24 - 1px),var(--line) calc(100%/24));overflow:visible}
-.tl .win{position:absolute;top:0;bottom:0;background:var(--signal-dim);border-left:1px solid var(--signal);border-right:1px solid var(--signal)}
-.tl .win.off{background:var(--bg-2);border-color:var(--line-3)}
-.tl .tk{position:absolute;top:10px;bottom:10px;width:2px;margin-left:-1px;border-radius:1px;background:var(--text-2)}
-.tl .tk.open{background:var(--signal)}.tl .tk.tmr{opacity:.4}
-.tl .now{position:absolute;top:-6px;bottom:-6px;width:1px;background:var(--text)}
-.tl .now em{position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--text);white-space:nowrap}
-.tl-axis{position:relative;height:22px;font-family:var(--mono);font-size:10.5px;color:var(--faint)}
-.tl-axis span{position:absolute;top:6px;transform:translateX(-50%)}
-.tl-axis span:first-child{transform:none}.tl-axis span:last-child{transform:translateX(-100%)}
-.tl-key{display:flex;gap:20px;margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--muted)}
-.tl-key span{display:inline-flex;align-items:center;gap:7px}
-.k-win{width:14px;height:8px;background:var(--signal-dim);border:1px solid var(--signal);border-radius:2px}
-.k-tk{width:2px;height:10px;background:var(--text-2);border-radius:1px}.k-tk.open{background:var(--signal)}.k-tk.tmr{opacity:.4}
-.pace{display:grid;grid-template-columns:minmax(0,1fr) 180px auto;gap:20px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}
-.pace .nm{font-size:13.5px;min-width:0}.pace .nm small{display:block;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pace .bar{width:100%}
-.pace .n{font-family:var(--mono);font-size:12.5px;color:var(--text-2);white-space:nowrap}
-.locale{display:flex;flex-direction:column;gap:14px;padding-top:16px}
-`
-
-export function connectionPage(opts: {
-  user: Viewer; connection: Connection; actions: Availability; queued: Outbound[]; recent: Outbound[]
-  exit: Exit | undefined; proxied: boolean; agentCount: number; queuedTotal: number; policy: { start: number; end: number; days: number[] }; synced: number
-}): string {
-  const c = opts.connection
-  const st = connectionState(c)
-  const number = waNumber(c.handle)
-  const tz = c.timezone
-  const weekday = new Date().toLocaleDateString("en-US", { timeZone: tz, weekday: "short" })
-  const activeToday = opts.policy.days.includes(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekday))
-  const days = opts.policy.days.length === 7 ? "every day" : opts.policy.days.length === 5 && !opts.policy.days.includes(0) && !opts.policy.days.includes(6) ? "weekdays" : `${opts.policy.days.length} days a week`
-  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`
-
-  const banner = c.haltedReason
-    ? `<div class="note bad"><div class="grow"><b>Sending is stopped</b><p>${esc(HALT_TEXT[c.haltedReason] ?? `Halted: ${c.haltedReason}.`)}</p></div>${c.haltedReason === "banned" ? "" : `<form method="post" action="/app/connections/${esc(c.id)}/resume"><button class="btn sm" type="submit">Resume sending</button></form>`}</div>`
-    : c.pausedUntil
-      ? `<div class="note warn"><div class="grow"><b>Backing off until ${esc(until(c.pausedUntil, tz))}</b><p>WhatsApp asked the account to slow down. Parley waits, then resumes at a lower pace.</p></div><form method="post" action="/app/connections/${esc(c.id)}/resume"><button class="btn line sm" type="submit">Resume now</button></form></div>`
-      : ""
-
-  const pace = Object.entries(opts.actions).map(([action, a]) => {
-    const next = a!.canSendNow ? `<span class="st ok"><i></i>can send now</span>` : a!.earliestAt ? `<span class="faint">next ${esc(until(a!.earliestAt, tz))}${a!.waits.length ? ` · ${a!.waits.map((w) => WAIT_LABEL[w] ?? w).join(", ")}` : ""}</span>` : `<span class="faint">${a!.reason === "paused" ? "paused" : "unavailable"}</span>`
-    return `<div class="pace"><div class="nm">${ACTION_LABEL[action] ?? action}<small>${next}</small></div>${bar(a!.usedToday, a!.allowance)}<span class="n">${a!.usedToday} / ${a!.allowance}</span></div>`
-  }).join("")
-
-  const outRow = (m: Outbound, scheduled: boolean) => `<tr>
-      <td><div class="who">${glyph(recipient(m.chatId), 22, true)}<span class="m" style="color:var(--text)">${esc(recipient(m.chatId))}</span></div></td>
-      <td class="clip">${esc(outText(m))}</td>
-      <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
-      <td class="m">${scheduled ? (m.scheduledFor ? esc(until(m.scheduledFor, tz)) : `<span class="faint">held</span>`) : outcome(m)}</td>
-      <td class="m faint">${scheduled ? (m.scheduledFor ? clock(m.scheduledFor, tz) : "") : m.sentAt ? ago(m.sentAt) : ago(m.createdAt)}</td>
-      <td class="r">${scheduled ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><input type="hidden" name="back" value="/app/connections/${esc(c.id)}"><button class="btn quiet sm" type="submit">cancel</button></form>` : ""}</td>
-    </tr>`
-  const table = (list: Outbound[], scheduled: boolean) => `<table class="tbl"><thead><tr><th>To</th><th>Message</th><th>Kind</th><th>${scheduled ? "Sends" : "Result"}</th><th>${scheduled ? "Local" : "When"}</th><th></th></tr></thead><tbody>${list.map((m) => outRow(m, scheduled)).join("")}</tbody></table>`
-
-  const exit = opts.exit
-  const network = exit
-    ? `<div class="kv"><div class="k">exit</div><div>${esc(exit.kind)} · ${esc(exit.country)}</div><div class="k">ip</div><div class="mono">${esc(exit.lastIp ?? "not checked yet")}</div><div class="k">health</div><div>${status(exit.status === "active" ? "ok" : exit.status === "cooling" ? "warn" : "bad", exit.status === "active" ? "healthy" : exit.status)}</div></div>`
-    : `<p class="sec-note">${opts.proxied ? "No exit assigned yet. One is picked the next time the connection opens." : `Connected directly from Parley's server. Add a provider on <a href="/app/network" style="color:var(--text);text-decoration:underline;text-underline-offset:3px">Network</a> to send from an IP in ${esc(c.country ?? "the account's country")}.`}</p>`
-
-  return appShell({
-    title: number || channelName(c.channel), active: "overview", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, css: CONNECTION_CSS,
-    body: `${pageHead({
-      title: number || channelName(c.channel), crumb: { href: "/app", label: "Overview" }, lead: channelMark(c.channel, 28),
-      sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="mono faint">${channelName(c.channel).toLowerCase()}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · linked ${c.linkedAt ? ago(c.linkedAt) : "—"} · ${esc(tz)}</span>`,
-      actions: `${c.status === "connected" ? `<a class="btn line" href="/app/connections/${esc(c.id)}/chats">${opts.synced} chat${opts.synced === 1 ? "" : "s"} synced</a>` : `<a class="btn" href="/link/${esc(c.id)}">Finish linking</a>`}
-        <form method="post" action="/app/connections/${esc(c.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${channelName(c.channel)} ${number}` : channelName(c.channel))}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
-    })}
-    ${banner}
-    ${section("Local day", timeline({ start: opts.policy.start, end: opts.policy.end, tz, queued: opts.queued, activeToday }), `${hh(opts.policy.start)}–${hh(opts.policy.end)} ${esc(tz)} · ${days}`)}
-    <div class="split">
-      <div>
-        ${section("Sending today", pace || empty("Not sending yet", "Pacing appears once the connection is live."), "", `Daily limits start low and grow as the account proves it can carry them. Any pushback from ${channelName(c.channel)} halves them.`)}
-        ${section("Up next", opts.queued.length ? table(opts.queued, true) : empty("Nothing queued", "When an agent calls <code>send_message</code>, it lands here with the time it will go out."), `<a href="/app/outbox">outbox</a>`)}
-        ${opts.recent.length ? section("Recent", table(opts.recent, false)) : ""}
-      </div>
-      <div>
-        ${section("Schedule", `<form method="post" action="/app/connections/${esc(c.id)}/locale" class="locale">
-            <label class="field"><span>Time zone</span><input class="input" name="timezone" value="${esc(tz)}" list="tzs" required></label>
-            <label class="field"><span>Country</span><input class="input" name="country" value="${esc(c.country ?? "")}" maxlength="2" placeholder="GB" pattern="[A-Za-z]{2}"><small>Where the account lives. Active hours follow its clock; its exit IP is picked here.</small></label>
-            <datalist id="tzs">${["UTC", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Madrid", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Africa/Lagos"].map((z) => `<option value="${z}">`).join("")}</datalist>
-            <div><button class="btn line sm" type="submit">Save</button></div>
-          </form>`)}
-        ${SHOW_NETWORK ? section("Network", network, `<a href="/app/network">manage</a>`) : ""}
-      </div>
-    </div>`,
-  })
 }
 
 // ---- Outbox -------------------------------------------------------------------------------------------------------
@@ -661,6 +534,14 @@ export function linkPage(id: string): string {
 }
 
 const CHATS_CSS = `
+.prefs{margin:4px 0 22px;padding:16px 18px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-1)}
+.prefs .today{display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--text-2)}
+.prefs .today .bar{display:inline-block;width:120px;vertical-align:middle;margin:0}
+.prefs .today a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px}
+.pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
+.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .cc{flex:0 0 90px;min-width:0}
+.prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
+.lede{font-size:13px;color:var(--text-2);margin:0}
 .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 0 4px}
 .search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:11px;top:10px;color:var(--faint)}
 .search .input{padding-left:34px}
@@ -697,11 +578,31 @@ const CHATS_CSS = `
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
+/** One line of sending settings: the daily limit, and where the account lives (active hours follow its clock). */
+function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
+  const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
+  const { start, end } = policyFor(conn.channel).activeHours
+  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`
+  const zones = ["UTC", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Madrid", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Africa/Lagos"]
+  return `<div class="prefs">
+    <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
+    <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
+      <label class="field lim"><span>Daily limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
+      <label class="field"><span>Time zone</span><input class="input" name="timezone" value="${esc(conn.timezone)}" list="tzs" required></label>
+      <label class="field cc"><span>Country</span><input class="input" name="country" value="${esc(conn.country ?? "")}" maxlength="2" placeholder="GB" pattern="[A-Za-z]{2}"></label>
+      <datalist id="tzs">${zones.map((z) => `<option value="${z}">`).join("")}</datalist>
+      <button class="btn line sm" type="submit">Save</button>
+    </form>
+    <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count. Sends go out between ${hh(start)} and ${hh(end)} in the account's time zone.</p>
+  </div>`
+}
+
 /**
- * The chats on a connection. Everything syncs by default; the person taps Ignore on the few agents shouldn't see
- * (people and groups, most recent first, like their phone). Each tap saves at once; filtering is client-side.
+ * A connected account: its chats, and how it sends. Everything syncs by default; the person taps Ignore on the few
+ * agents shouldn't see (people and groups, most recent first, like their phone). Each tap saves at once; filtering is
+ * client-side.
  */
-export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean }): string {
+export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number }): string {
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
   // helps nobody. They still sync, and appear once they're identified (a name arrives, or they merge into a number).
@@ -736,12 +637,24 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     </div>`
   }).join("")
   const loading = `<div class="empty"><div class="spin"></div><b>Loading your chats</b>Fetching them from ${esc(name)}… this can take a minute after linking.</div>`
+  const number = waNumber(conn.handle)
+  const st = connectionState(conn)
+  const banner = conn.haltedReason
+    ? `<div class="note bad"><div class="grow"><b>Sending is stopped</b><p>${esc(HALT_TEXT[conn.haltedReason] ?? `Halted: ${conn.haltedReason}.`)}</p></div>${conn.haltedReason === "banned" ? "" : `<form method="post" action="/app/connections/${esc(conn.id)}/resume"><button class="btn sm" type="submit">Resume sending</button></form>`}</div>`
+    : conn.pausedUntil
+      ? `<div class="note warn"><div class="grow"><b>Backing off until ${esc(until(conn.pausedUntil, conn.timezone))}</b><p>${esc(name)} asked the account to slow down. Parley waits, then resumes.</p></div><form method="post" action="/app/connections/${esc(conn.id)}/resume"><button class="btn line sm" type="submit">Resume now</button></form></div>`
+      : ""
   return appShell({
-    title: "Chats", active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
+    title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
     body: `${pageHead({
-      title: "Your chats", crumb: { href: `/app/connections/${esc(conn.id)}`, label: waNumber(conn.handle) || name },
-      sub: `Everything on ${esc(name)}${conn.handle ? ` (${esc(waNumber(conn.handle))})` : ""} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.`,
+      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
+      sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="mono faint">${name.toLowerCase()}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
+      actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
+        <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
     })}
+      ${banner}
+      ${sendingPrefs(conn, opts.today, opts.queued)}
+      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.</p>
       ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
           <div class="tags" id="tags">
@@ -787,7 +700,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
         let saving=0;
         list.addEventListener('click',async e=>{const b=e.target.closest('.ign');if(!b)return;const r=b.closest('.chat');const ignored=!r.classList.contains('off');
           b.disabled=true;saving++;
-          try{const res=await fetch(location.pathname+'/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
+          try{const res=await fetch('/app/connections/${esc(conn.id)}/chats/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
             if(!res.ok)throw new Error(res.status);
             r.classList.toggle('off',ignored);b.textContent=ignored?'Ignored':'Ignore';
             r.querySelector('.s').textContent=ignored?'ignored · agents never see it':r.dataset.sub;tally()}

@@ -22,6 +22,11 @@ export type PlanInput = {
   pausedIndefinitely?: boolean
   /** Today's warmup allowance per action; the policy's daily limit when absent. */
   allowance?: Partial<Record<ActionKind, number>>
+  /**
+   * Sends a local day may hold across every kind. When set it replaces the per-kind daily caps and warmup: one number
+   * the person chose. Spacing, gaps, breaks and weekly caps still apply.
+   */
+  dailyTotal?: number
 }
 
 /** Why a slot is later than `now`. */
@@ -44,11 +49,14 @@ export function planNext(input: PlanInput, action: ActionKind): PlanResult {
   const limit = policy.actions[action]
   if (!limit) return { ok: false, reason: "action_unsupported" }
   if (input.pausedIndefinitely) return { ok: false, reason: "paused" }
-  const cap = Math.min(limit.daily, input.allowance?.[action] ?? limit.daily)
+  const total = input.dailyTotal
+  const cap = total ?? Math.min(limit.daily, input.allowance?.[action] ?? limit.daily)
   if (cap <= 0 || (limit.weekly ?? 1) <= 0) return { ok: false, reason: "no_capacity" }
 
   const slots = [...input.reservations].sort((a, b) => a.at.getTime() - b.at.getTime())
   const sameKind = slots.filter((s) => s.action === action && !s.activityOnly)
+  // Under a total, every send counts toward the cap; otherwise only this kind does.
+  const counted = total !== undefined ? slots.filter((s) => !s.activityOnly) : sameKind
   const waits = new Set<Wait>()
   let t = now.getTime()
   const pushTo = (at: number, why: Wait) => {
@@ -81,7 +89,7 @@ export function planNext(input: PlanInput, action: ActionKind): PlanResult {
     if (pushTo(breakUntil(slots, t, policy, seed), "break")) continue
 
     const day = localDate(new Date(t), timeZone)
-    if (sameKind.filter((s) => localDate(s.at, timeZone) === day).length >= cap) {
+    if (counted.filter((s) => localDate(s.at, timeZone) === day).length >= cap) {
       pushTo(startOfNextLocalDay(new Date(t), timeZone).getTime(), "daily_cap")
       continue
     }

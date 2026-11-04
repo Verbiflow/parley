@@ -33,7 +33,7 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   const avail = await callTool(base, token, "send_availability", { connection_id: connectionId })
   assert.equal(avail.result.timezone, "Europe/London")
   assert.ok("first_message" in avail.result.actions)
-  assert.equal(typeof avail.result.actions.message.daily_allowance, "number")
+  assert.equal(avail.result.daily_limit, 100)
 
   const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: "2099-01-01T12:00:00Z" })
   const queued = (await callTool(base, token, "list_outbox", { status: "scheduled" })).result.messages

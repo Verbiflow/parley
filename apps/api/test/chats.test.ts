@@ -93,7 +93,7 @@ test("the chat picker: sign-in required (and resumes after), owner only, saves t
     { id: "team", name: "Team", kind: "group" },
   ])
   await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 2)
-  const path = `/app/connections/${connectionId}/chats`
+  const path = `/app/connections/${connectionId}`
 
   // Signed out: bounced to sign-in, and sent back to the picker afterwards.
   const out = await fetch(`${base}${path}`, { redirect: "manual" })
@@ -104,13 +104,13 @@ test("the chat picker: sign-in required (and resumes after), owner only, saves t
 
   const cookie = await browser("picker@parley.test")
   const html = await (await fetch(`${base}${path}`, { headers: { cookie } })).text()
-  assert.match(html, /Your chats/)
+  assert.match(html, /name="daily_limit"/)
   assert.match(html, /Carol &lt;script&gt;/)
   assert.doesNotMatch(html, /Carol <script>/)
 
   // Someone else's account gets a 404, and can't ignore anything.
   const intruder = await browser("mallory2@parley.test")
-  const ignore = (who: string, chats: string[], ignored = true) => fetch(`${base}${path}/ignore`, { method: "POST", headers: { cookie: who, "content-type": "application/json" }, body: JSON.stringify({ chats, ignored }) })
+  const ignore = (who: string, chats: string[], ignored = true) => fetch(`${base}${path}/chats/ignore`, { method: "POST", headers: { cookie: who, "content-type": "application/json" }, body: JSON.stringify({ chats, ignored }) })
   assert.equal((await fetch(`${base}${path}`, { headers: { cookie: intruder } })).status, 404)
   assert.equal((await ignore(intruder, ["team"])).status, 404)
   assert.ok((await sessions.chats(accountId, connectionId)).every((c) => c.synced))
@@ -132,7 +132,7 @@ test("relink signs the old link out and opens a fresh QR for the same account; n
   // An account with no people yet (groups only) is offered the relink.
   fake.simulator.announceChats(oldId, [{ id: "club", name: "Club", kind: "group" }])
   await waitUntil(() => sessions.chats(accountId, oldId), (c) => c.length === 1)
-  assert.match(await (await fetch(`${base}/app/connections/${oldId}/chats`, { headers: { cookie } })).text(), new RegExp(`action="/app/connections/${oldId}/relink"`))
+  assert.match(await (await fetch(`${base}/app/connections/${oldId}`, { headers: { cookie } })).text(), new RegExp(`action="/app/connections/${oldId}/relink"`))
 
   // Ignore the group first: the new link must keep that.
   await setIgnored(sql, oldId, ["club"], true)

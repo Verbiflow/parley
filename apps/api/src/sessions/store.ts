@@ -8,22 +8,29 @@ export type Connection = {
   /** The link-time history sync: when it started, how far along (0–100, if known), and when it settled. */
   history: { startedAt: string | null; progress: number | null; doneAt: string | null }
   timezone: string; country: string | null; haltedReason: string | null; pausedUntil: string | null
+  /** Sends a local day may hold, every kind together. */
+  dailyLimit: number
 }
-/** Where the account appears to live: its active hours follow the time zone, its exit IP the country. */
-export type Locale = { timezone?: string | undefined; country?: string | undefined }
+/**
+ * Where the account appears to live (its active hours follow the time zone, its exit IP the country), and how many
+ * messages it may send a day.
+ */
+export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined }
 
 type Row = {
   id: string; account_id: string; channel: string; status: ConnectionStatus; handle: string | null; display_name: string | null; created_at: Date; linked_at: Date | null; chats_chosen_at: Date | null
   history_started_at: Date | null; history_progress: number | null; history_done_at: Date | null
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
+  daily_limit: number
 }
 const row = (r: Row): Connection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, handle: r.handle, displayName: r.display_name,
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
+  dailyLimit: r.daily_limit,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(

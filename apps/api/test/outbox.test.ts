@@ -121,3 +121,23 @@ test("idempotency, cancel, the backlog cap, and other accounts' connections", as
   await assert.rejects(sessions.enqueue(other.id, connectionId, { to: "+1", text: "x" }, T0), /not your connection/)
   await assert.rejects(getOutbound(sql, other.id, a.message.id), /no such message/)
 })
+
+test("the daily limit counts every kind together; lowering it moves the overflow to tomorrow", async () => {
+  const { accountId, connectionId } = await linked("limit@parley.test")
+  assert.equal((await availability(sql, accountId, connectionId, T0)).today.dailyLimit, 100)
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 2 }, T0)
+  const day = (m: { scheduledFor: string | null }) => m.scheduledFor!.slice(0, 10)
+  const a = await sessions.enqueue(accountId, connectionId, { to: "+15550901", text: "a" }, T0)
+  const b = await sessions.enqueue(accountId, connectionId, { to: "+15550901", text: "b", kind: "message" }, T0)
+  const c = await sessions.enqueue(accountId, connectionId, { to: "+15550902", text: "c" }, T0)
+  assert.deepEqual([day(a.message), day(b.message)], ["2026-11-03", "2026-11-03"])
+  assert.equal(day(c.message), "2026-11-04")
+  assert.ok(c.message.waits.includes("daily_cap"))
+
+  // Raising it pulls the third send back into today.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 3 }, T0)
+  assert.equal(day(await getOutbound(sql, accountId, c.message.id)), "2026-11-03")
+  // Out-of-range values are ignored, not saved.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 0 }, T0)
+  assert.equal((await availability(sql, accountId, connectionId, T0)).today.dailyLimit, 3)
+})

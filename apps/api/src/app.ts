@@ -72,7 +72,7 @@ export function makeApp(ctx: AppContext): Hono {
       const view = await ctx.sessions.linkView(c.req.param("id"))
       let qrSvg: string | undefined
       if (view.link?.method === "qr") qrSvg = await QRCode.toString(view.link.data, { type: "svg", margin: 1, width: 280 })
-      return c.json({ status: view.status, channel: view.channel, link_method: view.link?.method, qr_svg: qrSvg, chats_url: `/app/connections/${c.req.param("id")}/chats` })
+      return c.json({ status: view.status, channel: view.channel, link_method: view.link?.method, qr_svg: qrSvg, chats_url: `/app/connections/${c.req.param("id")}` })
     } catch (e) {
       return c.json({ error: e instanceof ConnectError ? e.message : "not found" }, 404)
     }

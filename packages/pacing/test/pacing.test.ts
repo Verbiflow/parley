@@ -65,6 +65,19 @@ test("daily caps and the warmup allowance are never exceeded", () => {
   assert.equal(perDay(fill(whatsapp, "first_message", 12, TUESDAY_10AM, { allowance: { first_message: 3 } })), 3)
 })
 
+test("a daily total caps every kind together, and replaces the per-kind caps", () => {
+  const reservations: Slot[] = []
+  for (let i = 0; i < 30; i++) {
+    const action: ActionKind = i % 3 === 0 ? "first_message" : "message"
+    const r = planNext({ policy: whatsapp, timeZone: NY, seed: "conn", now: TUESDAY_10AM, reservations, dailyTotal: 10, allowance: { message: 1, first_message: 1 } }, action)
+    assert.ok(r.ok)
+    reservations.push({ at: r.at, action })
+  }
+  assert.equal(perDay(reservations), 10)
+  // Openers aren't held to their own (warmup) cap under a total: 10 a day across both kinds.
+  assert.equal(perDay(fill(whatsapp, "first_message", 12, TUESDAY_10AM, { dailyTotal: 10, allowance: { first_message: 3 } })), 10)
+})
+
 test("the rolling weekly cap holds over any seven days", () => {
   const times = fill(linkedin, "invite", 160, TUESDAY_10AM).map((s) => s.at.getTime())
   for (const t of times) assert.ok(times.filter((u) => u > t - 7 * DAY && u <= t).length <= 100)

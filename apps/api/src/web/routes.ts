@@ -5,10 +5,10 @@ import type { AppContext } from "../context.ts"
 import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
-import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, connectionPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
+import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
-import { OutboxError, availability, cancel, listOutbound, resume } from "../sessions/outbox.ts"
+import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, listOutbound, resume } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
@@ -94,19 +94,18 @@ export function webRoutes(ctx: AppContext): Hono {
     return r?.n ?? 0
   }
 
-  /** Today's sending on a live connection: what went out against the warmup allowance, what's waiting, and when next. */
+  /** Today's sending on a live connection: what went out against its daily limit, what's waiting, and when next. */
   async function summary(userId: string, connectionId: string): Promise<ConnectionSummary> {
-    const [{ actions }, [q]] = await Promise.all([
+    const [{ today }, [q]] = await Promise.all([
       availability(ctx.sql, userId, connectionId, new Date()),
       ctx.sql<{ n: number; next: Date | null }>(
         `select count(*)::int as n, min(scheduled_for) as next from parley.outbound where connection_id = $1 and status = 'scheduled'`,
         [connectionId]
       ),
     ])
-    const kinds = Object.values(actions)
     return {
-      sentToday: kinds.reduce((n, a) => n + a!.usedToday, 0),
-      allowanceToday: kinds.reduce((n, a) => n + a!.allowance, 0),
+      sentToday: today.sentToday,
+      dailyLimit: today.dailyLimit,
       queued: q?.n ?? 0,
       nextAt: q?.next?.toISOString() ?? null,
     }
@@ -158,29 +157,26 @@ export function webRoutes(ctx: AppContext): Hono {
     }
   })
 
+  // A connected account: its chats, today's sending and its settings, on one page.
   app.get("/app/connections/:id", async (c) => {
     const v = await viewer(c)
     if (!v) return rememberNext(c)
     const id = c.req.param("id")
     const connection = (await ctx.sessions.list(v.profile.id)).find((x) => x.id === id)
     if (!connection) return c.text("Unknown connection.", 404)
-    const [{ actions }, queued, recent, agents, exits, proxied, total, synced] = await Promise.all([
-      availability(ctx.sql, v.profile.id, id, new Date()),
-      listOutbound(ctx.sql, v.profile.id, { connectionId: id, status: "scheduled", limit: 25 }),
-      listOutbound(ctx.sql, v.profile.id, { connectionId: id, limit: 40 }),
+    const [chats, agents, sum] = await Promise.all([
+      ctx.sessions.chats(v.profile.id, id),
       agentSessions(ctx.sql, v.profile.id),
-      ctx.exits.exits(ctx.sql, v.profile.id),
-      ctx.exits.proxied(ctx.sql, v.profile.id),
-      queuedTotal(v.profile.id),
-      syncedCount(id),
+      connection.status === "connected" ? summary(v.profile.id, id) : undefined,
     ])
-    const policy = policyFor(connection.channel)
-    return c.html(connectionPage({
-      user: v.profile, connection, actions, queued, recent: recent.filter((m) => m.status !== "scheduled").slice(0, 15),
-      exit: exits.find((e) => e.connectionId === id), proxied, agentCount: agents.length, queuedTotal: total,
-      policy: { start: policy.activeHours.start, end: policy.activeHours.end, days: policy.activeDays }, synced,
+    return c.html(chatsPage({
+      user: v.profile, connection, chats, agentCount: agents.length, saved: c.req.query("saved") === "1",
+      today: sum ? { sentToday: sum.sentToday, dailyLimit: sum.dailyLimit } : null, queued: sum?.queued ?? 0,
     }))
   })
+
+  // The chats used to have their own page; it's the account page now.
+  app.get("/app/connections/:id/chats", (c) => c.redirect(`/app/connections/${c.req.param("id")}`))
 
   app.post("/app/connections/:id/resume", async (c) => {
     const userId = await currentUserId(c, ctx)
@@ -197,9 +193,11 @@ export function webRoutes(ctx: AppContext): Hono {
     const form = await c.req.formData()
     const timezone = String(form.get("timezone") ?? "").trim()
     const country = String(form.get("country") ?? "").trim()
+    const limit = Number(String(form.get("daily_limit") ?? "").trim() || NaN)
     await ctx.sessions.setLocale(userId, c.req.param("id"), {
       timezone: isValidTimeZone(timezone) && timezone ? timezone : undefined,
       country: /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : undefined,
+      dailyLimit: Number.isInteger(limit) && limit >= 1 && limit <= MAX_DAILY_LIMIT ? limit : undefined,
     }).catch((e) => {
       if (!(e instanceof OutboxError)) throw e
     })
@@ -320,18 +318,6 @@ export function webRoutes(ctx: AppContext): Hono {
     }
   })
 
-  // Choose which chats on a connection are synced (visible to agents). Signed-in only: the link URL an agent holds
-  // must not let it widen its own access.
-  app.get("/app/connections/:id/chats", async (c) => {
-    const v = await viewer(c)
-    if (!v) return rememberNext(c)
-    const id = c.req.param("id")
-    const connection = (await ctx.sessions.list(v.profile.id)).find((x) => x.id === id)
-    if (!connection) return c.text("Unknown connection.", 404)
-    const [chats, agents] = await Promise.all([ctx.sessions.chats(v.profile.id, id), agentSessions(ctx.sql, v.profile.id)])
-    return c.html(chatsPage({ user: v.profile, connection, chats, agentCount: agents.length, saved: c.req.query("saved") === "1" }))
-  })
-
   // Ignore or un-ignore chats in place (the picker calls this per tap). Only the named chats change, so chats that
   // arrived after the page loaded keep syncing.
   app.post("/app/connections/:id/chats/ignore", async (c) => {
@@ -356,7 +342,7 @@ export function webRoutes(ctx: AppContext): Hono {
       if (e instanceof ConnectError) return c.text("Unknown connection.", 404)
       throw e
     }
-    return c.redirect(`/app/connections/${id}/chats?saved=1`)
+    return c.redirect(`/app/connections/${id}?saved=1`)
   })
 
   app.get("/app/agents", async (c) => {
