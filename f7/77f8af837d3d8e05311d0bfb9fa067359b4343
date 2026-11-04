@@ -1,0 +1,53 @@
+apps/api/src/sessions/actor.ts
+  s_9f02e2f7c12775::t_4c15686b53ac6e 251-252
+  s_9f02e2f7c12775::t_f682741b61ac03 12,53,196,233-245,286-334,665-667
+  s_9f02e2f7c12775::t_5a3e9b06965abc 7
+packages/channels/src/fake.ts
+  s_9f02e2f7c12775::t_a8f0436d44bc33 16,90-94
+packages/channels/src/contract.ts
+  s_9f02e2f7c12775::t_a8f0436d44bc33 21-22,64-65,67,70,98-99,173-174
+apps/api/src/sessions/chats.ts
+  s_9f02e2f7c12775::t_f682741b61ac03 235-244
+apps/api/test/pages.test.ts
+  s_9f02e2f7c12775::t_1494bc9246bae9 29
+apps/api/test/media-reactions.test.ts
+  s_9f02e2f7c12775::t_2aff461a0195fb 282,314-315,318-319
+  s_9f02e2f7c12775::t_8ab6a22bf80205 9,272-281,283-313,316-317,320-338
+packages/channels/test/whatsapp-parse.test.ts
+  s_9f02e2f7c12775::t_8ab6a22bf80205 4-5,73-80
+apps/api/src/web/pages.ts
+  s_9f02e2f7c12775::t_5a3e9b06965abc 4
+  s_9f02e2f7c12775::t_39914b7b5f3a59 268,350-354,368-370,388
+packages/auth/migrations/0020_unsend.sql
+  s_9f02e2f7c12775::t_f911cf70fa77d8 1-6
+packages/channels/src/whatsapp/index.ts
+  s_9f02e2f7c12775::t_a8f0436d44bc33 9,63,65-71,283-290,294,310
+packages/channels/src/whatsapp/parse.ts
+  s_9f02e2f7c12775::t_a8f0436d44bc33 88-93
+apps/api/src/sessions/outbox.ts
+  s_9f02e2f7c12775::t_d2d48528a71b37 21,64-65,71,73,76,143-146,173-174,180-182,185-186,189,245,255-256,273
+  s_9f02e2f7c12775::t_4c8d1fd83b7f35 348-364
+  s_9f02e2f7c12775::t_5a3e9b06965abc 49-54
+packages/channels/src/whatsapp/meta.ts
+  s_9f02e2f7c12775::t_a8f0436d44bc33 8
+apps/api/src/web/routes.ts
+  s_9f02e2f7c12775::t_39914b7b5f3a59 11,232-248
+apps/api/src/mcp/server.ts
+  s_9f02e2f7c12775::t_14edcb554c4e5f 41,62,78,339-369,471-472,487
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f777f8af837d3d8e05311d0bfb9fa067359b4343",
+  "prompts": {},
+  "sessions": {
+    "s_9f02e2f7c12775": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c97a3aad-2de2-444d-b1f4-21ec79a1ee74",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
