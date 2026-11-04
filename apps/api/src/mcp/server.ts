@@ -3,7 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
-import { markRead, newReactions, newTotals, type InboxFilter, type StoredMessage } from "../sessions/chats.ts"
+import { markRead, newByChat, newReactions, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -73,7 +73,21 @@ function messageOut(m: StoredMessage) {
 /** At most this many new reactions are listed in one answer; the rest stay new for the next read. */
 const NEW_REACTIONS_LISTED = 100
 /** Tools whose answer already has the full what's-new breakdown (the others get a short count). */
-const READING_TOOLS = new Set(["list_chats", "read_inbox", "load_history"])
+const FULL_VIEW_TOOLS = new Set(["list_chats", "read_inbox", "load_history", "get_notifications"])
+
+const tally = (list: NewInChat[]) => ({
+  chats: list.filter((c) => c.messages + c.reactions > 0).length,
+  messages: list.reduce((n, c) => n + c.messages, 0),
+  reactions: list.reduce((n, c) => n + c.reactions, 0),
+})
+/** What's new, split into the chat at hand (`this_chat`) and the rest (`other_chats`), or `all_chats` with none at hand. */
+function splitNews(list: NewInChat[], here?: { chatId: string; connectionId?: string | undefined }) {
+  if (!here) return { all_chats: tally(list) }
+  const isHere = (c: NewInChat) => c.chatId === here.chatId && (!here.connectionId || c.connectionId === here.connectionId)
+  const mine = list.filter(isHere)
+  const { messages, reactions } = tally(mine)
+  return { this_chat: { chat_id: here.chatId, name: mine[0]?.name ?? null, messages, reactions }, other_chats: tally(list.filter((c) => !isHere(c))) }
+}
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
 
 /** What send_message, react_to_message and delete_message answer: the queued row, and when it goes out. */
@@ -121,21 +135,22 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   // Every tool's answer says when something new came in (like a badge), so an agent busy sending or checking a message
   // still notices. Counted alongside the tool, never marks anything read, and left out when nothing is new or the count
   // fails. The reading tools give the full breakdown instead.
+  // A tool about one chat (send_message, react_to_message, get_media, message_status, ...) splits it: this chat, and
+  // the rest. Other tools give the total across all chats.
   type ToolResult = { isError?: boolean; content: Array<{ type: string; text?: string }> }
-  const newsFor = async (extra: unknown) => {
-    const t = await newTotals(ctx.sql, principalOf(extra as Parameters<typeof principalOf>[0]).userId)
-    const events = t.messages + t.reactions
-    return events
-      ? { events, messages: t.messages, reactions: t.reactions, chats: t.chats, note: "Call list_chats with only_new: true to see where, or read_inbox to read them." }
-      : undefined
-  }
-  const withNews = async (result: ToolResult, news: Promise<unknown>): Promise<ToolResult> => {
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined)
+  const withNews = async (result: ToolResult, args: Record<string, unknown>, news: Promise<NewInChat[]>): Promise<ToolResult> => {
     const first = result.content?.[0]
     if (result.isError || first?.type !== "text" || !first.text) return result
     try {
       const body = JSON.parse(first.text)
-      const badge = await news
-      if (!badge || !body || typeof body !== "object" || Array.isArray(body)) return result
+      if (!body || typeof body !== "object" || Array.isArray(body)) return result
+      const list = await news
+      if (!list.some((c) => c.messages + c.reactions > 0)) return result
+      // The chat the answer is about: as the answer names it (a send's `to` is the chat's own id), else as asked.
+      const chatId = str(body.chat_id) ?? str(body.to) ?? str(args.chat_id) ?? str(args.to)
+      const connectionId = str(body.connection_id) ?? (UUID.test(str(args.connection_id) ?? "") ? str(args.connection_id) : undefined)
+      const badge = splitNews(list, chatId ? { chatId, connectionId } : undefined)
       return { ...result, content: [{ ...first, text: JSON.stringify({ ...body, new_since_last_read: badge }) }, ...result.content.slice(1)] }
     } catch {
       return result
@@ -143,9 +158,11 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   }
   const register = server.registerTool.bind(server) as (name: string, config: unknown, cb: (...a: unknown[]) => Promise<ToolResult>) => unknown
   server.registerTool = ((name: string, config: unknown, cb: (...a: unknown[]) => Promise<ToolResult>) =>
-    register(name, config, READING_TOOLS.has(name) ? cb : async (...a: unknown[]) => {
-      const news = newsFor(a[a.length - 1]).catch(() => undefined)
-      return withNews(await cb(...a), news)
+    register(name, config, FULL_VIEW_TOOLS.has(name) ? cb : async (...a: unknown[]) => {
+      const args = (a.length > 1 && a[0] && typeof a[0] === "object" ? a[0] : {}) as Record<string, unknown>
+      const news = (async () => newByChat(ctx.sql, principalOf(a[a.length - 1] as Parameters<typeof principalOf>[0]).userId, { chatId: str(args.chat_id) ?? str(args.to) }))()
+        .catch(() => [] as NewInChat[])
+      return withNews(await cb(...a), args, news)
     })) as typeof server.registerTool
 
   server.registerTool(
@@ -363,6 +380,30 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list chats")
+      }
+    }
+  )
+
+  server.registerTool(
+    "get_notifications",
+    {
+      title: "Get notifications",
+      description: "What came in from the other side since chats were last read: totals (`all_chats`), and each chat with something new and how many messages and reactions. Pass chat_id to split it into that chat (`this_chat`) and the rest (`other_chats`). Never marks anything read; read_inbox with a chat_id reads one. Every other tool's answer carries the same totals as `new_since_last_read` when something is new.",
+      inputSchema: { ...filters, chat_id: z.string().optional().describe("The chat you're in: counted on its own as this_chat, and left out of `chats`.") },
+    },
+    async ({ channel, connection_id, chat_id }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const where = await scope(userId, { channel, connection_id })
+        const [list, account] = await Promise.all([newByChat(ctx.sql, userId, { ...where, chatId: chat_id }), labels(userId)])
+        const here = chat_id ? { chatId: chat_id, connectionId: where.connectionId } : undefined
+        const others = list.filter((c) => c.messages + c.reactions > 0 && !(here && c.chatId === here.chatId && (!here.connectionId || c.connectionId === here.connectionId)))
+        return json({
+          ...splitNews(list, here),
+          chats: others.map((c) => ({ channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.chatId, name: c.name, kind: c.kind, messages: c.messages, reactions: c.reactions })),
+        })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not read notifications")
       }
     }
   )

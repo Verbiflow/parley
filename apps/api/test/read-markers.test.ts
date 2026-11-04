@@ -113,7 +113,7 @@ test("a chat folded into another (private id → number) keeps how far it was re
   assert.deepEqual(ana.new, { messages: 0, reactions: 0 })
 })
 
-test("every other tool's answer carries a short count of what's new, without marking it read; none once all is read", async () => {
+test("every other tool's answer carries what's new, split into this chat and the rest when it's about one chat; get_notifications lists it", async () => {
   const email = "badge@parley.test"
   const token = await agentToken(base, email, "Claude")
   const { accountId, connectionId } = await linked(email)
@@ -123,18 +123,40 @@ test("every other tool's answer carries a short count of what's new, without mar
   assert.equal(await news("list_connections"), undefined)
   fake.simulator.deliver(connectionId, { id: "b1", threadId: "ana", from: "ana", text: "ping", at: at(1) })
   fake.simulator.deliver(connectionId, { id: "b2", threadId: "team", from: "bo", text: "pong", at: at(1) })
-  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 2)
+  fake.simulator.deliver(connectionId, { id: "b3", threadId: "team", from: "cy", text: "pang", at: at(2) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 3)
   fake.simulator.react(connectionId, [{ threadId: "ana", messageId: "b1", from: "ana", fromMe: false, emoji: "👀", at: at(2) }])
 
-  const badge = await waitUntil(() => news("send_availability"), (b) => b?.reactions === 1)
-  assert.deepEqual({ ...badge, note: undefined }, { events: 3, messages: 2, reactions: 1, chats: 2, note: undefined })
-  // Asking again changes nothing: only reading does.
-  assert.equal((await news("list_connections")).events, 3)
-  // A failed call is left alone.
-  const failed = await callTool(base, token, "message_status", { message_id: "nope" })
-  assert.equal(failed.isError, true)
-  assert.equal(typeof failed.result, "string")
+  // Not about a chat: the total.
+  const total = await waitUntil(() => news("send_availability"), (b) => b?.all_chats?.reactions === 1)
+  assert.deepEqual(total, { all_chats: { chats: 2, messages: 3, reactions: 1 } })
+  // About one chat: that chat, and the rest.
+  assert.deepEqual(await news("get_media", { chat_id: "ana", message_id: "b1" }), undefined) // b1 has no media: an error answer is left alone
+  const sent = await news("send_message", { to: "ana", text: "hi" })
+  assert.deepEqual(sent, { this_chat: { chat_id: "ana", name: "Ana", messages: 1, reactions: 1 }, other_chats: { chats: 1, messages: 2, reactions: 0 } })
+  const reacted = await news("react_to_message", { chat_id: "team", message_id: "b2", emoji: "👍" })
+  assert.deepEqual(reacted, { this_chat: { chat_id: "team", name: "Team", messages: 2, reactions: 0 }, other_chats: { chats: 1, messages: 1, reactions: 1 } })
 
+  // get_notifications: the same counts and the chats with something new; never marks read, and isn't badged itself.
+  const all = (await callTool(base, token, "get_notifications")).result
+  const account = all.chats[0].account
+  // Most recent first: Team's last message is newer.
+  assert.deepEqual(all, {
+    all_chats: { chats: 2, messages: 3, reactions: 1 },
+    chats: [
+      { channel: "fake-wa", connection_id: connectionId, account, chat_id: "team", name: "Team", kind: "group", messages: 2, reactions: 0 },
+      { channel: "fake-wa", connection_id: connectionId, account, chat_id: "ana", name: "Ana", kind: "direct", messages: 1, reactions: 1 },
+    ],
+  })
+  const inAna = (await callTool(base, token, "get_notifications", { chat_id: "ana" })).result
+  assert.deepEqual(inAna.this_chat, { chat_id: "ana", name: "Ana", messages: 1, reactions: 1 })
+  assert.deepEqual(inAna.other_chats, { chats: 1, messages: 2, reactions: 0 })
+  assert.deepEqual(inAna.chats.map((c: any) => c.chat_id), ["team"])
+
+  // Reading Ana clears it there only; in a chat with nothing new, this_chat says so.
+  await callTool(base, token, "read_inbox", { chat_id: "ana" })
+  assert.deepEqual(await news("send_message", { to: "ana", text: "again" }), { this_chat: { chat_id: "ana", name: "Ana", messages: 0, reactions: 0 }, other_chats: { chats: 1, messages: 2, reactions: 0 } })
   await callTool(base, token, "read_inbox")
   assert.equal(await news("list_connections"), undefined)
+  assert.deepEqual((await callTool(base, token, "get_notifications")).result, { all_chats: { chats: 0, messages: 0, reactions: 0 }, chats: [] })
 })
