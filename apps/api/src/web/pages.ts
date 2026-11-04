@@ -497,7 +497,7 @@ const CHATS_CSS = `
 .prefs .today .bar{display:inline-block;width:120px;vertical-align:middle;margin:0}
 .prefs .today a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px}
 .pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
-.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .cc{flex:0 0 90px;min-width:0}
+.pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .lim > span{white-space:nowrap}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
 .sws{display:flex;gap:22px;align-items:center;height:34px;margin-left:18px}
 .sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px}
@@ -554,7 +554,7 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
-      <label class="field lim"><span>Daily limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
+      <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
       <button class="btn line sm" type="submit">Save</button>
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
@@ -563,7 +563,6 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
       </span>
     </form>
     <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" id="${behave}" hidden></form>
-    <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count.</p>
   </div>`
 }
 
