@@ -90,14 +90,16 @@ export default {
     const db = new RequestDatabase(env.HYPERDRIVE.connectionString)
     const tx = new Transactor(env.HYPERDRIVE.connectionString)
     const transport = { fetch: (input: string, init: RequestInit) => env.SESSIONS.fetch(input, init), baseUrl: SESSIONS_BASE, secret: env.SESSIONS_SECRET }
+    // Request queries go through the transactor's small pool rather than the one request connection, so a page's
+    // independent reads (its `Promise.all`s) run concurrently instead of queueing on a single socket.
     const ctx: AppContext = {
       config,
       db,
-      sql: db.query,
+      sql: tx.query,
       tx,
       accessTokenKeys: tokenKeys({ signingKey: config.signingKey, verifyKeys: config.verifyKeys, tokenSeconds: ACCESS_TOKEN_SECONDS }, config.env),
       channels: EDGE_CHANNELS,
-      sessions: new RemoteSessions(db.query, transport),
+      sessions: new RemoteSessions(tx.query, transport),
       exits,
       limiter: bindingLimiter(env),
       async close() {

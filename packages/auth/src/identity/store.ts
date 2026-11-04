@@ -44,15 +44,30 @@ export async function startBrowserSession(
   return row!
 }
 
+// A live session, with last_seen_at bumped at most once a minute: every dashboard page reads the session, and a write
+// per page view was a wasted round trip that also churned the row.
+const LIVE_SESSION = `with s as (
+    select id, user_id, last_seen_at from identity.browser_session where token_hash = $1 and expires_at > now()
+  ), touch as (
+    update identity.browser_session b set last_seen_at = now() from s
+     where b.id = s.id and s.last_seen_at < now() - interval '1 minute'
+  )`
+
 /** The account a live session token belongs to, or undefined if unknown/expired. Touches last_seen_at. */
 export async function sessionByToken(sql: Sql, tokenHash: string): Promise<{ userId: string; id: string } | undefined> {
-  const [row] = await sql<{ user_id: string; id: string }>(
-    `update identity.browser_session set last_seen_at = now()
-     where token_hash = $1 and expires_at > now()
-     returning user_id, id`,
+  const [row] = await sql<{ user_id: string; id: string }>(`${LIVE_SESSION} select id, user_id from s`, [tokenHash])
+  return row && { userId: row.user_id, id: row.id }
+}
+
+/** `sessionByToken` and `accountById` in one round trip: what every dashboard page needs first. */
+export async function sessionProfileByToken(sql: Sql, tokenHash: string): Promise<{ sessionId: string; profile: Profile } | undefined> {
+  const [row] = await sql<{ session_id: string; id: string; email: string; name: string; image: string | null; signed_in_with: SignInMethod | null; created_at: Date }>(
+    `${LIVE_SESSION}
+     select s.id as session_id, a.id, a.email, a.name, a.image, a.signed_in_with, a.created_at
+       from s join identity.account a on a.id = s.user_id`,
     [tokenHash]
   )
-  return row && { userId: row.user_id, id: row.id }
+  return row && { sessionId: row.session_id, profile: { id: row.id, email: row.email, name: row.name, image: row.image, signedInWith: row.signed_in_with, createdAt: row.created_at.toISOString() } }
 }
 
 // ---- Device-code grant (RFC 8628) ------------------------------------------

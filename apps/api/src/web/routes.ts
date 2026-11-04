@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono"
 import { getCookie, setCookie, deleteCookie } from "hono/cookie"
 import { store } from "@parley/auth"
 import type { AppContext } from "../context.ts"
-import { currentSession, currentUserId, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
+import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
 import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, connectionPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
@@ -75,11 +75,12 @@ export function webRoutes(ctx: AppContext): Hono {
   })
 
   /** Resolve the signed-in account for an /app page, or undefined (the caller redirects to sign-in). */
-  async function viewer(c: Context): Promise<{ profile: store.Profile; sessionId: string } | undefined> {
-    const session = await currentSession(c, ctx)
-    if (!session) return undefined
-    const profile = await store.accountById(ctx.sql, session.userId)
-    return profile && { profile, sessionId: session.id }
+  const viewer = (c: Context): Promise<{ profile: store.Profile; sessionId: string } | undefined> => currentViewer(c, ctx)
+
+  /** How many chats a connection syncs. The caller has already checked the connection is the viewer's. */
+  const syncedCount = async (connectionId: string) => {
+    const [r] = await ctx.sql<{ n: number }>(`select count(*)::int as n from parley.chat where connection_id = $1 and synced`, [connectionId])
+    return r?.n ?? 0
   }
 
   const mcpUrl = (c: Context) => `${ctx.config.publicUrl ?? new URL(c.req.url).origin}/mcp`
@@ -94,12 +95,14 @@ export function webRoutes(ctx: AppContext): Hono {
 
   /** Today's sending on a live connection: what went out against the warmup allowance, what's waiting, and when next. */
   async function summary(userId: string, connectionId: string): Promise<ConnectionSummary> {
-    const { actions } = await availability(ctx.sql, userId, connectionId, new Date())
+    const [{ actions }, [q]] = await Promise.all([
+      availability(ctx.sql, userId, connectionId, new Date()),
+      ctx.sql<{ n: number; next: Date | null }>(
+        `select count(*)::int as n, min(scheduled_for) as next from parley.outbound where connection_id = $1 and status = 'scheduled'`,
+        [connectionId]
+      ),
+    ])
     const kinds = Object.values(actions)
-    const [q] = await ctx.sql<{ n: number; next: Date | null }>(
-      `select count(*)::int as n, min(scheduled_for) as next from parley.outbound where connection_id = $1 and status = 'scheduled'`,
-      [connectionId]
-    )
     return {
       sentToday: kinds.reduce((n, a) => n + a!.usedToday, 0),
       allowanceToday: kinds.reduce((n, a) => n + a!.allowance, 0),
@@ -111,16 +114,26 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [connections, agents] = await Promise.all([ctx.sessions.list(v.profile.id), agentSessions(ctx.sql, v.profile.id)])
+    const [connections, agents, outbound, queued] = await Promise.all([
+      ctx.sessions.list(v.profile.id),
+      agentSessions(ctx.sql, v.profile.id),
+      listOutbound(ctx.sql, v.profile.id, { limit: 30 }),
+      queuedTotal(v.profile.id),
+    ])
+    // Every live connection's figures at once (they came from the viewer's own list, so ownership is settled).
+    const live = connections.filter((conn) => conn.status === "connected")
+    const [synced, sums] = await Promise.all([
+      Promise.all(live.map((conn) => (conn.chatsChosen ? syncedCount(conn.id) : undefined))),
+      Promise.all(live.map((conn) => summary(v.profile.id, conn.id))),
+    ])
     const syncedCounts = new Map<string, number>()
     const summaries = new Map<string, ConnectionSummary>()
-    for (const conn of connections) {
-      if (conn.status !== "connected") continue
-      if (conn.chatsChosen) syncedCounts.set(conn.id, (await ctx.sessions.chats(v.profile.id, conn.id, { syncedOnly: true })).length)
-      summaries.set(conn.id, await summary(v.profile.id, conn.id))
-    }
-    const recent = (await listOutbound(ctx.sql, v.profile.id, { limit: 30 })).filter((m) => m.status !== "scheduled").slice(0, 8)
-    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued: await queuedTotal(v.profile.id), recent }))
+    live.forEach((conn, i) => {
+      if (synced[i] !== undefined) syncedCounts.set(conn.id, synced[i])
+      summaries.set(conn.id, sums[i]!)
+    })
+    const recent = outbound.filter((m) => m.status !== "scheduled").slice(0, 8)
+    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued, recent }))
   })
 
   app.post("/app/connect", async (c) => {
@@ -155,13 +168,13 @@ export function webRoutes(ctx: AppContext): Hono {
       ctx.exits.exits(ctx.sql, v.profile.id),
       ctx.exits.proxied(ctx.sql, v.profile.id),
       queuedTotal(v.profile.id),
-      ctx.sessions.chats(v.profile.id, id, { syncedOnly: true }),
+      syncedCount(id),
     ])
     const policy = policyFor(connection.channel)
     return c.html(connectionPage({
       user: v.profile, connection, actions, queued, recent: recent.filter((m) => m.status !== "scheduled").slice(0, 15),
       exit: exits.find((e) => e.connectionId === id), proxied, agentCount: agents.length, queuedTotal: total,
-      policy: { start: policy.activeHours.start, end: policy.activeHours.end, days: policy.activeDays }, synced: synced.length,
+      policy: { start: policy.activeHours.start, end: policy.activeHours.end, days: policy.activeDays }, synced,
     }))
   })
 
@@ -313,7 +326,8 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/agents", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    return c.html(agentsPage({ user: v.profile, agents: await agentSessions(ctx.sql, v.profile.id), mcpUrl: mcpUrl(c), queuedTotal: await queuedTotal(v.profile.id) }))
+    const [agents, queued] = await Promise.all([agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id)])
+    return c.html(agentsPage({ user: v.profile, agents, mcpUrl: mcpUrl(c), queuedTotal: queued }))
   })
 
   app.post("/app/agents/:id/disconnect", async (c) => {
@@ -326,8 +340,8 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/settings", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [sessions, agents] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id)])
-    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: await queuedTotal(v.profile.id) }))
+    const [sessions, agents, queued] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id)])
+    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: queued }))
   })
 
   app.post("/app/settings/sessions/:id/end", async (c) => {
