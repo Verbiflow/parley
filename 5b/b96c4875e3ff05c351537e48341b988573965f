@@ -1,0 +1,37 @@
+apps/api/wrangler.jsonc
+  s_735817471b23dd::t_1c1cf47cdfbd08 18-20
+apps/api/src/web/session.ts
+  s_735817471b23dd::t_47472baf6c3660 34-40
+apps/api/src/worker.ts
+  s_735817471b23dd::t_8a8614d8eef3a9 102
+  s_735817471b23dd::t_d341806c75ae6e 93-94,98
+apps/api/src/web/routes.ts
+  s_735817471b23dd::t_9764c2134d7ece 98-104
+  s_735817471b23dd::t_b2cc0c924d794e 343-344
+  s_735817471b23dd::t_cb02436d7484cb 5
+  s_735817471b23dd::t_2940c97b8dd34e 177
+  s_735817471b23dd::t_043513a2dd0679 78-83
+  s_735817471b23dd::t_b319de3499dbf1 117-128,131-136
+  s_735817471b23dd::t_59362422d3b016 329-330
+  s_735817471b23dd::t_6cda4af31f31f4 171
+packages/auth/src/identity/store.ts
+  s_735817471b23dd::t_aca59460c586c0 47-55,58-67,70
+apps/api/src/db/transactor.ts
+  s_735817471b23dd::t_80c769fe783c12 19-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5bb96c4875e3ff05c351537e48341b988573965f",
+  "prompts": {},
+  "sessions": {
+    "s_735817471b23dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ced57d4-d6b0-4971-9fc2-36a4639b764a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
