@@ -1,0 +1,20 @@
+apps/api/test/media-reactions.test.ts
+  s_81b1c9a3b98fe1::t_726e1617a08d56 76-77
+  s_81b1c9a3b98fe1::t_6879cae0022bed 258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "247fdde176056028d70417b49c0529057ef90cfc",
+  "prompts": {},
+  "sessions": {
+    "s_81b1c9a3b98fe1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "387020bf-7d61-4b9e-867d-91dc769149d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
