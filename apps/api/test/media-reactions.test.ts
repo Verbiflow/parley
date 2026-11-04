@@ -73,7 +73,8 @@ test("reactions: one per person, the latest wins, a taken-back one is gone and a
 
   // Reactions that came with a history message are stored with it.
   fake.simulator.deliver(connectionId, { id: "h1", threadId: "ana", from: "ana", text: "old", reactions: [{ threadId: "ana", messageId: "h1", from: "me", fromMe: true, emoji: "🙏", at: "2026-11-01T00:00:00Z" }] })
-  const h = await waitUntil(() => sessions.inbox(accountId, { limit: 5, chatId: "ana" }), (ms) => ms.length === 1)
+  // The message is stored a moment before its reactions: wait for both.
+  const h = await waitUntil(() => sessions.inbox(accountId, { limit: 5, chatId: "ana" }), (ms) => ms.length === 1 && ms[0]!.reactions.length === 1)
   assert.deepEqual(h[0]!.reactions.map((x) => [x.fromMe, x.emoji]), [[true, "🙏"]])
 })
 
@@ -254,7 +255,7 @@ test("backfill: asks for each recent chat's history before its newest message, a
   // The phone's answer: the same message, now with its attachment and a reaction.
   const reaction = { threadId: "ana", messageId: "p", from: "me", fromMe: true, emoji: "❤️", at: at(1) }
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "late", thumbnail: "dGh1bWI=" }, reactions: [reaction] })
-  const filled = await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "ana" }), (m) => m.some((x) => x.id === "p" && x.media))
+  const filled = await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "ana" }), (m) => m.some((x) => x.id === "p" && x.media && x.reactions.length === 1))
   const p = filled.find((x) => x.id === "p")!
   assert.equal(p.media?.kind, "image")
   assert.deepEqual(p.reactions.map((r) => r.emoji), ["❤️"])
