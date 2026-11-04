@@ -6,6 +6,7 @@ import { ConnectError } from "../sessions/actor.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
+import { AccountError, accountLabel, findConnection, pickConnection } from "./accounts.ts"
 
 /** The principal a verified bearer token carries into a tool call (set by the /mcp bearer middleware). */
 export type McpPrincipal = { userId: string; sessionId: string }
@@ -19,7 +20,7 @@ function principalOf(extra: { authInfo?: { extra?: unknown } } | undefined): Mcp
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] })
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError
+const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError || e instanceof AccountError
 
 const WAIT_TEXT: Record<string, string> = {
   paused: "the connection is paused",
@@ -97,15 +98,23 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
 
   server.registerTool(
     "list_connections",
-    { title: "List connections", description: "List the messaging-channel connections on your Parley account, with whether each can send right now.", inputSchema: {} },
+    {
+      title: "List connections",
+      description: "List the messaging accounts linked to Parley (there can be several per channel, e.g. a personal and a work WhatsApp), with each one's number (`account`) and whether it can send right now. Other tools take `connection_id`: this id, or simply the account's number.",
+      inputSchema: {},
+    },
     async (_args, extra) => {
       const { userId } = principalOf(extra)
-      const connections = await ctx.sessions.list(userId)
+      const connections = (await ctx.sessions.list(userId)).filter((c) => c.status !== "logged_out" && c.status !== "error")
+      const live = connections.filter((c) => c.status === "connected")
       return json({
         connections: connections.map((c) => ({
-          id: c.id, channel: c.channel, status: c.status, handle: c.handle, timezone: c.timezone, country: c.country,
+          id: c.id, channel: c.channel, account: accountLabel(c), name: c.displayName, status: c.status, handle: c.handle, timezone: c.timezone, country: c.country,
           halted: c.haltedReason, paused_until: c.pausedUntil,
         })),
+        note: live.length > 1
+          ? "Several accounts are connected: pass connection_id (an id above, or the account number) to say which one sends. Reading tools cover every account unless you filter."
+          : live.length === 1 ? "One account is connected; tools use it when you leave connection_id out." : "Nothing is connected yet. Call connect to link an account.",
       })
     }
   )
@@ -114,7 +123,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "connect",
     {
       title: "Connect a channel",
-      description: "Start linking one of your messaging accounts (e.g. WhatsApp) to Parley. Returns a link URL to open in a browser (scan the QR / authorize), and a connection id to poll with connection_status.",
+      description: "Start linking a messaging account (e.g. WhatsApp) to Parley. You can link several on one channel (another WhatsApp number is just another connect); linking a number that is already linked replaces the old link. Returns a link URL to open in a browser (scan the QR / authorize), and a connection id to poll with connection_status.",
       inputSchema: {
         channel: z.string().describe("Channel id, e.g. \"whatsapp\". Use list_channels to see options."),
         timezone: z.string().refine(isValidTimeZone, "unknown IANA time zone").optional().describe("IANA time zone the account holder lives in, e.g. \"Europe/London\". Messages go out during their local daytime. Defaults to UTC."),
@@ -157,15 +166,22 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
 
   const filters = {
     channel: z.string().optional().describe("Only this channel, e.g. \"whatsapp\". Omit for every connected channel."),
-    connection_id: z.string().optional().describe("Only this connection (if you have several on one channel)."),
+    connection_id: z.string().optional().describe("Only this account: a connection id from list_connections, or its number (e.g. \"+65 9136 3557\")."),
   }
+  /** Turn the filters an agent passed into the store's, resolving a number to its connection. */
+  const scope = async (userId: string, f: { channel?: string | undefined; connection_id?: string | undefined }) => ({
+    channel: f.channel, connectionId: (await findConnection(ctx, userId, f.connection_id, f.channel))?.id,
+  })
+  /** connection id → its number, so agents with several accounts can tell which one a chat or message is on. */
+  const labels = async (userId: string) => new Map((await ctx.sessions.list(userId)).map((c) => [c.id, accountLabel(c)]))
+  const ACCOUNT_REF = "Which of your accounts: a connection id from list_connections, or the account's number. Optional when only one account fits."
   const pickUrl = `${base}/app`
 
   server.registerTool(
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected channels, newest first — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what.",
+      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
@@ -176,17 +192,18 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     async ({ channel, connection_id, chat_id, limit, before }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const messages = await ctx.sessions.inbox(userId, { channel, connectionId: connection_id, chatId: chat_id, limit: limit ?? 50, before })
+        const where = await scope(userId, { channel, connection_id })
+        const [messages, account] = await Promise.all([ctx.sessions.inbox(userId, { ...where, chatId: chat_id, limit: limit ?? 50, before }), labels(userId)])
         const out: Record<string, unknown> = {
           messages: messages.map((m) => ({
-            channel: m.channel, connection_id: m.connectionId, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
+            channel: m.channel, connection_id: m.connectionId, account: account.get(m.connectionId) ?? null, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
             id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
             ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null, size: m.media.size ?? null, width: m.media.width ?? null, height: m.media.height ?? null, seconds: m.media.seconds ?? null } } : {}),
             ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at })) } : {}),
           })),
         }
         if (!messages.length) {
-          const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id })
+          const chats = await ctx.sessions.inboxChats(userId, where)
           out.note = chats.length
             ? "No messages yet in the synced chats (matching your filters)."
             : `No chats are synced${channel ? ` on ${channel}` : ""}. Ask the account holder to connect a channel (their chats are at ${pickUrl})`
@@ -202,15 +219,15 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_chats",
     {
       title: "List chats",
-      description: "List the chats (people and groups) agents can see (everything except what the account holder ignored), across all connected channels, most recent first. `awaiting` says who owes the next message: \"you\" when the last word was theirs. Set awaiting_reply to get just the conversations waiting on you.",
+      description: "List the chats (people and groups) agents can see (everything except what the account holder ignored), across all connected accounts, most recent first (the same person can appear once per account). `awaiting` says who owes the next message: \"you\" when the last word was theirs. Set awaiting_reply to get just the conversations waiting on you.",
       inputSchema: { ...filters, awaiting_reply: z.boolean().optional().describe("Only chats whose last message came from the other side.") },
     },
     async ({ channel, connection_id, awaiting_reply }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id, awaitingReply: awaiting_reply })
+        const [chats, account] = await Promise.all([ctx.sessions.inboxChats(userId, { ...(await scope(userId, { channel, connection_id })), awaitingReply: awaiting_reply }), labels(userId)])
         return json({
-          chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt, awaiting: c.awaiting })),
+          chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt, awaiting: c.awaiting })),
           ...(chats.length ? {} : { note: awaiting_reply ? "Nothing is waiting on you." : `No chats are visible. The account holder may have ignored them all; their chats are at ${pickUrl}` }),
         })
       } catch (e) {
@@ -226,7 +243,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       description:
         "Queue a message on a connected channel: text, or a photo, video, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
       inputSchema: {
-        connection_id: z.string(),
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the \`to\` chat.`),
         to: z.string().describe("Recipient on the channel: a chat_id from list_chats, or a phone number for WhatsApp."),
         text: z.string().max(8000).optional().describe("The message, or the caption when sending media."),
         media: z.object({
@@ -245,11 +262,12 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       const { userId, sessionId } = principalOf(extra)
       try {
         if (!text && !media) return fail("give `text`, `media`, or both")
+        const conn = await pickConnection(ctx, userId, connection_id, { chatId: to })
         const file = media ? resolveMedia(media) : undefined
-        const { message, replayed } = await ctx.sessions.enqueue(userId, connection_id, {
+        const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
           to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId,
         })
-        return json(queuedView(message, replayed))
+        return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not send")
       }
@@ -262,7 +280,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       title: "React to a message",
       description: "React to a message with an emoji, as the account holder would from their phone. Paced like a reply. Pass an empty emoji to take your reaction back; a new one replaces the old.",
       inputSchema: {
-        connection_id: z.string(),
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account the message is on.`),
         chat_id: z.string().describe("The chat the message is in (chat_id from read_inbox)."),
         message_id: z.string().describe("The message's id from read_inbox."),
         emoji: z.string().max(32).describe("One emoji, e.g. \"👍\". Empty to remove your reaction."),
@@ -272,10 +290,11 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     async ({ connection_id, chat_id, message_id, emoji, idempotency_key }, extra) => {
       const { userId, sessionId } = principalOf(extra)
       try {
-        const { message, replayed } = await ctx.sessions.enqueue(userId, connection_id, {
+        const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id, messageId: message_id })
+        const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
           to: chat_id, text: emoji.trim(), reactTo: message_id, idempotencyKey: idempotency_key, agentSessionId: sessionId,
         })
-        return json(queuedView(message, replayed))
+        return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not react")
       }
@@ -289,7 +308,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       description:
         "Open the photo, video, voice note, document or sticker a message carries (a message from read_inbox with `media`). Always returns a `download_url` (any size, valid for an hour; fetch it with curl or code). Photos and stickers also come back as images you can see, voice notes and audio as audio, videos as their preview frame, PDFs as a document, and text files (txt, csv, json, …) as text. Needs the connection online; an old file may take a moment while the sender's phone uploads it again.",
       inputSchema: {
-        connection_id: z.string(),
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account the message is on.`),
         chat_id: z.string(),
         message_id: z.string(),
       },
@@ -297,8 +316,9 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     async ({ connection_id, chat_id, message_id }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const info = await ctx.sessions.mediaInfo(userId, connection_id, chat_id, message_id)
-        const link = await signMediaLink(ctx.config.signInKey, { accountId: userId, connectionId: connection_id, chatId: chat_id, messageId: message_id })
+        const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id, messageId: message_id })
+        const info = await ctx.sessions.mediaInfo(userId, conn.id, chat_id, message_id)
+        const link = await signMediaLink(ctx.config.signInKey, { accountId: userId, connectionId: conn.id, chatId: chat_id, messageId: message_id })
         const mimeType = (info.mimetype ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase()
         const size = info.size ?? 0
         const about = {
@@ -308,7 +328,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         }
         type Part = { type: "text"; text: string } | { type: "image" | "audio"; data: string; mimeType: string } | { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }
         const parts: Part[] = []
-        const fetchInline = async () => (await ctx.sessions.media(userId, connection_id, chat_id, message_id)).data
+        const fetchInline = async () => (await ctx.sessions.media(userId, conn.id, chat_id, message_id)).data
         if ((info.kind === "image" || info.kind === "sticker") && size <= INLINE_IMAGE_BYTES) {
           parts.push({ type: "image", data: await fetchInline(), mimeType: mimeType.startsWith("image/") ? mimeType : "image/jpeg" })
         } else if (info.kind === "audio" && size <= INLINE_FILE_BYTES) {
@@ -336,14 +356,15 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Send availability",
       description: "Whether a connection can send right now, and if not, when each kind of message could next go out and why. Includes today's usage against the account's (warming-up) daily allowance.",
-      inputSchema: { connection_id: z.string() },
+      inputSchema: { connection_id: z.string().optional().describe(ACCOUNT_REF) },
     },
     async ({ connection_id }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const { connection, actions } = await availability(ctx.sql, userId, connection_id, new Date())
+        const conn = await pickConnection(ctx, userId, connection_id)
+        const { connection, actions } = await availability(ctx.sql, userId, conn.id, new Date())
         return json({
-          connection_id, timezone: connection.timezone, halted: connection.haltedReason,
+          connection_id: conn.id, account: accountLabel(conn), timezone: connection.timezone, halted: connection.haltedReason,
           paused_until: connection.pausedUntil && connection.pausedUntil > new Date() ? connection.pausedUntil.toISOString() : null,
           actions: Object.fromEntries(Object.entries(actions).map(([k, a]) => [k, {
             can_send_now: a!.canSendNow, earliest_at: a!.earliestAt, waits: a!.waits, reason: a!.reason, used_today: a!.usedToday, daily_allowance: a!.allowance,
@@ -361,7 +382,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       title: "List outbox",
       description: "Messages you queued: scheduled ones in send order, then sent, failed and canceled ones. A failed message carries an error code; outcome_unknown means the send was interrupted and may or may not have arrived. To follow one message, use message_status.",
       inputSchema: {
-        connection_id: z.string().optional(),
+        connection_id: z.string().optional().describe("Only this account: a connection id, or its number."),
         status: z.enum(["scheduled", "sending", "sent", "failed", "canceled"]).optional(),
         limit: z.number().int().min(1).max(200).optional(),
       },
@@ -369,7 +390,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     async ({ connection_id, status, limit }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        return json({ messages: (await listOutbound(ctx.sql, userId, { connectionId: connection_id, status, limit: limit ?? 50 })).map(outboundView) })
+        return json({ messages: (await listOutbound(ctx.sql, userId, { connectionId: (await findConnection(ctx, userId, connection_id))?.id, status, limit: limit ?? 50 })).map(outboundView) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list the outbox")
       }

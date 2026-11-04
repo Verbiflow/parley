@@ -204,16 +204,19 @@ const OVERVIEW_CSS = `
 const LOCALE_SCRIPT = `document.querySelectorAll('form[data-locale]').forEach(f=>{try{f.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';const r=(navigator.language||'').split('-')[1];if(r&&/^[A-Za-z]{2}$/.test(r))f.country.value=r.toUpperCase()}catch(e){}});`
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
-/** One card per channel: the live ones get a Connect button in the brand's color, the rest say "soon". */
-function connectorCards(skip: Set<string>, compact = false): string {
-  const ids = Object.keys(CHANNELS).filter((id) => !(CHANNELS[id]!.live && skip.has(id)))
-  if (!ids.length) return ""
+/**
+ * One card per channel: the live ones get a Connect button in the brand's color, the rest say "soon". A channel
+ * that's already linked offers another account on it (a second WhatsApp number is just another link).
+ */
+function connectorCards(linked: Set<string>, compact = false): string {
+  const ids = Object.keys(CHANNELS)
   return `<div class="conns${compact ? " compact" : ""}">${ids.map((id) => {
     const c = CHANNELS[id]!
+    const more = c.live && linked.has(id)
     return `<div class="conn ${c.live ? "ready" : "later"}" style="--c:${c.color}">
       <span class="ct">${channelMark(id, compact ? 20 : 26)}</span>
-      <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
-      <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">coming soon</span>`}</div>
+      <div><b>${more ? `Another ${c.name}` : c.name}</b><small>${more ? "Link a second number, e.g. work and personal" : esc(c.tagline)}</small></div>
+      <div class="cf">${c.live ? connectForm(more ? "Add number" : `Connect ${c.name}`, more ? "btn line" : "btn") : `<span class="label">coming soon</span>`}</div>
     </div>`
   }).join("")}</div>`
 }

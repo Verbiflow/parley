@@ -8,7 +8,7 @@ import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, O
 import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
 import type { MediaFetcher } from "./fetch-media.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
-import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, setHistorySync, type Connection, type Locale } from "./store.ts"
+import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
 import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
@@ -500,6 +500,12 @@ export class Sessions {
         entry.link = undefined
         await markConnected(this.ctx.sql, connectionId, event.handle, countryOf(event.handle))
         await replanConnection(this.tx, connectionId, new Date())
+        // Linking a number that's already linked replaces the older link: two live links to one phone would read
+        // every message twice. Signing the old one out (off this event queue) also removes it from the phone.
+        for (const old of await supersede(this.ctx.sql, connectionId)) {
+          void this.logout(entry.accountId, old).catch((e: unknown) =>
+            console.error(JSON.stringify({ msg: "retire superseded link failed", connectionId: old, error: e instanceof Error ? e.message : String(e) })))
+        }
         break
       case "state":
         await this.#saveCreds(entry.accountId, entry.channel, connectionId, event.state)

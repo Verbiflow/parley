@@ -66,11 +66,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
   }
 
   const simulator: ChannelSimulator = {
-    completeLink(connectionId) {
+    completeLink(connectionId, handle) {
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
       conn.linked = true
-      conn.emit({ type: "open", handle: `fake:${connectionId}` })
+      conn.emit({ type: "open", handle: handle ?? `fake:${connectionId}` })
       conn.emit({ type: "state", state: JSON.stringify({ linked: true, connectionId }) })
     },
     deliver(connectionId, message) {

@@ -150,8 +150,8 @@ export interface Channel {
  * integration is held to the same contract in CI with no real account.
  */
 export interface ChannelSimulator {
-  /** Simulate the user completing the link (scanning the QR / authorizing). */
-  completeLink(connectionId: string): void
+  /** Simulate the user completing the link (scanning the QR / authorizing), as `handle` (default: unique to the connection). */
+  completeLink(connectionId: string, handle?: string): void
   /** Simulate an inbound message. */
   deliver(connectionId: string, message: { id?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
   /** Simulate reactions arriving (added, changed or taken back). */
