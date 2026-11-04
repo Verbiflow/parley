@@ -89,9 +89,43 @@ export const whatsappChannel: Channel = {
     // One agent for the WebSocket and one for media/HTTPS fetches, so nothing leaves from the server's own IP.
     const agent = proxy ? proxyAgent(proxy) : undefined
     const fetchAgent = proxy ? proxyAgent(proxy) : undefined
-    const auth = makeAuthState(state)
+    // Save the auth state whenever it changes: creds on `creds.update`, encryption sessions on every key write. Writes
+    // come in bursts, so they're batched; a send or a close saves at once, so a restart never loads keys older than
+    // the last message sent.
+    let saveTimer: ReturnType<typeof setTimeout> | undefined
+    const saveNow = () => {
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = undefined
+      emit({ type: "state", state: auth.serialize() })
+    }
+    const saveSoon = () => {
+      if (saveTimer || stopped) return
+      saveTimer = setTimeout(saveNow, 1000)
+      saveTimer.unref?.()
+    }
+    const auth = makeAuthState(state, saveSoon)
     let sock!: ReturnType<typeof makeWASocket>
     let stopped = false
+    // Messages we sent, by id. When a recipient's phone can't decrypt one, it asks us to send it again; Baileys looks
+    // the message up through `getMessage` and re-encrypts it. Without this the request is ignored and the recipient sees
+    // "Waiting for this message" for good. Kept across reconnects; the oldest are dropped past the cap.
+    const sent = new Map<string, proto.IMessage>()
+    const SENT_CAP = 1000
+    const remember = (id: string | null | undefined, message: proto.IMessage | null | undefined) => {
+      if (!id || !message) return
+      sent.delete(id)
+      sent.set(id, message)
+      if (sent.size > SENT_CAP) sent.delete(sent.keys().next().value!)
+    }
+    // How many times each message has been resent, so a phone that keeps failing can't make us resend forever. Shared
+    // across reconnects (Baileys would otherwise start a fresh count on every socket).
+    const retries = new Map<string, unknown>()
+    const msgRetryCounterCache = {
+      get: <T,>(k: string) => retries.get(k) as T | undefined,
+      set: <T,>(k: string, v: T) => { retries.set(k, v); if (retries.size > SENT_CAP) retries.delete(retries.keys().next().value!) },
+      del: (k: string) => { retries.delete(k) },
+      flushAll: () => retries.clear(),
+    }
     // Names learned from contacts / push names, and the chats we've reported — so a name that arrives later updates them.
     const names = new Map<string, string>()
     const known = new Map<string, Chat>()
@@ -283,6 +317,9 @@ export const whatsappChannel: Channel = {
         // WhatsApp sends at link time. That's where one-to-one chats come from (groups are fetched separately), so
         // without it the list is groups only. Take the recent sync; still decline the full archive.
         shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncNotification.HistorySyncType.FULL,
+        // Resend a message a recipient couldn't decrypt (see `sent` above).
+        getMessage: async (key) => (key.id ? sent.get(key.id) : undefined),
+        msgRetryCounterCache,
         ...(agent ? { agent, fetchAgent } : {}),
       })
 
@@ -293,7 +330,7 @@ export const whatsappChannel: Channel = {
       function on(event: string, fn: (arg: any) => void): void {
         (sock.ev as unknown as { on(e: string, f: (a: any) => void): void }).on(event, guard(event, fn))
       }
-      on("creds.update", () => emit({ type: "state", state: auth.serialize() }))
+      on("creds.update", saveNow)
 
       on("connection.update", (u) => {
         if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
@@ -383,17 +420,23 @@ export const whatsappChannel: Channel = {
         }
         try {
           const res = await sock.sendMessage(jid, { text: content.text })
+          remember(res?.key?.id, res?.message)
           return { id: res?.key?.id ?? "" }
         } catch (e) {
           throw classify(e)
+        } finally {
+          // Sending moved the encryption sessions forward; save them before anything can restart us.
+          if (saveTimer) saveNow()
         }
       },
       async logout() {
         stopped = true
+        if (saveTimer) clearTimeout(saveTimer)
         await sock.logout().catch(() => {})
       },
       async close() {
         stopped = true
+        if (saveTimer) saveNow()
         sock.end(undefined)
       },
     }
