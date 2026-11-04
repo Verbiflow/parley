@@ -1,0 +1,27 @@
+apps/api/src/web/pages.ts
+  s_ba224518e8107b::t_6d41c2956c2049 488
+apps/api/src/mcp/server.ts
+  s_ba224518e8107b::t_bb1f9078983c6d 20
+  s_ba224518e8107b::t_5de015005cdf5b 349-366
+  s_ba224518e8107b::t_d0cb9752c56bd0 41-42,53,57-75
+  s_ba224518e8107b::t_ff3d8dd5eef0ea 332
+  s_ba224518e8107b::t_6b93ad0ee3580b 6
+apps/api/test/mcp-send.test.ts
+  s_ba224518e8107b::t_c3e5561a0e430d 41-46,49-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "fa8aa125a002b0be479a8ffbddc0fe9336a03c34",
+  "prompts": {},
+  "sessions": {
+    "s_ba224518e8107b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d9a9719-0a7b-46ff-86b8-1f215d1667ed",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
