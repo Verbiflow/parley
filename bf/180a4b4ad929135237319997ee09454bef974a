@@ -1,0 +1,38 @@
+package.json
+  s_1b4019b5bee296::t_0d016d378d2200 6-12,14
+packages/channels/src/index.ts
+  s_1b4019b5bee296::t_ce44c3a6167948 13
+apps/api/test/chats.test.ts
+  s_1b4019b5bee296::t_cf54ed9428ec4f 155-179
+packages/auth/migrations/0016_chat_calls.sql
+  s_1b4019b5bee296::t_a404d20f59caef 1-5
+apps/api/src/web/pages.ts
+  s_1b4019b5bee296::t_7b0836c741b084 693-698,702
+  s_1b4019b5bee296::t_cf54ed9428ec4f 658
+packages/channels/src/contract.ts
+  s_1b4019b5bee296::t_a404d20f59caef 33-35
+packages/channels/src/whatsapp/index.ts
+  s_1b4019b5bee296::t_ce44c3a6167948 6,105,107,217-231,289-301,303-312
+  s_1b4019b5bee296::t_34dec3af5d3e26 302
+apps/api/src/sessions/chats.ts
+  s_1b4019b5bee296::t_ce44c3a6167948 30
+  s_1b4019b5bee296::t_a404d20f59caef 2,6,9-14,16-19,23-25,31-32,34,63,72,177
+scripts/patch-baileys.ts
+  s_1b4019b5bee296::t_49b8f3b6ef4134 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "bf180a4b4ad929135237319997ee09454bef974a",
+  "prompts": {},
+  "sessions": {
+    "s_1b4019b5bee296": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0c0add4-c9e1-4fb8-9486-0b9fb8fdab5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
