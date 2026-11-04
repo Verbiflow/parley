@@ -1,10 +1,11 @@
 import makeWASocket, {
-  DisconnectReason, makeCacheableSignalKeyStore, proto, ALL_WA_PATCH_NAMES, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, normalizeMessageContent,
-  type WAMessage, type Contact, type BaileysEventMap,
+  DisconnectReason, makeCacheableSignalKeyStore, proto, ALL_WA_PATCH_NAMES, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, downloadMediaMessage,
+  type WAMessage, type WAMessageKey, type Contact, type BaileysEventMap, type AnyMessageContent,
 } from "@whiskeysockets/baileys"
 import { proxyAgent } from "@parley/proxies/agent"
-import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
+import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions, type OutboundContent, type Reaction } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
+import { textOf, mediaOf, messageOfRef, reactionOf, embeddedReactions, type RawReaction } from "./parse.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
 // Baileys wants a pino-like logger. Keep it quiet except errors, which go to the service log as one JSON line (Baileys'
@@ -58,21 +59,24 @@ const seconds = (t: unknown): string | undefined => {
   return n > 0 ? new Date(n * 1000).toISOString() : undefined
 }
 
-/** The readable text of a message, or a placeholder for media/other kinds. Undefined for protocol noise (no content). */
-function textOf(m: WAMessage): string | undefined {
-  const c = normalizeMessageContent(m.message)
-  if (!c) return undefined
-  const text = c.conversation ?? c.extendedTextMessage?.text ?? c.imageMessage?.caption ?? c.videoMessage?.caption ?? c.documentMessage?.caption
-  if (text) return text
-  if (c.imageMessage) return "[photo]"
-  if (c.videoMessage) return "[video]"
-  if (c.audioMessage) return "[voice message]"
-  if (c.documentMessage) return `[document${c.documentMessage.fileName ? `: ${c.documentMessage.fileName}` : ""}]`
-  if (c.stickerMessage) return "[sticker]"
-  if (c.locationMessage) return "[location]"
-  if (c.contactMessage) return "[contact card]"
-  if (c.reactionMessage || c.protocolMessage || c.senderKeyDistributionMessage) return undefined
-  return "[message]"
+/** A send in Baileys' terms: plain text, a file with its caption, or a reaction to a stored message. */
+function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
+  const { text, media, react } = content
+  if (react) {
+    const key: WAMessageKey = { remoteJid: jid, id: react.messageId, fromMe: react.fromMe }
+    if (isJidGroup(jid) && !react.fromMe && react.sender) key.participant = toJid(react.sender)
+    return { react: { text, key } }
+  }
+  if (!media) return { text }
+  const data = Buffer.from(media.data)
+  const caption = text || undefined
+  switch (media.kind) {
+    case "image": return { image: data, mimetype: media.mimetype, caption }
+    case "video": return { video: data, mimetype: media.mimetype, caption }
+    // A voice note when it's the format WhatsApp records them in; otherwise an audio file. Audio can't carry a caption.
+    case "audio": return { audio: data, mimetype: media.mimetype, ptt: /ogg|opus/i.test(media.mimetype) }
+    case "document": return { document: data, mimetype: media.mimetype, fileName: media.fileName ?? "file", caption }
+  }
 }
 
 /**
@@ -219,12 +223,36 @@ export const whatsappChannel: Channel = {
       if (text === undefined) return undefined
       const fromMe = Boolean(m.key.fromMe)
       const sender = m.key.participant ? canon(m.key.participant) : jid
+      const media = mediaOf(m)
+      const reactions = embeddedReactions(m).map((r) => reactionIn(jid, r))
       return {
         id: m.key.id ?? crypto.randomUUID(), threadId: jid, from: fromMe ? "me" : sender, text, fromMe,
         at: seconds(m.messageTimestamp) ?? new Date().toISOString(),
+        ...(media ? { media } : {}), ...(reactions.length ? { reactions } : {}),
       }
     }
+    /** A reaction in chat `jid`, in the host's terms: who reacted is "me", the group member, or the other person. */
+    const reactionIn = (jid: string, r: RawReaction): Reaction => {
+      const k: WAMessageKey = r.reactor
+      if (k.participant) pair(k.participant, k.participantAlt)
+      const fromMe = Boolean(k.fromMe)
+      return {
+        threadId: jid, messageId: r.target, fromMe, emoji: r.emoji,
+        from: fromMe ? "me" : k.participant ? canon(k.participant) : jid,
+        at: r.atMs > 0 ? new Date(r.atMs).toISOString() : new Date().toISOString(),
+      }
+    }
+    /** A live reaction message: not a message of its own, but a change to the one it points at. */
+    const reactionMessageOf = (m: WAMessage): Reaction | undefined => {
+      const raw = m.key.remoteJid
+      if (!isChatJid(raw)) return undefined
+      const r = reactionOf(m)
+      if (!r) return undefined
+      if (!isJidGroup(raw)) pair(raw, m.key.remoteJidAlt)
+      return reactionIn(canon(raw), r)
+    }
     const handleMessages = (messages: WAMessage[]) => {
+      const reactions = messages.map(reactionMessageOf).filter((r): r is Reaction => Boolean(r))
       const chats: Chat[] = []
       for (const m of messages) {
         const msg = messageOf(m)
@@ -238,6 +266,8 @@ export const whatsappChannel: Channel = {
       // History arrives in batches of thousands: hand them over in chunks the host stores in one write each.
       if (out.length === 1) emit({ type: "message", message: out[0]! })
       else for (let i = 0; i < out.length; i += 500) emit({ type: "messages", messages: out.slice(i, i + 500) })
+      // After the messages, so a reaction that came in the same batch as its message finds it stored.
+      if (reactions.length) emit({ type: "reactions", reactions })
     }
 
     /**
@@ -430,7 +460,7 @@ export const whatsappChannel: Channel = {
           if (found && !found.exists) throw new SendFailure("recipient_unavailable", `${to} isn't on WhatsApp`)
         }
         try {
-          const res = await sock.sendMessage(jid, { text: content.text })
+          const res = await sock.sendMessage(jid, contentFor(jid, content))
           remember(res?.key?.id, res?.message)
           return { id: res?.key?.id ?? "" }
         } catch (e) {
@@ -439,6 +469,14 @@ export const whatsappChannel: Channel = {
           // Sending moved the encryption sessions forward; save them before anything can restart us.
           if (saveTimer) saveNow()
         }
+      },
+      async media(ref) {
+        const message = messageOfRef(ref)
+        // WhatsApp keeps media for a while; once its copy is gone, Baileys asks the sender's phone to upload it again.
+        const data = await downloadMediaMessage(message, "buffer", {}, { logger: SILENT, reuploadRequest: (m) => sock.updateMediaMessage(m) })
+        const c = message.message ?? {}
+        const mimetype = (c.imageMessage ?? c.videoMessage ?? c.ptvMessage ?? c.audioMessage ?? c.documentMessage ?? c.stickerMessage)?.mimetype ?? "application/octet-stream"
+        return { data: new Uint8Array(data), mimetype }
       },
       async logout() {
         stopped = true

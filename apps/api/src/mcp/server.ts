@@ -3,7 +3,8 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
-import { OutboxError, availability, cancel, listOutbound, type Outbound } from "../sessions/outbox.ts"
+import { OutboxError, availability, cancel, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
+import { MediaInputError, resolveMedia } from "./media.ts"
 
 /** The principal a verified bearer token carries into a tool call (set by the /mcp bearer middleware). */
 export type McpPrincipal = { userId: string; sessionId: string }
@@ -16,7 +17,7 @@ function principalOf(extra: { authInfo?: { extra?: unknown } } | undefined): Mcp
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] })
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
-const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError
+const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError
 
 const WAIT_TEXT: Record<string, string> = {
   paused: "the connection is paused",
@@ -31,8 +32,23 @@ const WAIT_TEXT: Record<string, string> = {
 
 const outboundView = (m: Outbound) => ({
   id: m.id, connection_id: m.connectionId, to: m.chatId, kind: m.kind, text: m.text, status: m.status,
+  ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null } } : {}),
+  ...(m.reactTo ? { reaction_to: m.reactTo } : {}),
   scheduled_for: m.scheduledFor, sent_at: m.sentAt, error: m.error, created_at: m.createdAt,
 })
+
+/** What send_message and react_to_message answer: the queued row, and when it goes out. */
+function queuedView(message: Queued, replayed: boolean) {
+  const now = !message.held && message.scheduledFor && Date.parse(message.scheduledFor) <= Date.now() + 1000
+  return {
+    ...outboundView(message),
+    replayed,
+    waits: message.waits,
+    note: message.held
+      ? "Queued, but the connection is paused; it sends once the account holder resumes it."
+      : now ? "Queued; it goes out now." : `Queued for ${message.scheduledFor}: ${message.waits.map((w) => WAIT_TEXT[w] ?? w).join(", ")}.`,
+  }
+}
 
 /**
  * A fresh MCP server per request (stateless Streamable HTTP), exposing Parley's tools. Every tool reads the caller
@@ -119,7 +135,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected channels, newest first — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`.",
+      description: "Read recent messages across all your connected channels, newest first — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
@@ -135,6 +151,8 @@ export function buildMcpServer(ctx: AppContext): McpServer {
           messages: messages.map((m) => ({
             channel: m.channel, connection_id: m.connectionId, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
             id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, text: m.text, at: m.at,
+            ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null, size: m.media.size ?? null, width: m.media.width ?? null, height: m.media.height ?? null, seconds: m.media.seconds ?? null } } : {}),
+            ...(m.reactions.length ? { reactions: m.reactions.map((r) => ({ from: r.fromMe ? "me" : r.from, emoji: r.emoji, at: r.at })) } : {}),
           })),
         }
         if (!messages.length) {
@@ -176,33 +194,86 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     {
       title: "Send a message",
       description:
-        "Queue a message on a connected channel. Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
+        "Queue a message on a connected channel: text, or a photo, video, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
       inputSchema: {
         connection_id: z.string(),
         to: z.string().describe("Recipient on the channel: a chat_id from list_chats, or a phone number for WhatsApp."),
-        text: z.string().min(1).max(8000),
+        text: z.string().max(8000).optional().describe("The message, or the caption when sending media."),
+        media: z.object({
+          url: z.string().url().optional().describe("A public http(s) URL to download the file from."),
+          data: z.string().optional().describe("Or the file itself, base64."),
+          kind: z.enum(["image", "video", "audio", "document"]).optional().describe("How it shows in the chat. Defaults from the file type: JPEG/PNG/WebP photos and MP4 videos inline, audio as audio (OGG/Opus as a voice note), anything else as a document."),
+          mimetype: z.string().max(200).optional().describe("The file's type, e.g. \"image/jpeg\". Defaults to what the URL serves, or the file name's extension."),
+          file_name: z.string().max(200).optional().describe("Shown for documents."),
+        }).optional().describe("A file to send (at most 16 MB). Give exactly one of url or data."),
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),
         idempotency_key: z.string().min(1).max(200).optional().describe("Retrying with the same key returns the original message instead of sending twice."),
       },
     },
-    async ({ connection_id, to, text, kind, not_before, idempotency_key }, extra) => {
+    async ({ connection_id, to, text, media, kind, not_before, idempotency_key }, extra) => {
+      const { userId, sessionId } = principalOf(extra)
+      try {
+        if (!text && !media) return fail("give `text`, `media`, or both")
+        const file = media ? await resolveMedia(media) : undefined
+        const { message, replayed } = await ctx.sessions.enqueue(userId, connection_id, {
+          to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId,
+        })
+        return json(queuedView(message, replayed))
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not send")
+      }
+    }
+  )
+
+  server.registerTool(
+    "react_to_message",
+    {
+      title: "React to a message",
+      description: "React to a message with an emoji, as the account holder would from their phone. Paced like a reply. Pass an empty emoji to take your reaction back; a new one replaces the old.",
+      inputSchema: {
+        connection_id: z.string(),
+        chat_id: z.string().describe("The chat the message is in (chat_id from read_inbox)."),
+        message_id: z.string().describe("The message's id from read_inbox."),
+        emoji: z.string().max(32).describe("One emoji, e.g. \"👍\". Empty to remove your reaction."),
+        idempotency_key: z.string().min(1).max(200).optional(),
+      },
+    },
+    async ({ connection_id, chat_id, message_id, emoji, idempotency_key }, extra) => {
       const { userId, sessionId } = principalOf(extra)
       try {
         const { message, replayed } = await ctx.sessions.enqueue(userId, connection_id, {
-          to, text, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId,
+          to: chat_id, text: emoji.trim(), reactTo: message_id, idempotencyKey: idempotency_key, agentSessionId: sessionId,
         })
-        const now = !message.held && message.scheduledFor && Date.parse(message.scheduledFor) <= Date.now() + 1000
-        return json({
-          ...outboundView(message),
-          replayed,
-          waits: message.waits,
-          note: message.held
-            ? "Queued, but the connection is paused; it sends once the account holder resumes it."
-            : now ? "Queued; it goes out now." : `Queued for ${message.scheduledFor}: ${message.waits.map((w) => WAIT_TEXT[w] ?? w).join(", ")}.`,
-        })
+        return json(queuedView(message, replayed))
       } catch (e) {
-        return fail(known(e) ? (e as Error).message : "could not send")
+        return fail(known(e) ? (e as Error).message : "could not react")
+      }
+    }
+  )
+
+  server.registerTool(
+    "get_media",
+    {
+      title: "Get a message's media",
+      description: "Fetch the photo, video, voice note, document or sticker a message carries (a message from read_inbox with `media`). Photos and stickers come back as images you can see; audio as audio; anything else as a file. Needs the connection online; very old files may take a moment while the sender's phone uploads them again.",
+      inputSchema: {
+        connection_id: z.string(),
+        chat_id: z.string(),
+        message_id: z.string(),
+      },
+    },
+    async ({ connection_id, chat_id, message_id }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const file = await ctx.sessions.media(userId, connection_id, chat_id, message_id)
+        const mimeType = file.mimetype.split(";")[0]!.trim()
+        const about = { type: "text" as const, text: JSON.stringify({ kind: file.kind, mimetype: file.mimetype, file_name: file.fileName, size: file.size }) }
+        if (mimeType.startsWith("image/")) return { content: [about, { type: "image" as const, data: file.data, mimeType }] }
+        if (mimeType.startsWith("audio/")) return { content: [about, { type: "audio" as const, data: file.data, mimeType }] }
+        return { content: [about, { type: "resource" as const, resource: { uri: `parley://media/${encodeURIComponent(connection_id)}/${encodeURIComponent(chat_id)}/${encodeURIComponent(message_id)}`, mimeType, blob: file.data } }] }
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not fetch the media")
       }
     }
   )

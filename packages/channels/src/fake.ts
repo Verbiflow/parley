@@ -48,6 +48,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
           conn.sent.push({ to, content })
           return { id: `msg-${conn.sent.length}` }
         },
+        // The fake's "file" is the ref's own bytes, so a test can tell which attachment came back.
+        async media(ref: string) {
+          if (!caps.media) throw new Error("no media on this channel")
+          return { data: new TextEncoder().encode(ref), mimetype: "image/png" }
+        },
         async logout() {
           conn.linked = false
           conn.emit({ type: "closed", reason: "logged out" })
@@ -72,6 +77,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
       conn.emit({ type: "message", message: { id: crypto.randomUUID(), at: new Date().toISOString(), ...message } })
+    },
+    react(connectionId, reactions) {
+      const conn = conns.get(connectionId)
+      if (!conn) throw new Error(`no open connection ${connectionId}`)
+      conn.emit({ type: "reactions", reactions })
     },
     announceChats(connectionId, chats: Chat[]) {
       const conn = conns.get(connectionId)

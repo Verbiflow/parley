@@ -5,4 +5,4 @@ import type { Capabilities } from "../contract.ts"
  * never opens a socket, can list the channel without bundling the WhatsApp client.
  */
 export const WHATSAPP_ID = "whatsapp"
-export const WHATSAPP_CAPABILITIES: Capabilities = { linkMethod: "qr", media: false, groups: true, threads: true, presence: false }
+export const WHATSAPP_CAPABILITIES: Capabilities = { linkMethod: "qr", media: true, groups: true, threads: true, presence: false }

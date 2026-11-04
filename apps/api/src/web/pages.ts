@@ -250,13 +250,21 @@ function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; st
   })
 }
 
+const MEDIA_LABEL: Record<string, string> = { image: "photo", video: "video", audio: "audio", document: "document" }
+/** How a queued send reads in a list: its text, with what it carries when it's a file or a reaction. */
+function outText(m: Outbound): string {
+  if (m.reactTo) return m.text ? `reacted ${m.text}` : "took back a reaction"
+  if (m.media) return `[${MEDIA_LABEL[m.media.kind] ?? m.media.kind}${m.media.fileName && m.media.kind === "document" ? `: ${m.media.fileName}` : ""}]${m.text ? ` ${m.text}` : ""}`
+  return m.text
+}
+
 function activityLog(recent: Outbound[], connections: Connection[]): string {
   const tz = new Map(connections.map((c) => [c.id, c.timezone]))
   if (!recent.length) return empty("No activity yet", "Sends and failures from your agents show up here as they happen.")
   return `<div class="log">${recent.map((m) => {
     const when = m.sentAt ?? m.createdAt
     const [cls, word] = m.status === "sent" ? ["ok", "sent"] : m.status === "failed" ? ["bad", m.error?.code === "outcome_unknown" ? "interrupted" : "failed"] : m.status === "canceled" ? ["", "canceled"] : ["q", m.status]
-    return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span><span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(m.text)}</span></div>`
+    return `<div><span class="t">${stamp(when, tz.get(m.connectionId))}</span><span class="e ${cls}">${word}</span><span class="to">→ ${esc(recipient(m.chatId))}</span><span class="b">${esc(outText(m))}</span></div>`
   }).join("")}</div>`
 }
 
@@ -402,7 +410,7 @@ export function connectionPage(opts: {
 
   const outRow = (m: Outbound, scheduled: boolean) => `<tr>
       <td><div class="who">${glyph(recipient(m.chatId), 22, true)}<span class="m" style="color:var(--text)">${esc(recipient(m.chatId))}</span></div></td>
-      <td class="clip">${esc(m.text)}</td>
+      <td class="clip">${esc(outText(m))}</td>
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
       <td class="m">${scheduled ? (m.scheduledFor ? esc(until(m.scheduledFor, tz)) : `<span class="faint">held</span>`) : outcome(m)}</td>
       <td class="m faint">${scheduled ? (m.scheduledFor ? clock(m.scheduledFor, tz) : "") : m.sentAt ? ago(m.sentAt) : ago(m.createdAt)}</td>
@@ -455,7 +463,7 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: 
     const tz = c?.timezone ?? "UTC"
     return `<tr>
       <td><div class="who">${glyph(recipient(m.chatId), 24, true)}<div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel).toLowerCase()} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
-      <td class="clip">${esc(m.text)}</td>
+      <td class="clip">${esc(outText(m))}</td>
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
       <td class="m">${scheduled ? (m.scheduledFor ? esc(until(m.scheduledFor, tz)) : `<span class="faint">held — channel paused</span>`) : outcome(m)}</td>
       <td class="m faint">${scheduled ? (m.scheduledFor ? `${clock(m.scheduledFor, tz)} ${esc(tz.split("/").pop()!.replace(/_/g, " ").toLowerCase())}` : "") : ago(m.sentAt ?? m.createdAt)}</td>
@@ -477,6 +485,7 @@ const TOOL_LABEL: Record<string, string> = {
   read_inbox: "read your inbox", list_chats: "listed your chats", send_message: "queued a message", connect: "started linking a channel",
   connection_status: "checked a connection", list_connections: "listed connections", list_channels: "listed channels",
   send_availability: "checked when it can send", list_outbox: "read the outbox", cancel_message: "canceled a message",
+  react_to_message: "queued a reaction", get_media: "opened a photo or file",
 }
 function activity(a: AgentView): string {
   if (!a.lastUsedAt) return `Authorized ${ago(a.connectedAt)} · hasn't used Parley yet`

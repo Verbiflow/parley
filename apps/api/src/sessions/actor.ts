@@ -1,13 +1,13 @@
 import { SignInKey, serverSeal, secrets, type IdentityConfig, type Sql, type SecretSeal } from "@parley/auth"
 import { SendFailure, channelById, type Channel, type ChannelEvent, type LinkMethod, type LiveConnection } from "@parley/channels"
-import type { ActionKind, Outcome } from "@parley/pacing"
+import type { Outcome } from "@parley/pacing"
 import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { Transactor } from "../db/transactor.ts"
 import { Exits, ExitError } from "./exits.ts"
-import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, type Claimed, type Queued } from "./outbox.ts"
+import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
 import type { InboundMessage } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -33,6 +33,11 @@ const HISTORY_CHATS = 300
 
 export type StatusView = { status: string; channel: string; handle: string | null; link?: { method: LinkMethod; data: string } }
 export type LinkView = { status: string; channel: string; link?: { method: LinkMethod; data: string } }
+/** A message's attachment, fetched from the channel. `data` is base64 (it crosses the RPC wire as JSON). */
+export type MediaFile = { data: string; mimetype: string; kind: string; fileName: string | null; size: number }
+
+/** The largest attachment Parley fetches for an agent, or takes from one to send. */
+export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
 
 /**
  * What the HTTP app needs from the session pool. Two implementations: `Sessions` (the pool itself — runs where the
@@ -41,7 +46,7 @@ export type LinkView = { status: string; channel: string; link?: { method: LinkM
  */
 export type SessionsApi = Pick<
   Sessions,
-  | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
+  | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats" | "media"
   | "enqueue" | "setLocale"
 >
 
@@ -50,7 +55,7 @@ export type SessionsApi = Pick<
  * (`enqueue`, `setLocale`) so pacing, its row locks and the dispatcher stay in one place. Everything else is a plain
  * Postgres read the edge does itself.
  */
-export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale"] as const
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media"] as const
 export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
@@ -133,10 +138,25 @@ export class Sessions {
    */
   async enqueue(
     accountId: string, connectionId: string,
-    req: { to: string; text: string; kind?: ActionKind | undefined; notBefore?: Date | undefined; idempotencyKey?: string | undefined; agentSessionId?: string | undefined },
+    req: Omit<EnqueueRequest, "accountId" | "connectionId">,
     now?: Date
   ): Promise<{ message: Queued; replayed: boolean }> {
     const at = now ?? new Date()
+    if (req.media) {
+      const conn = await getConnection(this.ctx.sql, connectionId)
+      const channel = conn && channelById(this.ctx.channels, conn.channel)
+      if (channel && !channel.capabilities.media) throw new OutboxError("action_unsupported", `${channel.id} can't send files`)
+      if (req.media.data.byteLength > MAX_MEDIA_BYTES) throw new OutboxError("action_unsupported", `files can be at most ${MAX_MEDIA_BYTES / 1024 / 1024} MB`)
+      if (!req.media.data.byteLength) throw new OutboxError("action_unsupported", "the file is empty")
+    }
+    if (req.reactTo) {
+      const [found] = await this.ctx.sql<{ yes: boolean }>(
+        `select true as yes from parley.message m join parley.connection k on k.id = m.connection_id
+          where m.connection_id = $1 and k.account_id = $2 and m.chat_id = $3 and m.id = $4`,
+        [connectionId, accountId, req.to, req.reactTo]
+      )
+      if (!found) throw new OutboxError("not_found", "no such message in that chat (use a message id from read_inbox)")
+    }
     const queued = await enqueue(this.tx, { accountId, connectionId, ...req }, at)
     // Due now on a connection held here: send without waiting for the next pass. (Not for a caller-supplied clock.)
     if (!now && queued.message.scheduledFor && Date.parse(queued.message.scheduledFor) <= at.getTime() && this.#live.has(connectionId)) {
@@ -173,7 +193,7 @@ export class Sessions {
     let result: { outcome: Outcome; externalId?: string; detail?: string }
     try {
       if (!entry?.live) throw new SendFailure("transport_error", "connection went offline before the send")
-      const sent = await entry.live.send(job.chatId, { text: job.text })
+      const sent = await entry.live.send(job.chatId, { text: job.text, media: job.media, react: job.reactTo ? await this.#reactTarget(job.connectionId, job.chatId, job.reactTo) : undefined })
       result = { outcome: "sent", externalId: sent.id }
     } catch (e) {
       result = { outcome: e instanceof SendFailure ? e.outcome : "transport_error", detail: e instanceof Error ? e.message : String(e) }
@@ -196,6 +216,37 @@ export class Sessions {
     } else {
       await this.exits.recordSuccess(this.ctx.sql, exitId)
     }
+  }
+
+  /** Who sent the message a reaction is for: the channel needs it to address the reaction. */
+  async #reactTarget(connectionId: string, chatId: string, messageId: string): Promise<{ messageId: string; fromMe: boolean; sender?: string }> {
+    const [m] = await this.ctx.sql<{ from_me: boolean; sender: string }>(`select from_me, sender from parley.message where connection_id = $1 and chat_id = $2 and id = $3`, [connectionId, chatId, messageId])
+    return m ? { messageId, fromMe: m.from_me, sender: m.sender } : { messageId, fromMe: false }
+  }
+
+  /**
+   * Fetch a stored message's attachment from the channel (it isn't kept here). Only from a synced chat, like reading;
+   * it needs the connection live, since the file comes down through the account's own session.
+   */
+  async media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
+    await this.#owned(accountId, connectionId)
+    const chat = await getChat(this.ctx.sql, connectionId, chatId)
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
+    const info = await messageMedia(this.ctx.sql, connectionId, chatId, messageId)
+    if (!info) throw new ConnectError("not_found", "that message has no attachment Parley can fetch")
+    if ((info.size ?? 0) > MAX_MEDIA_BYTES) throw new ConnectError("not_found", `the attachment is ${Math.round(info.size! / 1024 / 1024)} MB; Parley fetches at most ${MAX_MEDIA_BYTES / 1024 / 1024} MB`)
+    const routed = await this.#route(connectionId, { op: "media", args: { ref: info.ref } })
+    const file = routed.ok ? (routed.result as { data: string; mimetype: string }) : await this.#localMedia(connectionId, info.ref)
+    return { ...file, kind: info.kind, fileName: info.fileName ?? null, size: Buffer.from(file.data, "base64").byteLength }
+  }
+
+  async #localMedia(connectionId: string, ref: string): Promise<{ data: string; mimetype: string }> {
+    let entry = this.#live.get(connectionId)
+    if (!entry?.live) entry = await this.#hydrate(connectionId)
+    if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
+    if (!entry.live.media) throw new ConnectError("not_found", "this channel can't fetch attachments")
+    const file = await entry.live.media(ref)
+    return { data: Buffer.from(file.data).toString("base64"), mimetype: file.mimetype }
   }
 
   async status(accountId: string, connectionId: string): Promise<StatusView> {
@@ -321,6 +372,8 @@ export class Sessions {
       case "logout":
         await this.#localLogout(connId)
         return null
+      case "media":
+        return this.#localMedia(connId, String(args.ref))
       case "flushHistory":
         await this.#flushHistory(connId, (args.chatIds as string[]) ?? [])
         return null
@@ -401,6 +454,9 @@ export class Sessions {
         if (entry.history) for (const m of ms) this.#hold(entry.history, m)
         break
       }
+      case "reactions":
+        await saveReactions(this.ctx.sql, connectionId, event.reactions)
+        break
       case "closed":
         await setStatus(this.ctx.sql, connectionId, entry.loggingOut ? "logged_out" : "closed")
         this.#live.delete(connectionId)

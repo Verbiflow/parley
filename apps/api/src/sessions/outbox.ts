@@ -4,6 +4,7 @@ import {
   allowanceFor, backoffMs, defaultAction, localDate, planNext, policyFor, startOfNextLocalDay,
   type ActionKind, type ActionLimit, type Outcome, type PacingPolicy, type PlanResult, type Slot, type Wait, type WarmupState,
 } from "@parley/pacing"
+import type { OutboundMedia } from "@parley/channels"
 import type { Transactor } from "../db/transactor.ts"
 
 /** Messages a connection may have waiting at once; past it, an agent is queueing faster than a person could ever send. */
@@ -42,17 +43,25 @@ const conn = (r: ConnRow): PacedConnection => ({
 })
 
 export type OutboundStatus = "scheduled" | "sending" | "sent" | "failed" | "canceled"
+/** What a queued file is. Its bytes stay in the database until it's sent; nothing that lists the outbox reads them. */
+export type OutboundMediaInfo = { kind: OutboundMedia["kind"]; mimetype: string; fileName?: string | undefined }
 export type Outbound = {
   id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; status: OutboundStatus
+  /** A file sent with `text` as its caption. */
+  media: OutboundMediaInfo | null
+  /** A reaction (`text` is the emoji; empty takes it back) to this message id. */
+  reactTo: string | null
   scheduledFor: string | null; sentAt: string | null; attempts: number; error: { code: string; message: string } | null; createdAt: string
 }
 type OutRow = {
   id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; status: OutboundStatus; scheduled_for: Date | null
   not_before: Date | null; sent_at: Date | null; attempts: number; error_code: string | null; error_message: string | null; created_at: Date
+  media: OutboundMediaInfo | null; react_to: string | null
 }
-const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at"
+const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at, media, react_to"
 const outbound = (r: OutRow): Outbound => ({
   id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, status: r.status,
+  media: r.media ?? null, reactTo: r.react_to ?? null,
   scheduledFor: r.status === "scheduled" ? (r.scheduled_for?.toISOString() ?? null) : null,
   sentAt: r.sent_at?.toISOString() ?? null, attempts: r.attempts,
   error: r.error_code ? { code: r.error_code, message: r.error_message ?? r.error_code } : null, createdAt: r.created_at.toISOString(),
@@ -128,6 +137,15 @@ function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, n
 
 export type Queued = Outbound & { waits: Wait[]; held: boolean }
 
+export type EnqueueRequest = {
+  accountId: string; connectionId: string; to: string; text: string; kind?: ActionKind | undefined; notBefore?: Date | undefined
+  idempotencyKey?: string | undefined; agentSessionId?: string | undefined
+  /** Send this file, with `text` as its caption. */
+  media?: (OutboundMediaInfo & { data: Uint8Array }) | undefined
+  /** React to this stored message with `text` (an emoji; empty takes the reaction back). Paced as a reply. */
+  reactTo?: string | undefined
+}
+
 /**
  * Queue a message on a connection: decide what it costs the account (a reply, or opening a conversation), then
  * reserve the connection's next human-paced slot for it. The connection row is locked for the duration, so two
@@ -135,7 +153,7 @@ export type Queued = Outbound & { waits: Wait[]; held: boolean }
  */
 export async function enqueue(
   tx: Transactor,
-  req: { accountId: string; connectionId: string; to: string; text: string; kind?: ActionKind | undefined; notBefore?: Date | undefined; idempotencyKey?: string | undefined; agentSessionId?: string | undefined },
+  req: EnqueueRequest,
   now: Date
 ): Promise<{ message: Queued; replayed: boolean }> {
   return tx.transaction(async (sql) => {
@@ -152,7 +170,8 @@ export async function enqueue(
            or exists (select 1 from parley.outbound where connection_id = $1 and chat_id = $2 and status = 'sent') as yes`,
       [c.id, req.to]
     )
-    const kind = req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
+    // A reaction is a reply in a conversation that's already going, whatever was asked.
+    const kind = req.reactTo ? "message" : req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
     if (!policyFor(c.channel).actions[kind]) throw new OutboxError("action_unsupported", `${c.channel} can't send a ${kind}`)
 
     const ctx = await pacingContext(sql, c, now, await loadSlots(sql, c.id, now))
@@ -161,9 +180,11 @@ export async function enqueue(
     if (!r.ok && r.reason !== "paused") throw new OutboxError(r.reason, r.reason === "no_capacity" ? `no capacity left for a ${kind} on this connection` : `${c.channel} can't send a ${kind}`)
 
     const [row] = await sql<OutRow>(
-      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning ${OUT_COLUMNS}`,
-      [c.id, req.to, kind, req.text, r.ok ? r.at : null, req.notBefore ?? null, req.idempotencyKey ?? null, req.agentSessionId ?? null, now]
+      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning ${OUT_COLUMNS}`,
+      [c.id, req.to, kind, req.text, r.ok ? r.at : null, req.notBefore ?? null, req.idempotencyKey ?? null, req.agentSessionId ?? null, now,
+        req.media ? JSON.stringify({ kind: req.media.kind, mimetype: req.media.mimetype, ...(req.media.fileName ? { fileName: req.media.fileName } : {}) }) : null,
+        req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null]
     )
     return { message: { ...outbound(row!), waits: r.ok ? r.waits : ["paused"], held: !r.ok }, replayed: false }
   })
@@ -215,7 +236,10 @@ export async function availability(sql: Sql, accountId: string, connectionId: st
   return { connection: c, actions }
 }
 
-export type Claimed = { id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; attempts: number }
+export type Claimed = {
+  id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; attempts: number
+  media?: OutboundMedia | undefined; reactTo?: string | undefined
+}
 
 /**
  * Take the due messages for these (live, locally held) connections: at most one per connection per call, so a
@@ -224,8 +248,8 @@ export type Claimed = { id: string; connectionId: string; chatId: string; kind: 
 export async function claimDue(tx: Transactor, connectionIds: string[], now: Date): Promise<Claimed[]> {
   if (!connectionIds.length) return []
   return tx.transaction(async (sql) => {
-    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number }>(
-      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts from parley.outbound o
+    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number; media: OutboundMediaInfo | null; media_data: Uint8Array | null; react_to: string | null }>(
+      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts, o.media, o.media_data, o.react_to from parley.outbound o
         where o.status = 'scheduled' and o.id in (
           select distinct on (d.connection_id) d.id
             from parley.outbound d join parley.connection k on k.id = d.connection_id
@@ -238,7 +262,11 @@ export async function claimDue(tx: Transactor, connectionIds: string[], now: Dat
     )
     if (!rows.length) return []
     await sql(`update parley.outbound set status = 'sending', attempts = attempts + 1, lease_expires_at = $2 where id = any($1::uuid[])`, [rows.map((r) => r.id), new Date(now.getTime() + LEASE_MS)])
-    return rows.map((r) => ({ id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, attempts: r.attempts + 1 }))
+    return rows.map((r) => ({
+      id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, attempts: r.attempts + 1,
+      ...(r.media && r.media_data ? { media: { ...r.media, data: new Uint8Array(r.media_data) } } : {}),
+      ...(r.react_to ? { reactTo: r.react_to } : {}),
+    }))
   })
 }
 
@@ -262,12 +290,12 @@ export async function report(tx: Transactor, id: string, result: { outcome: Outc
 
     const exhausted = outcome === "transport_error" && m.attempts >= MAX_TRANSPORT_ATTEMPTS
     if (outcome === "sent") {
-      await sql(`update parley.outbound set status = 'sent', sent_at = $2, external_id = $3, lease_expires_at = null where id = $1`, [m.id, now, result.externalId ?? null])
+      await sql(`update parley.outbound set status = 'sent', sent_at = $2, external_id = $3, lease_expires_at = null, media_data = null where id = $1`, [m.id, now, result.externalId ?? null])
     } else if (policy.retry && !exhausted) {
       await sql(`update parley.outbound set status = 'scheduled', scheduled_for = null, lease_expires_at = null where id = $1`, [m.id])
     } else {
       const [code, message] = exhausted ? ["too_many_attempts", `gave up after ${m.attempts} attempts that never reached ${c.channel}`] : [outcome, result.detail ?? outcome]
-      await sql(`update parley.outbound set status = 'failed', error_code = $2, error_message = $3, lease_expires_at = null where id = $1`, [m.id, code, message.slice(0, 500)])
+      await sql(`update parley.outbound set status = 'failed', error_code = $2, error_message = $3, lease_expires_at = null, media_data = null where id = $1`, [m.id, code, message.slice(0, 500)])
     }
 
     let next = c
@@ -303,7 +331,7 @@ export async function report(tx: Transactor, id: string, result: { outcome: Outc
 export async function expireLeases(tx: Transactor, now: Date): Promise<number> {
   return tx.transaction(async (sql) => {
     const rows = await sql<{ id: string }>(
-      `update parley.outbound set status = 'failed', lease_expires_at = null, error_code = 'outcome_unknown',
+      `update parley.outbound set status = 'failed', lease_expires_at = null, media_data = null, error_code = 'outcome_unknown',
               error_message = 'The send was interrupted; check the conversation before sending again'
         where status = 'sending' and lease_expires_at < $1 returning id`,
       [now]
@@ -322,7 +350,7 @@ export async function cancel(tx: Transactor, accountId: string, id: string, now:
     const c = (await lockConnection(sql, ref.connection_id))!
     const [m] = await sql<OutRow>(`select ${OUT_COLUMNS} from parley.outbound where id = $1 for update`, [id])
     if (m!.status !== "scheduled") throw new OutboxError("not_cancelable", `the message is ${m!.status}; only scheduled messages can be canceled`)
-    const [row] = await sql<OutRow>(`update parley.outbound set status = 'canceled', scheduled_for = null where id = $1 returning ${OUT_COLUMNS}`, [id])
+    const [row] = await sql<OutRow>(`update parley.outbound set status = 'canceled', scheduled_for = null, media_data = null where id = $1 returning ${OUT_COLUMNS}`, [id])
     await replan(sql, c, now)
     return outbound(row!)
   })
