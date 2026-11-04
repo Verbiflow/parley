@@ -1,5 +1,5 @@
 import { CopyButton, NavShell } from "@/components/client"
-import { Features } from "@/components/features"
+import { Features, Steps } from "@/components/features"
 import { Journey } from "@/components/journey"
 import { AgentMark, GitHub, Gmail, IMessage, LinkedIn, ParleyMark, Slack, WhatsApp } from "@/components/logos"
 import { Threads } from "@/components/threads"
@@ -122,35 +122,22 @@ function Product() {
 }
 
 function Start() {
-  const chat = <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12Z" /></svg>
-  const icons = [
-    <WhatsApp key="w" size={18} />,
-    <span key="a" className="flex -space-x-1.5">{["Claude", "ChatGPT", "Cursor"].map((n) => <span key={n} className="grid size-7 place-items-center rounded-full bg-[#23211d] text-ink-2 ring-2 ring-[#11100e]"><AgentMark name={n} size={14} /></span>)}</span>,
-    <span key="c" className="text-ink-2">{chat}</span>,
-  ]
-  const steps: Array<[string, React.ReactNode, React.ReactNode?]> = [
-    ["Connect WhatsApp", <>Scan a QR code from <span className="text-ink-2">Settings → Linked devices</span>. Parley links as a device, the same way WhatsApp Web does.</>],
-    ["Add Parley to your agent", "Paste one URL into your agent and sign in. No API keys.", (
-      <div key="url" className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-lg bg-white/[0.04] px-3 py-2 font-mono text-[12px] text-ink-2">{MCP_URL}</code>
-        <CopyButton text={MCP_URL} label="Copy" className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-ink-2 ring-1 ring-inset ring-white/[0.12] hover:bg-white/[0.05]" />
-      </div>
-    )],
-    ["Ask", "“Reply to everyone who's waiting on me.” Your agent finds the chats, writes the replies and Parley sends them.", undefined],
-  ]
+  const channels = CHANNELS.map(([name, Logo]) => (
+    <span key={name} title={name} className="grid size-9 place-items-center rounded-[10px] bg-[#1d1b18] shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.07)]">
+      <Logo size={17} />
+      <span className="sr-only">{name}</span>
+    </span>
+  ))
+  const copy = (
+    <div className="flex items-center gap-1.5 rounded-full bg-white/[0.035] p-1 pl-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+      <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2">{MCP_URL}</code>
+      <CopyButton text={MCP_URL} label="Copy" className={`${buttonClass("primary", "sm")} h-7 shrink-0 px-3 text-[12px]`} />
+    </div>
+  )
   return (
     <Shell id="start" className="pt-36">
       <Heading title="Set up in a minute" />
-      <ol className="mt-12 grid gap-4 lg:grid-cols-3">
-        {steps.map(([title, text, extra], i) => (
-          <li key={title} className={`flex flex-col rounded-[14px] p-6 ${FRAME}`}>
-            <div className="flex h-9 items-center"><span className={i === 1 ? "" : "grid size-9 place-items-center rounded-[10px] bg-white/[0.05] ring-1 ring-inset ring-white/[0.06]"}>{icons[i]}</span></div>
-            <h3 className="mt-5 text-[15px] font-medium tracking-[-0.01em]"><span className="sr-only">Step {i + 1}: </span>{title}</h3>
-            <p className="mt-1.5 text-[14px] leading-[1.6] text-muted">{text}</p>
-            {extra && <div className="mt-auto pt-6">{extra}</div>}
-          </li>
-        ))}
-      </ol>
+      <Steps channels={channels} copy={copy} />
     </Shell>
   )
 }

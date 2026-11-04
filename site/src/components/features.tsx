@@ -3,9 +3,11 @@
 import { AnimatePresence, motion, useInView, useReducedMotion } from "motion/react"
 import { useEffect, useRef, useState } from "react"
 import { AgentMark, WhatsApp } from "./logos"
+import { PATHS } from "./paths"
 import { FRAME } from "./ui"
 
 const ease = [0.2, 0.8, 0.2, 1] as const
+const PARLEY = PATHS.parley
 const spring = { type: "spring", stiffness: 380, damping: 32 } as const
 
 /** A counter that advances every `ms` while the tile is on screen; frozen at `still` for reduced motion. */
@@ -260,5 +262,126 @@ export function Features() {
         See which agent sent what, when it went out and whether it was read. Cancel anything still queued, or pause an agent in one click.
       </Tile>
     </div>
+  )
+}
+
+/* ---------- Set up: three steps, each with its own small scene ---------- */
+
+/** A QR-shaped grid: the three finder squares, and cells from a fixed seed so it renders the same on server and client. */
+function Qr() {
+  const n = 21
+  const finder = (x: number, y: number) => [[0, 0], [n - 7, 0], [0, n - 7]].some(([fx, fy]) => x >= fx! && x < fx! + 7 && y >= fy! && y < fy! + 7)
+  const cells: Array<[number, number]> = []
+  let seed = 7
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    seed = (seed * 9301 + 49297) % 233280
+    if (!finder(x, y) && seed / 233280 > 0.52) cells.push([x, y])
+  }
+  return (
+    <svg viewBox={`-1 -1 ${n + 2} ${n + 2}`} className="size-full" aria-hidden>
+      {cells.map(([x, y]) => <rect key={`${x}-${y}`} x={x + 0.08} y={y + 0.08} width={0.84} height={0.84} rx={0.22} fill="currentColor" />)}
+      {[[0, 0], [n - 7, 0], [0, n - 7]].map(([x, y]) => (
+        <g key={`${x}-${y}`}>
+          <rect x={x! + 0.5} y={y! + 0.5} width={6} height={6} rx={1.6} fill="none" stroke="currentColor" strokeWidth={1} />
+          <rect x={x! + 2} y={y! + 2} width={3} height={3} rx={0.8} fill="currentColor" />
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+function LinkScene({ channels }: { channels: React.ReactNode }) {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center gap-7">
+      <div className="relative size-[112px] overflow-hidden rounded-[14px] bg-[#f3efe8] p-2 text-[#1b1712] shadow-[0_16px_40px_-16px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.1)]">
+        <Qr />
+        <span className="scan absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-transparent to-[rgb(217_130_91/0.45)] [border-bottom:1.5px_solid_rgb(217_130_91)]" />
+      </div>
+      <div className="flex w-[124px] flex-wrap justify-center gap-2">{channels}</div>
+    </div>
+  )
+}
+
+function Wire() {
+  const agents = ["Claude", "ChatGPT", "Cursor"]
+  return (
+    <div className="absolute inset-0 flex items-center justify-center">
+      <svg viewBox="0 0 240 120" className="absolute h-[120px] w-[240px]" aria-hidden>
+        {[22, 60, 98].map((y, i) => (
+          <g key={y}>
+            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" stroke="rgb(255 246 232 / .12)" strokeWidth="1" />
+            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" stroke="rgb(227 185 141)" strokeWidth="1.4" strokeLinecap="round" strokeDasharray="14 160" className="flow" style={{ animationDelay: `${i * 0.6}s` }} />
+          </g>
+        ))}
+      </svg>
+      <div className="relative flex h-[120px] w-[240px] items-center justify-between">
+        <div className="flex flex-col gap-[10px]">
+          {agents.map((a) => (
+            <span key={a} title={a} className={`grid size-7 place-items-center rounded-[8px] bg-[#1d1b18] shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.08)] ${a === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={a} size={14} /></span>
+          ))}
+        </div>
+        <span className="grid size-[52px] place-items-center rounded-[14px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9),0_0_0_1px_rgb(227_185_141/0.5),0_0_40px_-4px_rgb(227_185_141/0.5)]">
+          <svg viewBox="0 0 64 64" width="24" height="24" fill="currentColor" fillRule="evenodd" aria-hidden><path d={PARLEY} /></svg>
+        </span>
+      </div>
+    </div>
+  )
+}
+
+const PROMPT = "Reply to everyone who's waiting on me"
+
+function Ask() {
+  const [ref, n] = useTick(90, PROMPT.length + 20)
+  const cycle = PROMPT.length + 26
+  const t = n % cycle
+  const typed = PROMPT.slice(0, Math.min(t, PROMPT.length))
+  const sent = t >= PROMPT.length + 6
+  return (
+    <div ref={ref} className="absolute inset-0 flex items-center justify-center px-6">
+      <div className="w-full max-w-[300px] rounded-[16px] bg-[#1a1916] p-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.08),0_20px_40px_-20px_rgb(0_0_0/0.9)]">
+        <p className="h-[42px] text-[13px] leading-[1.6] text-ink">
+          {typed}
+          {!sent && <span className="ml-px inline-block h-[15px] w-[1.5px] translate-y-[3px] animate-blink bg-sand" />}
+        </p>
+        <div className="mt-1 flex items-center gap-2">
+          <span className="flex items-center gap-1.5 rounded-full bg-white/[0.05] px-2 py-1 text-[10.5px] text-muted"><span className="grid size-3.5 place-items-center rounded-[4px] bg-ink text-bg"><svg viewBox="0 0 64 64" width="8" height="8" fill="currentColor" fillRule="evenodd" aria-hidden><path d={PARLEY} /></svg></span>Parley</span>
+          <motion.span animate={{ scale: sent ? [1, 0.88, 1] : 1 }} transition={{ duration: 0.3 }} className={`ml-auto grid size-7 place-items-center rounded-full transition-colors duration-300 ${typed.length === PROMPT.length ? "bg-ink text-bg" : "bg-white/[0.08] text-faint"}`}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+          </motion.span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Step({ n, title, visual, children }: { n: number; title: string; visual: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <li className={`flex flex-col overflow-hidden rounded-[18px] ${FRAME}`}>
+      <div className="relative h-[200px] overflow-hidden">
+        <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(rgb(255_246_232/0.06)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(65%_65%_at_50%_50%,black,transparent)]" />
+        {visual}
+      </div>
+      <div className="flex flex-1 flex-col px-6 pb-6 pt-1">
+        <h3 className="text-[15px] font-medium tracking-[-0.01em]"><span className="sr-only">Step {n}: </span>{title}</h3>
+        <div className="mt-1.5 flex flex-1 flex-col text-[14px] leading-[1.6] text-muted">{children}</div>
+      </div>
+    </li>
+  )
+}
+
+export function Steps({ channels, copy }: { channels: React.ReactNode; copy: React.ReactNode }) {
+  return (
+    <ol className="mt-12 grid gap-4 lg:grid-cols-3">
+      <Step n={1} title="Connect your accounts" visual={<LinkScene channels={channels} />}>
+        <p>Sign in and link the accounts your agents can use. WhatsApp links with a QR code, the same way WhatsApp Web does.</p>
+      </Step>
+      <Step n={2} title="Add Parley to your agent" visual={<Wire />}>
+        <p>Paste one URL into Claude, ChatGPT, Cursor or any MCP client, then sign in. No API keys.</p>
+        <div className="mt-auto pt-5">{copy}</div>
+      </Step>
+      <Step n={3} title="Ask" visual={<Ask />}>
+        <p>Your agent finds the chats that are waiting, writes the replies, and Parley sends them as you.</p>
+      </Step>
+    </ol>
   )
 }

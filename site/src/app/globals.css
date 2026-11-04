@@ -89,6 +89,22 @@
   to { transform: translateX(130%); }
 }
 
+/* The scan line over the setup QR code, and the pulses running down the setup wires. */
+.scan {
+  animation: scan 2.6s ease-in-out infinite;
+}
+@keyframes scan {
+  0% { transform: translateY(-100%); }
+  55%, 100% { transform: translateY(112px); }
+}
+.flow {
+  animation: flow 2.2s linear infinite;
+}
+@keyframes flow {
+  from { stroke-dashoffset: 14; }
+  to { stroke-dashoffset: -160; }
+}
+
 @keyframes blink {
   50% {
     opacity: 0.25;
