@@ -380,19 +380,25 @@ export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter)
   }))
 }
 
+export type NewInChat = { connectionId: string; channel: string; chatId: string; name: string | null; kind: "direct" | "group"; messages: number; reactions: number }
+
 /**
- * How much is new across the account's synced chats on connected connections: messages, reactions, and how many chats
- * have either. Cheap enough to answer on every tool call; never marks anything read.
+ * The account's synced chats (on connected connections) with something new, most recent first, with how many messages
+ * and reactions each. `chatId` is listed even with nothing new (so a caller can name the chat it's on). Cheap enough to
+ * answer on every tool call; never marks anything read.
  */
-export async function newTotals(sql: Sql, accountId: string): Promise<{ messages: number; reactions: number; chats: number }> {
-  const [r] = await sql<{ messages: string; reactions: string; chats: string }>(
-    `select coalesce(sum(nm.n), 0) as messages, coalesce(sum(nr.n), 0) as reactions, count(*) filter (where nm.n + nr.n > 0) as chats
+export async function newByChat(sql: Sql, accountId: string, opts: { channel?: string | undefined; connectionId?: string | undefined; chatId?: string | undefined } = {}): Promise<NewInChat[]> {
+  const rows = await sql<{ connection_id: string; channel: string; id: string; name: string | null; kind: "direct" | "group"; messages: string; reactions: string }>(
+    `select k.id as connection_id, k.channel, c.id, c.name, c.kind, nm.n as messages, nr.n as reactions
        from parley.chat c join parley.connection k on k.id = c.connection_id
        ${NEW_COUNTS}
-      where k.account_id = $1 and k.status = 'connected' and c.synced`,
-    [accountId]
+      where k.account_id = $1 and k.status = 'connected' and c.synced
+        and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3)
+        and (nm.n + nr.n > 0 or c.id = $4)
+      order by c.last_message_at desc nulls last, c.name nulls last`,
+    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.chatId ?? null]
   )
-  return { messages: Number(r?.messages ?? 0), reactions: Number(r?.reactions ?? 0), chats: Number(r?.chats ?? 0) }
+  return rows.map((r) => ({ connectionId: r.connection_id, channel: r.channel, chatId: r.id, name: r.name, kind: r.kind, messages: Number(r.messages), reactions: Number(r.reactions) }))
 }
 
 /** A reaction from the other side that came in since its chat was last read, with the message it's on. */
