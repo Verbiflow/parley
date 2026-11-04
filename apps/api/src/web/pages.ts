@@ -499,7 +499,7 @@ const CHATS_CSS = `
 .pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
 .pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .lim > span{white-space:nowrap}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
-.sws{display:flex;gap:22px;align-items:center;height:34px;margin-left:18px}
+.sws{display:flex;gap:22px;align-items:center;height:34px;margin-left:12px}
 .sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px}
 .sw input{appearance:none;flex:0 0 30px;width:30px;height:18px;margin:0;border-radius:9px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
 .sw input::after{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
@@ -554,8 +554,8 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
-      <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required></label>
-      <button class="btn line sm" type="submit">Save</button>
+      <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required onchange="this.form.requestSubmit()"></label>
+      <noscript><button class="btn line sm" type="submit">Save</button></noscript>
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
         ${toggle(behave, "typing", conn.typing, "Typing")}
