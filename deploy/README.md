@@ -23,7 +23,7 @@
         └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Only `app.itsparley.com` is public. The EC2 has **no inbound rules** (reached only through the tunnel it dials out;
+Only `app.itsparley.com` and the static marketing site at `itsparley.com` are public. The EC2 has **no inbound rules** (reached only through the tunnel it dials out;
 admin via SSM Session Manager — no SSH key). The RDS is **not publicly accessible** and accepts 5432 only from the
 EC2's security group. Secrets live in AWS Secrets Manager (`parley/prod/app`, `parley/prod/tunnel-token`, and the
 RDS-managed master secret) and Cloudflare Worker secrets — never in the repo or on disk.
@@ -31,8 +31,9 @@ RDS-managed master secret) and Cloudflare Worker secrets — never in the repo o
 ## Deploy
 
 **Normally: merge to `main`.** `.github/workflows/ci-deploy.yml` runs typecheck + tests (Postgres 16 + Redis) + a
-Worker bundle check on every PR, and on `main` deploys the sessions service, then the Worker, then smoke-tests
-`/health` (which reports the deployed commit). Re-run a deploy from the Actions tab (`workflow_dispatch` on `main`).
+Worker bundle check on every PR. On `main` it deploys the marketing site and the sessions service, then the app's
+Worker, then smoke-tests `/health` (which reports the deployed commit). The site goes before the app's Worker because
+that deploy drops any custom domain not in its config, and itsparley.com must already be on the site's Worker. Re-run a deploy from the Actions tab (`workflow_dispatch` on `main`).
 
 CI credentials live only in the GitHub `production` environment (deployable from `main` only):
 `vars.AWS_DEPLOY_ROLE_ARN` (OIDC role `parley-github-deploy`, trusts only this repo's `production` environment; can
@@ -46,6 +47,9 @@ AWS_PROFILE=flage-prod deploy/deploy-sessions.sh
 
 # Edge app (Cloudflare Worker)
 cd apps/api && npx wrangler deploy
+
+# Marketing site (static Next.js build on its own Worker)
+(cd site && npm ci && npm run build) && npx wrangler deploy -c site/wrangler.jsonc
 ```
 
 Deploy the sessions service first when a change touches both (the Worker calls the RPC; migrations run there).
@@ -68,6 +72,7 @@ cd apps/api && npx wrangler tail
 | What | Name |
 |---|---|
 | Worker | `parley-app` (custom domain `app.itsparley.com`) |
+| Worker | `parley-site` (custom domains `itsparley.com`, `www.itsparley.com`; static files from `site/out`) |
 | Hyperdrive | `parley-prod` → VPC service `parley-db` |
 | VPC service (HTTP) | `parley-sessions` → tunnel → `127.0.0.1:8790` |
 | Rate limits | Worker bindings `RL_MCP` / `RL_SIGNIN` / `RL_DASHBOARD` (keep in step with `LIMITS` in `src/ratelimit.ts`) |
