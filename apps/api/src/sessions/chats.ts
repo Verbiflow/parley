@@ -6,15 +6,33 @@ import type { CallKind, Chat, InboundMessage, MediaInfo, Reaction } from "@parle
 export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null }
 /** A message's attachment as readers see it: what it is, without the channel's fetch handle. */
 export type MediaView = Omit<MediaInfo, "ref" | "thumbnail">
-export type ReactionView = { from: string; fromMe: boolean; emoji: string; at: string }
+/**
+ * `seq`: arrival order (a reaction's moves when it changes), for marking a chat read. `isNew`: from the other side and
+ * not yet read (see `parley.chat_read`); the account's own messages and reactions are never new.
+ */
+export type ReactionView = { from: string; fromMe: boolean; emoji: string; at: string; seq: number; isNew: boolean }
 export type StoredMessage = {
   id: string; chatId: string; sender: string; fromMe: boolean; text: string; at: string
-  media: MediaView | null; reactions: ReactionView[]
+  media: MediaView | null; reactions: ReactionView[]; seq: number; isNew: boolean
 }
 
-type RawMessage = { id: string; chat_id: string; sender: string; from_me: boolean; body: string; sent_at: Date; media: MediaInfo | null; reactions: Array<{ from: string; from_me: boolean; emoji: string; at: string }> | null }
-const MESSAGE_COLS = `m.id, m.chat_id, m.sender, m.from_me, m.body, m.sent_at, m.media,
-  (select jsonb_agg(jsonb_build_object('from', r.reactor, 'from_me', r.reactor = 'me', 'emoji', r.emoji, 'at', r.reacted_at) order by r.reacted_at)
+/**
+ * What "new since last read" means, in one place. `m`/`r` is the message/reaction, `cr` the chat's `parley.chat_read`
+ * row (left-joined: a chat never read has none) and `k` its connection. New = from the other side, arrived after the
+ * marker, and (messages) not sent before the newest one already seen, so history fetched later isn't news. Nothing from
+ * before the connection was made is ever new.
+ */
+const NEW_MESSAGE = `(not m.from_me and m.seq > coalesce(cr.message_seq, 0) and m.sent_at >= coalesce(cr.seen_until, k.created_at))`
+const NEW_REACTION = `(r.reactor <> 'me' and r.emoji <> '' and r.seq > coalesce(cr.reaction_seq, 0) and r.reacted_at >= k.created_at)`
+/** Joins `k` and `cr` onto a query over messages `m`. */
+const READ_JOIN = `left join parley.chat_read cr on cr.connection_id = m.connection_id and cr.chat_id = m.chat_id`
+
+type RawMessage = {
+  id: string; chat_id: string; sender: string; from_me: boolean; body: string; sent_at: Date; media: MediaInfo | null; seq: string; is_new: boolean
+  reactions: Array<{ from: string; from_me: boolean; emoji: string; at: string; seq: number; new: boolean }> | null
+}
+const MESSAGE_COLS = `m.id, m.chat_id, m.sender, m.from_me, m.body, m.sent_at, m.media, m.seq, ${NEW_MESSAGE} as is_new,
+  (select jsonb_agg(jsonb_build_object('from', r.reactor, 'from_me', r.reactor = 'me', 'emoji', r.emoji, 'at', r.reacted_at, 'seq', r.seq, 'new', ${NEW_REACTION}) order by r.reacted_at)
      from parley.reaction r where r.connection_id = m.connection_id and r.chat_id = m.chat_id and r.message_id = m.id and r.emoji <> '') as reactions`
 const messageView = (r: RawMessage): StoredMessage => {
   // Neither the fetch handle nor the preview goes out with every message: get_media has those.
@@ -22,7 +40,8 @@ const messageView = (r: RawMessage): StoredMessage => {
   return {
     id: r.id, chatId: r.chat_id, sender: r.sender, fromMe: r.from_me, text: r.body, at: r.sent_at.toISOString(),
     media: r.media ? media : null,
-    reactions: (r.reactions ?? []).map((x) => ({ from: x.from, fromMe: x.from_me, emoji: x.emoji, at: new Date(x.at).toISOString() })),
+    reactions: (r.reactions ?? []).map((x) => ({ from: x.from, fromMe: x.from_me, emoji: x.emoji, at: new Date(x.at).toISOString(), seq: Number(x.seq), isNew: x.new })),
+    seq: Number(r.seq), isNew: r.is_new,
   }
 }
 
@@ -103,6 +122,16 @@ export async function mergeChats(sql: Sql, connectionId: string, pairs: Array<{ 
   await sql(
     `with p as (select f, t from jsonb_to_recordset($2::jsonb) as p(f text, t text))
      update parley.message m set chat_id = p.t from p where m.connection_id = $1 and m.chat_id = p.f`,
+    [connectionId, done]
+  )
+  // How far the chat was read moves across too (the further of the two), before the old chat takes its marker with it.
+  await sql(
+    `insert into parley.chat_read (connection_id, chat_id, message_seq, seen_until, reaction_seq, read_at)
+     select $1, p.t, cr.message_seq, cr.seen_until, cr.reaction_seq, cr.read_at
+       from jsonb_to_recordset($2::jsonb) as p(f text, t text) join parley.chat_read cr on cr.connection_id = $1 and cr.chat_id = p.f
+     on conflict (connection_id, chat_id) do update set
+       message_seq = greatest(parley.chat_read.message_seq, excluded.message_seq), seen_until = greatest(parley.chat_read.seen_until, excluded.seen_until),
+       reaction_seq = greatest(parley.chat_read.reaction_seq, excluded.reaction_seq), read_at = greatest(parley.chat_read.read_at, excluded.read_at)`,
     [connectionId, done]
   )
   await sql(`delete from parley.chat where connection_id = $1 and id in (select f from jsonb_to_recordset($2::jsonb) as p(f text, t text))`, [connectionId, done])
@@ -255,8 +284,9 @@ export async function saveReactions(sql: Sql, connectionId: string, reactions: R
        from jsonb_to_recordset($2::jsonb) as r(chat_id text, message_id text, reactor text, emoji text, at timestamptz)
        join parley.message m on m.connection_id = $1 and m.chat_id = r.chat_id and m.id = r.message_id
       order by r.chat_id, r.message_id, r.reactor, r.at desc
-     on conflict (connection_id, chat_id, message_id, reactor) do update set emoji = excluded.emoji, reacted_at = excluded.reacted_at
-      where excluded.reacted_at >= parley.reaction.reacted_at`,
+     on conflict (connection_id, chat_id, message_id, reactor) do update set emoji = excluded.emoji, reacted_at = excluded.reacted_at, seq = nextval('parley.reaction_seq')
+      where excluded.reacted_at >= parley.reaction.reacted_at
+        and (excluded.emoji, excluded.reacted_at) is distinct from (parley.reaction.emoji, parley.reaction.reacted_at)`,
     [connectionId, JSON.stringify(reactions.map((r) => ({ chat_id: r.threadId, message_id: r.messageId, reactor: r.fromMe ? "me" : r.from.slice(0, 200), emoji: r.emoji.slice(0, 64), at: r.at })))]
   )
 }
@@ -278,7 +308,7 @@ export async function messageMedia(sql: Sql, connectionId: string, chatId: strin
 
 export async function readMessages(sql: Sql, connectionId: string, chatId: string, opts: { limit: number; before?: string | undefined }): Promise<StoredMessage[]> {
   const rows = await sql<RawMessage>(
-    `select ${MESSAGE_COLS} from parley.message m
+    `select ${MESSAGE_COLS} from parley.message m join parley.connection k on k.id = m.connection_id ${READ_JOIN}
       where m.connection_id = $1 and m.chat_id = $2 and ($3::timestamptz is null or m.sent_at < $3)
       order by m.sent_at desc, m.seq desc limit $4`,
     [connectionId, chatId, opts.before ?? null, opts.limit]
@@ -287,10 +317,17 @@ export async function readMessages(sql: Sql, connectionId: string, chatId: strin
 }
 
 export type InboxMessage = StoredMessage & { channel: string; connectionId: string; chatName: string | null; chatKind: "direct" | "group" }
-/** `awaiting`: who owes the next message. `you` when the last word in the chat was theirs. */
-export type InboxChat = ChatRow & { channel: string; connectionId: string; awaiting: "you" | "them" | null }
+/**
+ * `awaiting`: who owes the next message. `you` when the last word in the chat was theirs. `newMessages`/`newReactions`:
+ * how much came from the other side since the chat was last read.
+ */
+export type InboxChat = ChatRow & { channel: string; connectionId: string; awaiting: "you" | "them" | null; newMessages: number; newReactions: number }
 
-export type InboxFilter = { channel?: string | undefined; connectionId?: string | undefined; chatId?: string | undefined; awaitingReply?: boolean | undefined }
+export type InboxFilter = {
+  channel?: string | undefined; connectionId?: string | undefined; chatId?: string | undefined; awaitingReply?: boolean | undefined
+  /** Only chats with something new (inboxChats). */
+  onlyNew?: boolean | undefined
+}
 
 /**
  * The account's inbox: messages from every synced chat on every connected connection, newest first. Narrow it by
@@ -302,6 +339,7 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
        from parley.message m
        join parley.chat c on c.connection_id = m.connection_id and c.id = m.chat_id and c.synced
        join parley.connection k on k.id = m.connection_id
+       ${READ_JOIN}
       where k.account_id = $1 and k.status = 'connected'
         and ($2::text is null or k.channel = $2)
         and ($3::uuid is null or k.id = $3)
@@ -315,15 +353,73 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
 
 /** Synced chats across the account's connected connections, most recent first. `awaitingReply` keeps those whose last message was theirs. */
 export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter): Promise<InboxChat[]> {
-  const rows = await sql<Raw & { channel: string; connection_id: string; last_from_me: boolean | null }>(
-    `select c.id, c.kind, c.name, c.synced, c.last_message_at, c.last_call_at, c.last_call_kind, k.channel, k.id as connection_id, lm.from_me as last_from_me
+  const rows = await sql<Raw & { channel: string; connection_id: string; last_from_me: boolean | null; new_messages: string; new_reactions: string }>(
+    `select c.id, c.kind, c.name, c.synced, c.last_message_at, c.last_call_at, c.last_call_kind, k.channel, k.id as connection_id, lm.from_me as last_from_me,
+            nm.n as new_messages, nr.n as new_reactions
        from parley.chat c join parley.connection k on k.id = c.connection_id
+       left join parley.chat_read cr on cr.connection_id = c.connection_id and cr.chat_id = c.id
        left join lateral (select m.from_me from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id order by m.sent_at desc, m.seq desc limit 1) lm on true
+       cross join lateral (select count(*) n from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id and ${NEW_MESSAGE}) nm
+       cross join lateral (select count(*) n from parley.reaction r where r.connection_id = c.connection_id and r.chat_id = c.id and ${NEW_REACTION}) nr
       where k.account_id = $1 and k.status = 'connected' and c.synced
         and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3)
         and ($4::boolean is not true or lm.from_me = false)
+        and ($5::text is null or c.id = $5)
+        and ($6::boolean is not true or nm.n + nr.n > 0)
       order by c.last_message_at desc nulls last, c.name nulls last`,
-    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.awaitingReply ?? null]
+    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.awaitingReply ?? null, opts.chatId ?? null, opts.onlyNew ?? null]
   )
-  return rows.map((r) => ({ ...chatRow(r), channel: r.channel, connectionId: r.connection_id, awaiting: r.last_from_me === null ? null : r.last_from_me ? "them" : "you" }))
+  return rows.map((r) => ({
+    ...chatRow(r), channel: r.channel, connectionId: r.connection_id, awaiting: r.last_from_me === null ? null : r.last_from_me ? "them" : "you",
+    newMessages: Number(r.new_messages), newReactions: Number(r.new_reactions),
+  }))
+}
+
+/** A reaction from the other side that came in since its chat was last read, with the message it's on. */
+export type NewReaction = {
+  channel: string; connectionId: string; chatId: string; chatName: string | null; messageId: string; messageText: string; onMyMessage: boolean
+  from: string; emoji: string; at: string; seq: number
+}
+
+/** New reactions across the account (narrowed like the inbox), oldest arrival first, at most `limit`. */
+export async function newReactions(sql: Sql, accountId: string, opts: InboxFilter & { limit: number }): Promise<NewReaction[]> {
+  const rows = await sql<{ channel: string; connection_id: string; chat_id: string; name: string | null; message_id: string; body: string; from_me: boolean; reactor: string; emoji: string; reacted_at: Date; seq: string }>(
+    `select k.channel, k.id as connection_id, r.chat_id, c.name, r.message_id, left(m.body, 200) as body, m.from_me, r.reactor, r.emoji, r.reacted_at, r.seq
+       from parley.reaction r
+       join parley.message m on m.connection_id = r.connection_id and m.chat_id = r.chat_id and m.id = r.message_id
+       join parley.chat c on c.connection_id = r.connection_id and c.id = r.chat_id and c.synced
+       join parley.connection k on k.id = r.connection_id
+       left join parley.chat_read cr on cr.connection_id = r.connection_id and cr.chat_id = r.chat_id
+      where k.account_id = $1 and k.status = 'connected'
+        and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3) and ($4::text is null or r.chat_id = $4)
+        and ${NEW_REACTION}
+      order by r.seq limit $5`,
+    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.chatId ?? null, opts.limit]
+  )
+  return rows.map((r) => ({
+    channel: r.channel, connectionId: r.connection_id, chatId: r.chat_id, chatName: r.name, messageId: r.message_id, messageText: r.body, onMyMessage: r.from_me,
+    from: r.reactor, emoji: r.emoji, at: r.reacted_at.toISOString(), seq: Number(r.seq),
+  }))
+}
+
+/**
+ * Mark chats read up to what was shown: the latest message (`messageSeq`, and `seenUntil`, the newest send time among
+ * them) and reaction (`reactionSeq`). Markers only move forward. Only chats on the account's own connections are marked.
+ */
+export async function markRead(sql: Sql, accountId: string, marks: Array<{ connectionId: string; chatId: string; messageSeq?: number; seenUntil?: string; reactionSeq?: number }>): Promise<void> {
+  if (!marks.length) return
+  await sql(
+    `insert into parley.chat_read (connection_id, chat_id, message_seq, seen_until, reaction_seq)
+     select x.connection_id, x.chat_id, coalesce(max(x.message_seq), 0), greatest(k.created_at, coalesce(max(x.seen_until), k.created_at)), coalesce(max(x.reaction_seq), 0)
+       from jsonb_to_recordset($2::jsonb) as x(connection_id uuid, chat_id text, message_seq bigint, seen_until timestamptz, reaction_seq bigint)
+       join parley.connection k on k.id = x.connection_id and k.account_id = $1
+       join parley.chat c on c.connection_id = x.connection_id and c.id = x.chat_id
+      group by x.connection_id, x.chat_id, k.created_at
+     on conflict (connection_id, chat_id) do update set
+       message_seq = greatest(parley.chat_read.message_seq, excluded.message_seq),
+       seen_until = greatest(parley.chat_read.seen_until, excluded.seen_until),
+       reaction_seq = greatest(parley.chat_read.reaction_seq, excluded.reaction_seq),
+       read_at = now()`,
+    [accountId, JSON.stringify(marks.map((m) => ({ connection_id: m.connectionId, chat_id: m.chatId, message_seq: m.messageSeq ?? null, seen_until: m.seenUntil ?? null, reaction_seq: m.reactionSeq ?? null })))]
+  )
 }
