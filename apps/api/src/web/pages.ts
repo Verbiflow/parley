@@ -690,7 +690,9 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
   // helps nobody. They still sync, and appear once they're identified (a name arrives, or they merge into a number).
-  const chats = opts.chats.filter((c) => c.kind === "group" || c.name || phoneOf(c.id))
+  // A "name" with no letters or digits ("-", ".") names nobody: fall back to the number.
+  const chats = opts.chats.map((c) => (c.name && !/[\p{L}\p{N}]/u.test(c.name) ? { ...c, name: null } : c))
+    .filter((c) => c.kind === "group" || c.name || phoneOf(c.id))
   const name = channelName(conn.channel)
   // Like your phone: chats with recent activity first. The rest (old groups, people you only share a group with) are
   // a click or a search away, so hundreds of dead groups don't bury the people you actually talk to.
