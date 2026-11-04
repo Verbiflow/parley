@@ -230,6 +230,7 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 
 /* sections: a ruled label, then content on the page itself */
 .sec{margin-top:44px}
+.head + .sec,.head + .note + .sec{margin-top:8px}
 .sec-h{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .sec-h .label{color:var(--text-2)}
 .sec-h .aside{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:10px}
