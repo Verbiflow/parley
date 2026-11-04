@@ -254,7 +254,28 @@ export const whatsappChannel: Channel = {
       if (!isJidGroup(raw)) pair(raw, m.key.remoteJidAlt)
       return reactionIn(canon(raw), r)
     }
+    /**
+     * What the phone says back to our requests (history on demand, resends of messages that failed to decrypt). Baileys
+     * acts on some answers and drops the rest silently; this logs every one, by type and counts only, never content.
+     */
+    const traceProtocol = (m: WAMessage) => {
+      const p = m.message?.protocolMessage
+      if (!p || !m.key.fromMe) return
+      if (p.type === proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION) {
+        const h = p.historySyncNotification
+        console.log(JSON.stringify({ msg: "whatsapp: history notification", syncType: h?.syncType, chunkOrder: h?.chunkOrder, requestId: h?.peerDataRequestSessionId || undefined, inline: Boolean(h?.initialHistBootstrapInlinePayload?.length) }))
+      } else if (p.type === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE) {
+        const r = p.peerDataOperationRequestResponseMessage
+        const results = r?.peerDataOperationResult ?? []
+        console.log(JSON.stringify({
+          msg: "whatsapp: phone answered a request", requestType: r?.peerDataOperationRequestType, requestId: r?.stanzaId, results: results.length,
+          kinds: [...new Set(results.flatMap((x) => Object.keys(x ?? {}).filter((k) => (x as Record<string, unknown>)[k] != null)))],
+          codes: [...new Set(results.map((x) => x?.mediaUploadResult).filter((c) => c != null))],
+        }))
+      }
+    }
     const handleMessages = (messages: WAMessage[]) => {
+      for (const m of messages) traceProtocol(m)
       const reactions = messages.map(reactionMessageOf).filter((r): r is Reaction => Boolean(r))
       const chats: Chat[] = []
       for (const m of messages) {
@@ -486,9 +507,15 @@ export const whatsappChannel: Channel = {
         // The phone answers with a history batch of the messages before this one (as WhatsApp Desktop does when you
         // scroll up). It has to be online; the answer comes through messaging-history.set like any history.
         const jid = toJid(anchor.threadId)
-        const key: WAMessageKey = { remoteJid: jid, id: anchor.messageId, fromMe: anchor.fromMe }
-        if (isJidGroup(jid) && !anchor.fromMe && anchor.sender && anchor.sender !== "me") key.participant = toJid(anchor.sender)
-        await sock.fetchMessageHistory(Math.max(1, Math.min(50, count)), key, Date.parse(anchor.at))
+        // The phone files a person's chat under their private id or their number, depending on the chat: ask under
+        // each form we know (an answer to both is harmless; stored messages are only filled in).
+        const lids = isJidGroup(jid) ? [] : [...phoneOfLid].filter(([, pn]) => pn === jid).map(([lid]) => lid)
+        for (const remoteJid of [...lids, jid]) {
+          const key: WAMessageKey = { remoteJid, id: anchor.messageId, fromMe: anchor.fromMe }
+          if (isJidGroup(jid) && !anchor.fromMe && anchor.sender && anchor.sender !== "me") key.participant = toJid(anchor.sender)
+          const requestId = await sock.fetchMessageHistory(Math.max(1, Math.min(50, count)), key, Date.parse(anchor.at))
+          console.log(JSON.stringify({ msg: "whatsapp: history requested", requestId, addressing: remoteJid.endsWith("@lid") ? "lid" : isJidGroup(remoteJid) ? "group" : "pn", count }))
+        }
       },
       async logout() {
         stopped = true
