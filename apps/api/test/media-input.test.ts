@@ -10,12 +10,12 @@ test("private and metadata addresses are refused; public ones aren't", () => {
   for (const h of ["example.com", "8.8.8.8", "172.32.0.1", "cdn.example.org"]) assert.ok(!isPrivateHost(h), h)
 })
 
-test("kinds follow the type: inline photos/videos, audio, everything else a document", () => {
+test("kinds follow the type: inline photos/videos/GIFs, audio, everything else a document", () => {
   assert.equal(kindOf("image/jpeg"), "image")
   assert.equal(kindOf("video/mp4"), "video")
   assert.equal(kindOf("video/quicktime"), "video")
   assert.equal(kindOf("audio/ogg; codecs=opus"), "audio")
-  assert.equal(kindOf("image/gif"), "document")
+  assert.equal(kindOf("image/gif"), "video")
   assert.equal(kindOf("application/pdf"), "document")
   assert.equal(kindOf("application/zip"), "document")
 })
@@ -25,7 +25,7 @@ test("the edge decodes base64 but only checks a URL (the sessions service downlo
   assert.ok("data" in b)
   assert.equal(b.mimetype, "image/png")
   assert.equal(new TextDecoder().decode(b.data), "hi")
-  assert.deepEqual(resolveMedia({ url: "https://cdn.example.com/a.mp4", kind: "video" }), { url: "https://cdn.example.com/a.mp4", kind: "video", mimetype: undefined, fileName: undefined })
+  assert.deepEqual(resolveMedia({ url: "https://cdn.example.com/a.mp4", kind: "video" }), { url: "https://cdn.example.com/a.mp4", kind: "video", mimetype: undefined, fileName: undefined, gif: undefined })
 
   assert.throws(() => resolveMedia({}), /exactly one/)
   assert.throws(() => resolveMedia({ url: "ftp://example.com/a" }), /http/)
@@ -72,4 +72,14 @@ test("download links: signed, scoped to one message, and they expire", async () 
   const forged = Buffer.from(JSON.stringify({ a: "other", c: "conn", t: "chat@g.us", m: "MSG1", e: 9e9 })).toString("base64url")
   assert.equal(await verifyMediaLink("secret-a", `${forged}.${sig}`, now), undefined)
   assert.equal(await verifyMediaLink("secret-a", `${body}`, now), undefined)
+})
+
+test("a GIF is sent as a looping GIF (a video), unless asked for as a document; an MP4 can be marked a GIF", () => {
+  const d = new Uint8Array(3)
+  assert.deepEqual(describeMedia({ data: d, fileName: "party.gif" }), { kind: "video", mimetype: "image/gif", fileName: "party.gif", gif: true, data: d })
+  assert.equal(describeMedia({ data: d, served: "image/gif", kind: "image" }).gif, true)
+  assert.equal(describeMedia({ data: d, served: "image/gif", kind: "document" }).gif, undefined)
+  assert.equal(describeMedia({ data: d, mimetype: "video/mp4", gif: true }).gif, true)
+  assert.equal(describeMedia({ data: d, mimetype: "video/mp4" }).gif, undefined)
+  assert.equal(describeMedia({ data: d, mimetype: "image/png", gif: true }).gif, undefined)
 })

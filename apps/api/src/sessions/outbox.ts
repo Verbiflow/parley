@@ -54,7 +54,7 @@ export const UNSEND_WINDOW_MS = 48 * 60 * 60 * 1000
 
 export type OutboundStatus = "scheduled" | "sending" | "sent" | "failed" | "canceled"
 /** What a queued file is. Its bytes stay in the database until it's sent; nothing that lists the outbox reads them. */
-export type OutboundMediaInfo = { kind: OutboundMedia["kind"]; mimetype: string; fileName?: string | undefined }
+export type OutboundMediaInfo = { kind: OutboundMedia["kind"]; mimetype: string; fileName?: string | undefined; gif?: boolean | undefined }
 export type Outbound = {
   id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; status: OutboundStatus
   /** A file sent with `text` as its caption. */
@@ -189,7 +189,7 @@ export async function enqueue(
       `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to, unsend, typing)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning ${OUT_COLUMNS}`,
       [c.id, req.to, kind, req.text, r.ok ? r.at : null, req.notBefore ?? null, req.idempotencyKey ?? null, req.agentSessionId ?? null, now,
-        req.media ? JSON.stringify({ kind: req.media.kind, mimetype: req.media.mimetype, ...(req.media.fileName ? { fileName: req.media.fileName } : {}) }) : null,
+        req.media ? JSON.stringify({ kind: req.media.kind, mimetype: req.media.mimetype, ...(req.media.fileName ? { fileName: req.media.fileName } : {}), ...(req.media.gif ? { gif: true } : {}) }) : null,
         req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null, req.unsend ?? null, Boolean(req.typing && !req.reactTo && !req.unsend)]
     )
     return { message: { ...outbound(row!), waits: r.ok ? r.waits : ["paused"], held: !r.ok }, replayed: false }

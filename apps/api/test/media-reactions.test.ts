@@ -8,14 +8,19 @@ import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
 const textOnly = makeFakeChannel("fake-txt", { unsend: false })
 // Sending from a URL downloads on the sessions service; here a stand-in serves a few known files.
-const served: Record<string, { body: string; type?: string }> = {
+const served: Record<string, { body: string | Uint8Array; type?: string }> = {
   "https://cdn.example.com/clip.mp4": { body: "mp4-bytes", type: "video/mp4" },
   "https://cdn.example.com/files/report": { body: "%PDF-1.7", type: "application/pdf" },
+  "https://media.example.com/dance.mp4": { body: "mp4-bytes", type: "video/mp4" },
 }
+// A real two-frame 5x3 GIF (odd sizes, which H.264 can't take as they are).
+const GIF = Buffer.from("R0lGODlhBQADAPcfMQAAACQAAEgAAGwAAJAAALQAANgAAPwAAAAkACQkAEgkAGwkAJAkALQkANgkAPwkAABIACRIAEhIAGxIAJBIALRIANhIAPxIAABsACRsAEhsAGxsAJBsALRsANhsAPxsAACQACSQAEiQAGyQAJCQALSQANiQAPyQAAC0ACS0AEi0AGy0AJC0ALS0ANi0APy0AADYACTYAEjYAGzYAJDYALTYANjYAPzYAAD8ACT8AEj8AGz8AJD8ALT8ANj8APz8AAAAVSQAVUgAVWwAVZAAVbQAVdgAVfwAVQAkVSQkVUgkVWwkVZAkVbQkVdgkVfwkVQBIVSRIVUhIVWxIVZBIVbRIVdhIVfxIVQBsVSRsVUhsVWxsVZBsVbRsVdhsVfxsVQCQVSSQVUiQVWyQVZCQVbSQVdiQVfyQVQC0VSS0VUi0VWy0VZC0VbS0Vdi0Vfy0VQDYVSTYVUjYVWzYVZDYVbTYVdjYVfzYVQD8VST8VUj8VWz8VZD8VbT8Vdj8Vfz8VQAAqiQAqkgAqmwAqpAAqrQAqtgAqvwAqgAkqiQkqkgkqmwkqpAkqrQkqtgkqvwkqgBIqiRIqkhIqmxIqpBIqrRIqthIqvxIqgBsqiRsqkhsqmxsqpBsqrRsqthsqvxsqgCQqiSQqkiQqmyQqpCQqrSQqtiQqvyQqgC0qiS0qki0qmy0qpC0qrS0qti0qvy0qgDYqiTYqkjYqmzYqpDYqrTYqtjYqvzYqgD8qiT8qkj8qmz8qpD8qrT8qtj8qvz8qgAA/yQA/0gA/2wA/5AA/7QA/9gA//wA/wAk/yQk/0gk/2wk/5Ak/7Qk/9gk//wk/wBI/yRI/0hI/2xI/5BI/7RI/9hI//xI/wBs/yRs/0hs/2xs/5Bs/7Rs/9hs//xs/wCQ/ySQ/0iQ/2yQ/5CQ/7SQ/9iQ//yQ/wC0/yS0/0i0/2y0/5C0/7S0/9i0//y0/wDY/yTY/0jY/2zY/5DY/7TY/9jY//zY/wD8/yT8/0j8/2z8/5D8/7T8/9j8//z8/yH/C05FVFNDQVBFMi4wAwEAAAAh+QQEFAAfACwAAAAABQADAAAICAAPCBxIsGBAACH5BAUUAAAALAQAAgABAAEAAAgEAAEEBAAh+QQFFAAAACwEAAIAAQABAAAIBAABBAQAIfkEBRQAAAAsAAAAAAUAAwAACAgAgQkcSLBgQAA7", "base64")
+served["https://media.example.com/dance.gif"] = { body: new Uint8Array(GIF), type: "image/gif" }
+const isMp4 = (b: Uint8Array) => Buffer.from(b.subarray(4, 8)).toString() === "ftyp"
 const fetchMedia = async (url: string) => {
   const f = served[url]
   if (!f) throw new (await import("../src/mcp/media.ts")).MediaInputError("couldn't download the file (HTTP 404)")
-  return { data: new TextEncoder().encode(f.body), contentType: f.type, fileName: url.split("/").pop() }
+  return { data: typeof f.body === "string" ? new TextEncoder().encode(f.body) : f.body, contentType: f.type, fileName: url.split("/").pop() }
 }
 const { ctx, sql, base } = await testServer([fake.channel, textOnly.channel], {}, { fetchMedia })
 const sessions = ctx.sessions
@@ -353,4 +358,40 @@ test("a channel that can't delete sent messages refuses up front", async () => {
   textOnly.simulator.deliver(connectionId, { id: "t1", threadId: "ana", from: "me", fromMe: true, text: "hey" })
   await waitUntil(() => sessions.inbox(accountId, { limit: 5 }), (ms) => ms.length === 1)
   await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "t1" }, T0), /can't delete sent messages/)
+})
+
+test("GIFs go out as people send them: converted to MP4 and sent as a looping GIF, from base64 or a URL; an MP4 can be marked a GIF", async () => {
+  const email = "gif@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const { accountId, connectionId } = await linked(email)
+  const sendAt = async (q: { message: { scheduledFor: string | null } }) => sessions.dispatchDue(new Date(Date.parse(q.message.scheduledFor!) + 1000))
+
+  // Through MCP, as base64: the edge sees a GIF, the sessions service converts it.
+  const res = await callTool(base, token, "send_message", { connection_id: connectionId, to: "ana", text: "this", media: { data: GIF.toString("base64"), file_name: "dance.gif" } })
+  assert.equal(res.isError, false, String(res.result))
+  assert.deepEqual(res.result.media, { kind: "video", mimetype: "video/mp4", file_name: null })
+  await sessions.dispatchDue(new Date(Date.parse(res.result.scheduled_for) + 1000))
+  const out = fake.simulator.sent(connectionId).at(-1)!.content
+  assert.equal(out.text, "this")
+  assert.deepEqual([out.media?.kind, out.media?.mimetype, out.media?.gif], ["video", "video/mp4", true])
+  assert.ok(isMp4(out.media!.data))
+
+  // From a URL that serves image/gif.
+  const viaUrl = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { url: "https://media.example.com/dance.gif" } }, T0)
+  await sendAt(viaUrl)
+  const fromUrl = fake.simulator.sent(connectionId).at(-1)!.content.media!
+  assert.deepEqual([fromUrl.kind, fromUrl.mimetype, fromUrl.gif], ["video", "video/mp4", true])
+  assert.ok(isMp4(fromUrl.data))
+
+  // An MP4 GIF (Giphy/Tenor) with gif: true goes as it is, looping.
+  const mp4 = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { url: "https://media.example.com/dance.mp4", gif: true } }, T0)
+  await sendAt(mp4)
+  const last = fake.simulator.sent(connectionId).at(-1)!.content.media!
+  assert.deepEqual([last.kind, last.mimetype, last.gif, new TextDecoder().decode(last.data)], ["video", "video/mp4", true, "mp4-bytes"])
+
+  // Asked for as a document, a GIF stays the file it is.
+  const doc = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { data: new Uint8Array(GIF), kind: "document", mimetype: "image/gif", fileName: "dance.gif" } }, T0)
+  await sendAt(doc)
+  const asDoc = fake.simulator.sent(connectionId).at(-1)!.content.media!
+  assert.deepEqual([asDoc.kind, asDoc.mimetype, asDoc.gif], ["document", "image/gif", undefined])
 })

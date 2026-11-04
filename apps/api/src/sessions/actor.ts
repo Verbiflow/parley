@@ -5,7 +5,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { Transactor } from "../db/transactor.ts"
 import { Exits, ExitError } from "./exits.ts"
 import { UNSEND_WINDOW_MS, abandon, claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
-import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
+import { describeMedia, isGif, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
 import type { MediaFetcher } from "./fetch-media.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
@@ -288,13 +288,26 @@ export class Sessions {
     }
   }
 
-  /** The bytes to queue: as given, or downloaded now from the agent's URL (so a bad link fails the call, not the send). */
+  /**
+   * The bytes to queue: as given, or downloaded now from the agent's URL (so a bad link fails the call, not the send).
+   * A GIF is turned into the MP4 WhatsApp sends GIFs as, here, so the queue holds what goes out.
+   */
   async #fileToSend(media: MediaSend): Promise<NonNullable<EnqueueRequest["media"]>> {
     try {
-      if (!("url" in media)) return describeMedia(media)
-      if (!this.ctx.fetchMedia) throw new MediaInputError("this server can't download files; send the file as `data`")
-      const got = await this.ctx.fetchMedia(media.url, maxBytesFor(media.kind))
-      return describeMedia({ data: got.data, kind: media.kind, mimetype: media.mimetype, served: got.contentType, fileName: media.fileName ?? got.fileName })
+      let file: NonNullable<EnqueueRequest["media"]>
+      if (!("url" in media)) file = describeMedia(media)
+      else {
+        if (!this.ctx.fetchMedia) throw new MediaInputError("this server can't download files; send the file as `data`")
+        const got = await this.ctx.fetchMedia(media.url, maxBytesFor(media.kind))
+        file = describeMedia({ data: got.data, kind: media.kind, mimetype: media.mimetype, served: got.contentType, fileName: media.fileName ?? got.fileName, gif: media.gif })
+      }
+      if (file.gif && isGif(file.mimetype)) {
+        const { fileName: _name, ...rest } = file
+        // Loaded only here: ffmpeg is Node-only, and the edge bundle (which includes this file) never converts.
+        const { gifToMp4 } = await import("./gif.ts")
+        file = { ...rest, mimetype: "video/mp4", data: await gifToMp4(file.data) }
+      }
+      return file
     } catch (e) {
       // Over the wire as an outbox refusal, so the agent sees why.
       if (e instanceof MediaInputError) throw new OutboxError("action_unsupported", e.message)
