@@ -3,7 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
-import { OutboxError, availability, cancel, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
+import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
 
@@ -18,6 +18,7 @@ function principalOf(extra: { authInfo?: { extra?: unknown } } | undefined): Mcp
 
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] })
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError
 
 const WAIT_TEXT: Record<string, string> = {
@@ -44,6 +45,8 @@ const INLINE_FILE_BYTES = 10 * 1024 * 1024
 const INLINE_TEXT_BYTES = 512 * 1024
 const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javascript)$)/
 
+const FOLLOW_UP = "Call message_status with this id to see whether it has gone out."
+
 /** What send_message and react_to_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
   const now = !message.held && message.scheduledFor && Date.parse(message.scheduledFor) <= Date.now() + 1000
@@ -54,7 +57,27 @@ function queuedView(message: Queued, replayed: boolean) {
     note: message.held
       ? "Queued, but the connection is paused; it sends once the account holder resumes it."
       : now ? "Queued; it goes out now." : `Queued for ${message.scheduledFor}: ${message.waits.map((w) => WAIT_TEXT[w] ?? w).join(", ")}.`,
+    next: FOLLOW_UP,
   }
+}
+
+/** What message_status answers: the row, and a plain-words reading of where it stands. */
+function statusView(m: Outbound) {
+  const what = m.reactTo ? "The reaction" : m.media ? `The ${m.media.kind}` : "The message"
+  const note = {
+    scheduled: m.scheduledFor
+      ? Date.parse(m.scheduledFor) <= Date.now() + 1000
+        ? `${what} is due now and goes out within moments. Check again shortly.`
+        : `${what} is waiting its turn; it goes out at ${m.scheduledFor}. Call send_availability to see why it isn't sooner.`
+      : `${what} is held: the connection is paused or offline. It sends once the account holder resumes it (check list_connections).`,
+    sending: `${what} is being sent right now. Check again in a few seconds.`,
+    sent: `${what} went out at ${m.sentAt}.`,
+    failed: m.error?.code === "outcome_unknown"
+      ? `${what} may or may not have arrived: the send was interrupted. Check the chat with read_inbox before sending again.`
+      : `${what} failed: ${m.error?.message ?? "unknown error"}.`,
+    canceled: `${what} was canceled.`,
+  }[m.status]
+  return { ...outboundView(m), attempts: m.attempts, note }
 }
 
 /**
@@ -336,7 +359,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_outbox",
     {
       title: "List outbox",
-      description: "Messages you queued: scheduled ones in send order, then sent, failed and canceled ones. A failed message carries an error code; outcome_unknown means the send was interrupted and may or may not have arrived.",
+      description: "Messages you queued: scheduled ones in send order, then sent, failed and canceled ones. A failed message carries an error code; outcome_unknown means the send was interrupted and may or may not have arrived. To follow one message, use message_status.",
       inputSchema: {
         connection_id: z.string().optional(),
         status: z.enum(["scheduled", "sending", "sent", "failed", "canceled"]).optional(),
@@ -349,6 +372,24 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json({ messages: (await listOutbound(ctx.sql, userId, { connectionId: connection_id, status, limit: limit ?? 50 })).map(outboundView) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list the outbox")
+      }
+    }
+  )
+
+  server.registerTool(
+    "message_status",
+    {
+      title: "Message status",
+      description: "Check on one message or reaction you queued (the id send_message or react_to_message returned): scheduled (with when it goes out), sending, sent (with when), failed (with why), or canceled. Poll this after a send to know it went out.",
+      inputSchema: { message_id: z.string().describe("The id send_message or react_to_message returned.") },
+    },
+    async ({ message_id }, extra) => {
+      const { userId } = principalOf(extra)
+      if (!UUID.test(message_id)) return fail("no such message")
+      try {
+        return json(statusView(await getOutbound(ctx.sql, userId, message_id)))
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not read the message")
       }
     }
   )
