@@ -186,7 +186,7 @@ const OVERVIEW_CSS = `
 .conns.compact .conn{flex-direction:row;align-items:center;padding:12px 14px;gap:12px}
 .conns.compact .conn .ct{width:34px;height:34px;border-radius:9px}.conns.compact .conn small{display:none}.conns.compact .conn b{font-size:13.5px}
 .conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}.conns.compact .conn.later .cf{height:auto}
-.stepn{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;border:1px solid var(--line-3);font-size:10.5px;color:var(--text);margin-right:10px;letter-spacing:0}
+.stepn{display:inline-grid;place-items:center;flex:none;box-sizing:border-box;width:20px;height:20px;border-radius:50%;border:1px solid var(--line-3);font-family:var(--sans);font-size:11px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;text-box:trim-both cap alphabetic;color:var(--text);margin-right:10px;letter-spacing:0;text-indent:0}
 .stepn.done{background:var(--signal);border-color:var(--signal);color:var(--on-ink)}
 .done-tag{display:inline-flex;align-items:center;gap:6px;color:var(--signal);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
 .seg button .cm,.seg button svg{margin-right:7px}
