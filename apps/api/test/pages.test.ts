@@ -8,7 +8,10 @@ test("the app's sign-in page is the centered panel with one Google button", () =
   const html = landingPage({ workos: true, dev: false })
   assert.match(html, /Your messaging, ready for your agents\./)
   assert.match(html, /href="\/auth\/start"[^>]*>.*Continue with Google/s)
-  assert.doesNotMatch(html, /dev login/)
+  assert.doesNotMatch(html, /name="email"|Sign-in isn't set up/)
+  const local = landingPage({ workos: false, dev: true })
+  assert.match(local, /action="\/auth\/dev"/)
+  assert.doesNotMatch(local, /WORKOS_|Sign-in isn't/)
   assert.doesNotMatch(html, /Messaging infrastructure<br>/)
 })
 

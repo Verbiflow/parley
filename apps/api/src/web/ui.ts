@@ -333,9 +333,12 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .cp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:999px;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);font-size:12.5px;font-weight:500;cursor:pointer;flex:none;transition:background .15s,color .15s}
 .cp:hover{color:var(--text);background:var(--glass-hi)}
 
-.note{display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:14px;background:var(--card);box-shadow:var(--frame),inset 2px 0 0 var(--muted)}
-.note.bad{box-shadow:var(--frame),inset 2px 0 0 var(--bad)}.note.warn{box-shadow:var(--frame),inset 2px 0 0 var(--warn)}.note.ok{box-shadow:var(--frame),inset 2px 0 0 var(--ok)}
-.note .grow{flex:1;min-width:0}.note b{font-weight:500}.note p{font-size:13px;color:var(--muted);margin-top:3px}
+/* note: a card whose state is a dot beside its title, the way status pills say it; never a colored edge */
+.note{--d:var(--faint);display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:16px;background:var(--card);box-shadow:var(--frame)}
+.note.bad{--d:var(--bad)}.note.warn{--d:var(--warn)}.note.ok{--d:var(--ok)}
+.note .grow{flex:1;min-width:0}.note p{font-size:13px;line-height:20px;color:var(--muted);margin-top:3px}
+.note b{display:flex;align-items:center;gap:9px;font-weight:500}.note b::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--d);box-shadow:0 0 0 3px color-mix(in srgb,var(--d) 16%,transparent)}
+.note p{padding-left:15px}
 
 .empty{padding:44px 0;color:var(--muted);font-size:13.5px}
 .empty b{display:block;color:var(--text);font-weight:500;margin-bottom:4px;font-size:14.5px}

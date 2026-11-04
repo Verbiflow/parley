@@ -60,22 +60,21 @@ const GOOGLE_G = `<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="t
 
 /** The app's signed-out page (app.itsparley.com): the site's threads behind one centered panel, straight to Google. */
 export function landingPage(opts: { workos: boolean; dev: boolean }): string {
-  const signin = opts.workos
-    ? `<a class="btn lg block" href="/auth/start">${GOOGLE_G}Continue with Google</a>`
-    : `<div class="note warn"><div class="grow"><b>Sign-in isn't configured</b><p>Set <code>WORKOS_CLIENT_ID</code> and <code>WORKOS_API_KEY</code>.</p></div></div>`
-  const dev = opts.dev
-    ? `<form method="post" action="/auth/dev" class="dev">
-         <div class="or label">Local development</div>
-         <label class="field"><span>Email</span><input class="input" name="email" type="email" placeholder="you@example.com" required autocomplete="email"></label>
-         <button class="btn line lg block" type="submit">Continue with dev login</button></form>`
-    : ""
+  const dev = `<form method="post" action="/auth/dev" class="dev">
+      <input class="input" name="email" type="email" placeholder="you@example.com" required autocomplete="email" aria-label="Email">
+      <button class="btn lg block" type="submit">Continue with email</button>
+      <p class="hint">Local development: any email signs you in.</p></form>`
+  const panel = opts.workos
+    ? `<a class="btn lg block" href="/auth/start">${GOOGLE_G}Continue with Google</a>${opts.dev ? `<div class="or label">or</div>${dev}` : ""}`
+    : opts.dev ? dev
+    : `<p class="hint">Sign-in isn't set up on this server yet. Its operator needs to add WorkOS keys.</p>`
   return shell("Sign in · Parley", `
     <canvas class="threads" aria-hidden="true"></canvas>
     <main class="signin">
       ${pmark(52)}
       <h1>Your messaging, ready for your agents.</h1>
       <p class="sub">Link your accounts once. Your agents text people as you, at a human pace, with every message on record.</p>
-      <section class="panel">${signin}${dev}</section>
+      <section class="panel">${panel}</section>
       <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => `<span title="${c.live ? c.name : `${c.name}, coming soon`}">${channelMark(id, 18)}</span>`).join("")}</div>
     </main>
     <p class="foot"><a href="https://itsparley.com">itsparley.com</a><span>·</span><a href="https://github.com/Verbiflow/parley">GitHub</a></p>`, { css: SIGNIN_CSS, script: THREADS_SCRIPT })
@@ -91,7 +90,8 @@ body::before{display:none}
 .signin .sub{font-size:15px;line-height:24px;color:var(--muted);max-width:40ch;margin:14px 0 0;text-wrap:balance}
 .signin .panel{width:100%;max-width:300px;margin-top:30px;display:flex;flex-direction:column;gap:12px;text-align:left}
 .chans{display:flex;align-items:center;gap:14px;margin-top:36px}.chans .label{margin-right:4px;color:var(--faint)}.chans span{display:inline-flex}
-.dev{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+.dev{display:flex;flex-direction:column;gap:10px}.dev .input{height:40px;border-radius:999px;padding:0 16px;text-align:center}
+.signin .hint{font-size:12.5px;line-height:19px;color:var(--faint);text-align:center;text-wrap:balance}
 .or{display:flex;align-items:center;gap:10px;color:var(--faint)}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
 .foot{position:absolute;bottom:22px;left:0;right:0;display:flex;justify-content:center;gap:10px;font-size:12.5px;color:var(--faint)}.foot a:hover{color:var(--text-2)}
 `
@@ -474,7 +474,7 @@ export function dashboardPage(opts: {
   const activeAgents = opts.agents.filter(isActive).length
   const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id))).join("")}${addCard()}</div>`
   const attention = live.filter((c) => c.haltedReason)
-  const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:12px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
+  const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:16px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
     title: "Overview", active: "overview", user: opts.user, counts: { agents: opts.agents.length, outbox: queued }, css: OVERVIEW_CSS, body, script: LIVE_SCRIPT,
   })
