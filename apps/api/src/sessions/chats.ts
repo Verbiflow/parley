@@ -108,12 +108,20 @@ export async function mergeChats(sql: Sql, connectionId: string, pairs: Array<{ 
  * Record activity in a chat a message just arrived in. Channels normally report the chat first (with its kind and
  * name); if one didn't, it's listed as a direct chat until a `chats` event corrects it.
  */
-export async function touchChat(sql: Sql, connectionId: string, chatId: string, at: string): Promise<void> {
+export async function touchChats(sql: Sql, connectionId: string, activity: Array<{ id: string; at: string }>): Promise<void> {
+  if (!activity.length) return
   await sql(
-    `insert into parley.chat (connection_id, id, kind, synced, last_message_at) values ($1, $2, 'direct', not jsonb_exists((select ignored_chats from parley.connection where id = $1), $2), $3)
+    `insert into parley.chat (connection_id, id, kind, synced, last_message_at)
+     select $1, a.id, 'direct', not jsonb_exists((select ignored_chats from parley.connection where id = $1), a.id), max(a.at)
+       from jsonb_to_recordset($2::jsonb) as a(id text, at timestamptz) group by a.id
      on conflict (connection_id, id) do update set last_message_at = greatest(parley.chat.last_message_at, excluded.last_message_at), updated_at = now()`,
-    [connectionId, chatId, at]
+    [connectionId, JSON.stringify(activity)]
   )
+}
+
+/** One chat's activity (see `touchChats`). */
+export async function touchChat(sql: Sql, connectionId: string, chatId: string, at: string): Promise<void> {
+  await touchChats(sql, connectionId, [{ id: chatId, at }])
 }
 
 export async function listChats(sql: Sql, connectionId: string, opts: { syncedOnly?: boolean } = {}): Promise<ChatRow[]> {

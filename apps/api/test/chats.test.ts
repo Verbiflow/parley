@@ -242,3 +242,21 @@ test("an ignore made under a private id carries to the number once they're match
   const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
   assert.equal(n, "0")
 })
+
+test("a history batch is stored in one go: chats get their latest activity, ignored chats keep nothing", async () => {
+  const { accountId, connectionId } = await linked("bulk@parley.test")
+  await setIgnored(sql, connectionId, ["muted@s.whatsapp.net"], true)
+  const { touchChats, saveMessages } = await import("../src/sessions/chats.ts")
+  const msgs = Array.from({ length: 600 }, (_, i) => ({
+    id: `m${i}`, threadId: i % 3 === 0 ? "muted@s.whatsapp.net" : `p${i % 3}@s.whatsapp.net`, from: "x", fromMe: false, text: `hi ${i}`,
+    at: new Date(Date.UTC(2026, 10, 1, 0, 0, i)).toISOString(),
+  }))
+  await touchChats(sql, connectionId, msgs.map((m) => ({ id: m.threadId, at: m.at })))
+  await saveMessages(sql, connectionId, msgs)
+  const chats = new Map((await sessions.chats(accountId, connectionId)).map((c) => [c.id, c]))
+  assert.equal(chats.size, 3)
+  assert.equal(chats.get("muted@s.whatsapp.net")!.synced, false)
+  assert.equal(chats.get("p2@s.whatsapp.net")!.lastMessageAt, msgs[599 - ((599 - 2) % 3)]!.at)
+  const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
+  assert.equal(n, "400")
+})
