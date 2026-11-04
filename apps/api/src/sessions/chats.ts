@@ -246,13 +246,17 @@ export async function chatsChosen(sql: Sql, connectionId: string): Promise<boole
   return Boolean(r?.chosen)
 }
 
+/** A message key: its chat and id. */
+export type MessageKey = { chatId: string; id: string }
+
 /**
  * Store messages, but only those in synced chats (the filter is in the insert, so a race with un-syncing can't leak).
- * Reactions they arrived with are stored after them.
+ * Reactions they arrived with are stored after them. Answers what actually changed: the messages stored for the first
+ * time (not ones seen before, or skipped), and the reactions that changed.
  */
-export async function saveMessages(sql: Sql, connectionId: string, messages: InboundMessage[]): Promise<void> {
-  if (!messages.length) return
-  await sql(
+export async function saveMessages(sql: Sql, connectionId: string, messages: InboundMessage[]): Promise<{ inserted: MessageKey[]; reactions: ChangedReaction[] }> {
+  if (!messages.length) return { inserted: [], reactions: [] }
+  const rows = await sql<{ chat_id: string; id: string; inserted: boolean }>(
     `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at, media)
      select $1, m.chat_id, m.id, left(m.sender, 200), m.from_me, m.body, m.at, m.media
        from jsonb_array_elements($2::jsonb) with ordinality as e(v, ord),
@@ -262,20 +266,30 @@ export async function saveMessages(sql: Sql, connectionId: string, messages: Inb
      on conflict (connection_id, chat_id, id) do update set media = excluded.media
       -- The same message again (a backfill): fill in an attachment stored without one, or without its preview.
       where excluded.media is not null
-        and (parley.message.media is null or (excluded.media ? 'thumbnail' and not parley.message.media ? 'thumbnail'))`,
+        and (parley.message.media is null or (excluded.media ? 'thumbnail' and not parley.message.media ? 'thumbnail'))
+     returning chat_id, id, (xmax = 0) as inserted`,
     [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), body: m.text, at: m.at, media: m.media ?? null })))]
   )
-  await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
+  const reactions = await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
+  return { inserted: rows.filter((r) => r.inserted).map((r) => ({ chatId: r.chat_id, id: r.id })), reactions }
 }
 
-/** Forget messages their sender deleted for everyone (their reactions go with them). Ones never stored are skipped. */
-export async function forgetMessages(sql: Sql, connectionId: string, messages: Array<{ threadId: string; messageId: string }>): Promise<void> {
-  if (!messages.length) return
-  await sql(
+/** A message forgotten because its sender deleted it for everyone. */
+export type ForgottenMessage = MessageKey & { sender: string; fromMe: boolean; text: string; at: string }
+
+/**
+ * Forget messages their sender deleted for everyone (their reactions go with them). Ones never stored are skipped.
+ * Answers the ones that were stored, and so are now gone.
+ */
+export async function forgetMessages(sql: Sql, connectionId: string, messages: Array<{ threadId: string; messageId: string }>): Promise<ForgottenMessage[]> {
+  if (!messages.length) return []
+  const rows = await sql<{ chat_id: string; id: string; sender: string; from_me: boolean; body: string; sent_at: Date }>(
     `delete from parley.message m using jsonb_to_recordset($2::jsonb) as d(chat_id text, id text)
-      where m.connection_id = $1 and m.chat_id = d.chat_id and m.id = d.id`,
+      where m.connection_id = $1 and m.chat_id = d.chat_id and m.id = d.id
+      returning m.chat_id, m.id, m.sender, m.from_me, m.body, m.sent_at`,
     [connectionId, JSON.stringify(messages.map((d) => ({ chat_id: d.threadId, id: d.messageId })))]
   )
+  return rows.map((r) => ({ chatId: r.chat_id, id: r.id, sender: r.sender, fromMe: r.from_me, text: r.body, at: new Date(r.sent_at).toISOString() }))
 }
 
 /**
@@ -283,19 +297,48 @@ export async function forgetMessages(sql: Sql, connectionId: string, messages: A
  * reaction arriving late doesn't revive it). Only reactions to stored messages are kept; anything else is a message
  * agents can't see.
  */
-export async function saveReactions(sql: Sql, connectionId: string, reactions: Reaction[]): Promise<void> {
-  if (!reactions.length) return
-  await sql(
-    `insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
-     select distinct on (r.chat_id, r.message_id, r.reactor) $1, r.chat_id, r.message_id, r.reactor, r.emoji, r.at
-       from jsonb_to_recordset($2::jsonb) as r(chat_id text, message_id text, reactor text, emoji text, at timestamptz)
-       join parley.message m on m.connection_id = $1 and m.chat_id = r.chat_id and m.id = r.message_id
-      order by r.chat_id, r.message_id, r.reactor, r.at desc
-     on conflict (connection_id, chat_id, message_id, reactor) do update set emoji = excluded.emoji, reacted_at = excluded.reacted_at, seq = nextval('parley.reaction_seq')
-      where excluded.reacted_at >= parley.reaction.reacted_at
-        and (excluded.emoji, excluded.reacted_at) is distinct from (parley.reaction.emoji, parley.reaction.reacted_at)`,
+/**
+ * A reaction whose emoji changed: `emoji` is the new one (empty when taken back), `before` the one it replaced (empty
+ * when there was none). With the message it's on.
+ */
+export type ChangedReaction = {
+  chatId: string; messageId: string; from: string; fromMe: boolean; emoji: string; before: string; at: string
+  message: { fromMe: boolean; sender: string; text: string }
+}
+
+export async function saveReactions(sql: Sql, connectionId: string, reactions: Reaction[]): Promise<ChangedReaction[]> {
+  if (!reactions.length) return []
+  // `prev` reads the rows as they were before this statement's insert (one snapshot), so the answer can say what changed.
+  const rows = await sql<{ chat_id: string; message_id: string; reactor: string; emoji: string; reacted_at: Date; before: string | null; m_from_me: boolean; m_sender: string; m_body: string }>(
+    `with incoming as (
+       select distinct on (r.chat_id, r.message_id, r.reactor) r.chat_id, r.message_id, r.reactor, r.emoji, r.at
+         from jsonb_to_recordset($2::jsonb) as r(chat_id text, message_id text, reactor text, emoji text, at timestamptz)
+         join parley.message m on m.connection_id = $1 and m.chat_id = r.chat_id and m.id = r.message_id
+        order by r.chat_id, r.message_id, r.reactor, r.at desc
+     ), prev as (
+       select p.chat_id, p.message_id, p.reactor, p.emoji from parley.reaction p
+         join incoming i on p.connection_id = $1 and p.chat_id = i.chat_id and p.message_id = i.message_id and p.reactor = i.reactor
+     ), up as (
+       insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
+       select $1, chat_id, message_id, reactor, emoji, at from incoming
+       on conflict (connection_id, chat_id, message_id, reactor) do update set emoji = excluded.emoji, reacted_at = excluded.reacted_at, seq = nextval('parley.reaction_seq')
+        where excluded.reacted_at >= parley.reaction.reacted_at
+          and (excluded.emoji, excluded.reacted_at) is distinct from (parley.reaction.emoji, parley.reaction.reacted_at)
+       returning chat_id, message_id, reactor, emoji, reacted_at
+     )
+     select up.chat_id, up.message_id, up.reactor, up.emoji, up.reacted_at, prev.emoji as before,
+            m.from_me as m_from_me, m.sender as m_sender, m.body as m_body
+       from up
+       left join prev on prev.chat_id = up.chat_id and prev.message_id = up.message_id and prev.reactor = up.reactor
+       join parley.message m on m.connection_id = $1 and m.chat_id = up.chat_id and m.id = up.message_id`,
     [connectionId, JSON.stringify(reactions.map((r) => ({ chat_id: r.threadId, message_id: r.messageId, reactor: r.fromMe ? "me" : r.from.slice(0, 200), emoji: r.emoji.slice(0, 64), at: r.at })))]
   )
+  return rows
+    .filter((r) => r.emoji !== (r.before ?? ""))
+    .map((r) => ({
+      chatId: r.chat_id, messageId: r.message_id, from: r.reactor, fromMe: r.reactor === "me", emoji: r.emoji, before: r.before ?? "",
+      at: new Date(r.reacted_at).toISOString(), message: { fromMe: r.m_from_me, sender: r.m_sender, text: r.m_body },
+    }))
 }
 
 /** A chat's newest stored message: where fetching older history from the phone starts. */

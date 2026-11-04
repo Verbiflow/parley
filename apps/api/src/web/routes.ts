@@ -5,12 +5,13 @@ import type { AppContext } from "../context.ts"
 import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
-import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary } from "./pages.ts"
+import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, webhooksPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
 import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { setBehaviour } from "../sessions/store.ts"
+import { WebhookError } from "../sessions/webhooks.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
 
@@ -422,6 +423,83 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!userId) return c.redirect("/")
     await endAgentSession(ctx.sql, userId, c.req.param("id"))
     return c.redirect("/app/agents")
+  })
+
+  // ---- Webhooks: the endpoints, adding and changing them, and what was delivered. -----------------------------------
+
+  const webhooksView = async (c: Context, userId: string, extra: Partial<Parameters<typeof webhooksPage>[0]> = {}, code: 200 | 400 | 404 = 200) => {
+    const v = await viewer(c)
+    if (!v || v.profile.id !== userId) return c.redirect("/")
+    const [hooks, deliveries, agents, queued] = await Promise.all([
+      ctx.webhooks.list(ctx.sql, userId),
+      ctx.webhooks.deliveries(ctx.sql, userId, { limit: 30 }),
+      agentSessions(ctx.sql, userId),
+      queuedTotal(userId),
+    ])
+    c.header("cache-control", "no-store")
+    return c.html(webhooksPage({ user: v.profile, webhooks: hooks, deliveries, agentCount: agents.length, queuedTotal: queued, ...extra }), code)
+  }
+  const NOTICES: Record<string, string> = {
+    tested: "Test event queued. It shows under Recent deliveries within a few seconds (refresh to see how it went).",
+    saved: "Saved.",
+    deleted: "Webhook deleted.",
+  }
+
+  app.get("/app/webhooks", async (c) => {
+    const v = await viewer(c)
+    if (!v) return rememberNext(c)
+    return webhooksView(c, v.profile.id, { notice: NOTICES[c.req.query("done") ?? ""] })
+  })
+
+  // Added from the page: answered with the page itself (not a redirect), so the new secret is shown once and never
+  // travels in a URL.
+  app.post("/app/webhooks", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const f = await c.req.formData()
+    try {
+      const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, {
+        url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), createdBy: "dashboard",
+      })
+      return webhooksView(c, userId, { revealed: { id: webhook.id, secret, fresh: true } })
+    } catch (e) {
+      if (e instanceof WebhookError) return webhooksView(c, userId, { error: e.message }, 400)
+      throw e
+    }
+  })
+
+  app.post("/app/webhooks/:id/:action{update|enable|disable|delete|test|rotate|secret}", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const id = c.req.param("id")
+    try {
+      switch (c.req.param("action")) {
+        case "update": {
+          const f = await c.req.formData()
+          await ctx.webhooks.update(ctx.sql, userId, id, { url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? "") })
+          return c.redirect("/app/webhooks?done=saved")
+        }
+        case "enable":
+        case "disable":
+          await ctx.webhooks.update(ctx.sql, userId, id, { enabled: c.req.param("action") === "enable" })
+          return c.redirect("/app/webhooks")
+        case "delete":
+          await ctx.webhooks.remove(ctx.sql, userId, id)
+          return c.redirect("/app/webhooks?done=deleted")
+        case "test":
+          await ctx.webhooks.test(ctx.sql, userId, id)
+          return c.redirect("/app/webhooks?done=tested")
+        case "rotate": {
+          const { secret } = await ctx.webhooks.rotateSecret(ctx.sql, userId, id)
+          return webhooksView(c, userId, { revealed: { id, secret, fresh: true } })
+        }
+        default:
+          return webhooksView(c, userId, { revealed: { id, secret: await ctx.webhooks.secret(ctx.sql, userId, id), fresh: false } })
+      }
+    } catch (e) {
+      if (e instanceof WebhookError) return webhooksView(c, userId, { error: e.message }, e.code === "not_found" ? 404 : 400)
+      throw e
+    }
   })
 
   app.get("/app/settings", async (c) => {

@@ -81,7 +81,11 @@ export type ReadTarget = { threadId: string; messageId: string; sender?: string 
 /** A stored message to fetch history from (backwards): which chat, which message, who sent it, when. */
 export type HistoryAnchor = { threadId: string; messageId: string; fromMe: boolean; sender?: string | undefined; at: string }
 
-/** What a live connection tells the host (the session actor) as it runs. */
+/**
+ * What a live connection tells the host (the session actor) as it runs. On message, reaction and deletion events,
+ * `live` marks what just happened on the platform, as opposed to history (the link-time sync, a backfill): only live
+ * events reach webhooks. Left out, an event counts as history.
+ */
 export type ChannelEvent =
   /** The user must act to finish linking: scan this QR / open this OAuth URL / enter this code. */
   | { type: "link"; method: LinkMethod; data: string }
@@ -98,13 +102,13 @@ export type ChannelEvent =
   /** The link-time history sync: `progress` 0–100 when the channel knows it; `done` once it has settled. */
   | { type: "sync"; progress: number | null; done: boolean }
   /** Many messages at once (a history batch): same as that many `message` events, stored in one go. */
-  | { type: "messages"; messages: InboundMessage[] }
+  | { type: "messages"; messages: InboundMessage[]; live?: boolean }
   /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
-  | { type: "message"; message: InboundMessage }
+  | { type: "message"; message: InboundMessage; live?: boolean }
   /** Reactions added, changed or taken back on messages already seen. */
-  | { type: "reactions"; reactions: Reaction[] }
+  | { type: "reactions"; reactions: Reaction[]; live?: boolean }
   /** Messages their sender deleted for everyone (from a phone, or through Parley): forget them. */
-  | { type: "deleted"; messages: Array<{ threadId: string; messageId: string }> }
+  | { type: "deleted"; messages: Array<{ threadId: string; messageId: string }>; live?: boolean }
   /**
    * A message this connection sent, encoded the platform's way, for the host to keep: a device that couldn't decrypt it
    * may ask for it again later, after a restart (see `OpenOptions.sentMessage`).
@@ -190,6 +194,8 @@ export interface ChannelSimulator {
   completeLink(connectionId: string, handle?: string): void
   /** Simulate an inbound message. */
   deliver(connectionId: string, message: { id?: string; at?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
+  /** Simulate a batch of history arriving (the link-time sync or a backfill): stored, but not live. */
+  history(connectionId: string, messages: Array<{ id?: string; at?: string; threadId: string; from: string; text: string; fromMe?: boolean; reactions?: Reaction[] }>): void
   /** Simulate reactions arriving (added, changed or taken back). */
   react(connectionId: string, reactions: Reaction[]): void
   /** Simulate messages being deleted for everyone. */

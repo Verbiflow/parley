@@ -7,6 +7,8 @@ import { Exits, ExitError } from "./exits.ts"
 import { UNSEND_WINDOW_MS, abandon, claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
 import { describeMedia, isGif, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
 import type { MediaFetcher } from "./fetch-media.ts"
+import { Webhooks } from "./webhooks.ts"
+import { deliverDue, emitLiveEvents, postWebhook, pruneDeliveries, type WebhookPoster } from "./webhook-delivery.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
 import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
@@ -119,11 +121,17 @@ export class ConnectError extends Error {
  */
 /** How often a worker looks for due messages on the connections it holds. */
 export const DISPATCH_INTERVAL_MS = 3_000
+/** How often a worker looks for webhook deliveries that are due (any worker sends any account's). */
+export const WEBHOOK_INTERVAL_MS = 2_000
+const WEBHOOK_PRUNE_MS = 60 * 60_000
 
 type SessionsContext = {
   sql: Sql; channels: Channel[]; config: IdentityConfig; coordinator?: Coordinator; tx?: Transactor; exits?: Exits
   /** Downloads a URL an agent asked to send (see `fetch-media.ts`). Without one, files must come as bytes. */
   fetchMedia?: MediaFetcher
+  /** Posts webhook requests (see `webhook-delivery.ts`). Tests pass a stand-in. */
+  postWebhook?: WebhookPoster
+  webhooks?: Webhooks
 }
 
 export class Sessions {
@@ -133,10 +141,14 @@ export class Sessions {
   #seal: SecretSeal | undefined
   #dispatcher: ReturnType<typeof setInterval> | undefined
   #dispatching: Promise<number> | undefined
+  #webhookTimer: ReturnType<typeof setInterval> | undefined
+  #delivering: Promise<number> | undefined
+  #prunedAt = 0
   /** Connections with a send in flight (it may be showing "typing…" for a while), and its chain. */
   #sending = new Map<string, Promise<void>>()
   readonly tx: Transactor
   readonly exits: Exits
+  readonly webhooks: Webhooks
   private readonly ctx: SessionsContext
 
   constructor(ctx: SessionsContext) {
@@ -144,6 +156,7 @@ export class Sessions {
     if (!ctx.tx && !ctx.config.databaseUrl) throw new Error("Sessions needs DATABASE_URL (or a Transactor) for the outbox")
     this.tx = ctx.tx ?? new Transactor(ctx.config.databaseUrl!)
     this.exits = ctx.exits ?? new Exits(ctx.config)
+    this.webhooks = ctx.webhooks ?? new Webhooks(ctx.config)
   }
 
   /** Start coordination (no-op without a coordinator) and the dispatcher. Call once before serving. */
@@ -151,11 +164,37 @@ export class Sessions {
     await this.ctx.coordinator?.start((req) => this.#handleRpc(req))
     this.#dispatcher = setInterval(() => void this.dispatchDue().catch(() => {}), DISPATCH_INTERVAL_MS)
     this.#dispatcher.unref()
+    this.#webhookTimer = setInterval(() => void this.deliverWebhooks().catch((e: unknown) =>
+      console.error(JSON.stringify({ msg: "webhook delivery failed", error: e instanceof Error ? e.message : String(e) }))), WEBHOOK_INTERVAL_MS)
+    this.#webhookTimer.unref()
+  }
+
+  /**
+   * Send the webhook deliveries that are due (one pass at a time per worker), and now and then forget old ones.
+   * Answers how many were sent.
+   */
+  async deliverWebhooks(now = new Date()): Promise<number> {
+    if (this.#delivering) return this.#delivering
+    this.#delivering = (async () => {
+      try {
+        const sent = await deliverDue({ sql: this.ctx.sql, webhooks: this.webhooks, post: this.ctx.postWebhook ?? postWebhook }, now)
+        if (now.getTime() - this.#prunedAt > WEBHOOK_PRUNE_MS) {
+          this.#prunedAt = now.getTime()
+          await pruneDeliveries(this.ctx.sql, now)
+        }
+        return sent
+      } finally {
+        this.#delivering = undefined
+      }
+    })()
+    return this.#delivering
   }
 
   async stop(): Promise<void> {
     clearInterval(this.#dispatcher)
+    clearInterval(this.#webhookTimer)
     await this.#dispatching?.catch(() => {})
+    await this.#delivering?.catch(() => {})
     await Promise.all(this.#sending.values())
     for (const entry of this.#live.values()) await entry.live?.close().catch(() => {})
     this.#live.clear()
@@ -721,18 +760,23 @@ export class Sessions {
       case "messages": {
         const ms = event.type === "message" ? [event.message] : event.messages
         await touchChats(this.ctx.sql, connectionId, ms.map((m) => ({ id: m.threadId, at: m.at })))
-        await saveMessages(this.ctx.sql, connectionId, ms)
+        const saved = await saveMessages(this.ctx.sql, connectionId, ms)
+        if (event.live) await this.#webhookEvents(entry, connectionId, { messages: { stored: saved.inserted, inbound: ms }, reactions: saved.reactions })
         if (entry.history) for (const m of ms) this.#hold(entry.history, m)
         // A load_history waiting on this chat hears that (older) messages arrived.
         for (const m of ms) for (const fn of this.#arrivals.get(`${connectionId}\n${m.threadId}`) ?? []) fn(Date.parse(m.at))
         break
       }
-      case "reactions":
-        await saveReactions(this.ctx.sql, connectionId, event.reactions)
+      case "reactions": {
+        const changed = await saveReactions(this.ctx.sql, connectionId, event.reactions)
+        if (event.live) await this.#webhookEvents(entry, connectionId, { reactions: changed })
         break
-      case "deleted":
-        await forgetMessages(this.ctx.sql, connectionId, event.messages)
+      }
+      case "deleted": {
+        const gone = await forgetMessages(this.ctx.sql, connectionId, event.messages)
+        if (event.live) await this.#webhookEvents(entry, connectionId, { deleted: gone })
         break
+      }
       case "sent":
         // Kept so a device can still get it resent after a restart; a month is far past any phone's retry.
         await this.ctx.sql(
@@ -747,6 +791,15 @@ export class Sessions {
         await this.ctx.coordinator?.release(connectionId)
         break
     }
+  }
+
+  /**
+   * Queue webhook events for what a live event changed. Awaited in line, so events queue in the order they happened;
+   * a failure is logged and never stops the connection's next event.
+   */
+  async #webhookEvents(entry: Entry, connectionId: string, change: Parameters<typeof emitLiveEvents>[2]): Promise<void> {
+    await emitLiveEvents({ sql: this.ctx.sql, config: this.ctx.config }, { id: connectionId, accountId: entry.accountId, channel: entry.channel }, change)
+      .catch((e: unknown) => console.error(JSON.stringify({ msg: "webhook events not queued", connectionId, error: e instanceof Error ? e.message : String(e) })))
   }
 
   #hold(history: Map<string, InboundMessage[]>, m: InboundMessage): void {

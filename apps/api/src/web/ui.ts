@@ -395,7 +395,7 @@ export function avatar(u: Viewer, size = 26): string {
 /** Network (proxy providers) is hidden from the console for now; /app/network still works. Flip to bring it back. */
 export const SHOW_NETWORK = false
 
-export type Section = "overview" | "activity" | "outbox" | "agents" | "network" | "settings"
+export type Section = "overview" | "activity" | "outbox" | "agents" | "webhooks" | "network" | "settings"
 
 /** The signed-in frame: a top bar (mark, tabs, account) over the page. */
 export function appShell(opts: { title: string; active: Section | null; user: Viewer; counts?: Partial<Record<Section, number>>; css?: string; script?: string; body: string }): string {
@@ -408,7 +408,7 @@ export function appShell(opts: { title: string; active: Section | null; user: Vi
   return shell(`${opts.title} · Parley`, `
     <header class="top"><div class="top-in">
       <a class="home" href="/app" aria-label="Parley overview">${LOGO}</a>
-      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("activity", "/app/activity", "Activity")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
+      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("activity", "/app/activity", "Activity")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${tab("webhooks", "/app/webhooks", "Webhooks")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
       <div class="right">
         <details class="me"><summary class="acct" aria-label="Account">${avatar(user, 24)}<span class="an">${esc(first)}</span><span class="chev">${icon("chevronDown", 13)}</span></summary>
           <div class="menu"><div class="mh">${avatar(user, 34)}<div><b>${esc(user.name)}</b><span>${esc(user.email)}</span></div></div>

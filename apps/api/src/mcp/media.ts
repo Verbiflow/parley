@@ -37,9 +37,14 @@ export function isPrivateHost(host: string): boolean {
   const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
   if (v4) {
     const [a, b] = [Number(v4[1]), Number(v4[2])]
+    const c = Number(v4[3])
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224
+      // IETF protocol assignments (192.0.0.0/24) and benchmarking (198.18.0.0/15).
+      || (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19))
   }
-  if (h.includes(":")) return h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith("::ffff:")
+  // Unique-local, link-local, and the prefixes that wrap an IPv4 address (NAT64, 6to4), which could be a private one.
+  // (Nothing routable starts with "::": that's unspecified, loopback, IPv4-mapped and IPv4-compatible.)
+  if (h.includes(":")) return h.startsWith("::") || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith("64:ff9b:") || h.startsWith("2002:") || h.startsWith("100::")
   return false
 }
 

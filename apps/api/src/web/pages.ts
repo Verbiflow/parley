@@ -3,6 +3,7 @@ import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
 import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
+import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
@@ -623,6 +624,130 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
       ${section("Exits", opts.exits.length
         ? `<table class="tbl"><thead><tr><th>Id</th><th>Type</th><th>Country</th><th>Last IP</th><th>Health</th><th>Account</th></tr></thead><tbody>${exitRows}</tbody></table>`
         : empty("No exits yet", "Gateways mint an exit the first time an account in a matching country connects."), "one per account")}`,
+  })
+}
+
+// ---- Webhooks -----------------------------------------------------------------------------------------------------
+
+const WEBHOOKS_CSS = `
+.whtbl td:first-child{width:100%;min-width:300px}.whtbl td{vertical-align:top}.whtbl td.st-c{white-space:nowrap;padding-top:16px;min-width:240px}.whk{display:flex;flex-direction:column;gap:4px;min-width:0}.whk .nw{white-space:nowrap}.whk .u{font-family:var(--mono);font-size:12.5px;color:var(--text);word-break:break-all}
+.whk small{color:var(--faint);font-size:12px}
+.evs{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.ev{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:6px;background:var(--bg-3);color:var(--text-2);white-space:nowrap}
+.acts-row{display:flex;gap:2px;justify-content:flex-end;flex-wrap:nowrap;white-space:nowrap;padding-top:6px}.acts-row form{display:inline}
+.evpick{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 18px}
+.evpick label{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;color:var(--text-2);cursor:pointer}
+.evpick input{margin-top:3px;accent-color:var(--primary)}.evpick b{font-family:var(--mono);font-weight:400;font-size:12.5px;color:var(--text);display:block}
+.evpick span small{color:var(--faint);font-size:12px}
+.addf{display:flex;flex-direction:column;gap:16px;padding-top:18px}
+.edit summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted)}.edit[open]{padding:14px 0 4px}.edit[open] summary{margin-bottom:14px}
+.note.reveal{margin-bottom:20px}.secret{display:flex;flex-direction:column;gap:10px;width:100%}.secret .term{margin:0}
+.health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
+`
+
+const shortUrl = (u: string) => {
+  try {
+    const x = new URL(u)
+    return `${x.host}${x.pathname === "/" ? "" : x.pathname}`
+  } catch {
+    return u
+  }
+}
+
+const DELIVERY_TONE: Record<Delivery["status"], Tone> = { delivered: "ok", failed: "bad", pending: "warn", sending: "warn" }
+
+function deliveryResult(d: Delivery): string {
+  if (d.status === "delivered") return `HTTP ${d.lastStatus}`
+  if (d.status === "sending") return "sending now"
+  if (d.status === "pending" && !d.attempts) return "waiting to send"
+  const why = d.lastError ?? "unknown error"
+  if (d.status !== "pending" || !d.nextAttemptAt) return why
+  const ms = Date.parse(d.nextAttemptAt) - Date.now()
+  return `${why} · retry ${ms <= 1000 ? "now" : ms < 60_000 ? `in ${Math.ceil(ms / 1000)}s` : until(d.nextAttemptAt)}`
+}
+
+/** The event checkboxes, for adding a webhook (all on) or editing one (its own). */
+const eventPicker = (on: readonly string[]) => `<div class="evpick">${WEBHOOK_EVENTS.map((e) =>
+  `<label><input type="checkbox" name="events" value="${e}"${on.includes(e) ? " checked" : ""}><span><b>${e}</b><small>${esc(EVENT_TEXT[e])}</small></span></label>`).join("")}</div>`
+
+const VERIFY_SNIPPET = `// Node: verify a Parley webhook request (raw body, before JSON.parse)
+import { createHmac, timingSafeEqual } from "node:crypto"
+function verify(rawBody, header, secret) {
+  const { t, v1 } = Object.fromEntries(header.split(",").map((kv) => kv.split("=")))
+  if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false
+  const want = createHmac("sha256", secret).update(\`\${t}.\${rawBody}\`).digest("hex")
+  return v1.length === want.length && timingSafeEqual(Buffer.from(v1), Buffer.from(want))
+}`
+
+export function webhooksPage(opts: {
+  user: Viewer; webhooks: Webhook[]; deliveries: Delivery[]; agentCount: number; queuedTotal: number
+  error?: string | undefined; notice?: string | undefined; revealed?: { id: string; secret: string; fresh: boolean } | undefined
+}): string {
+  const hooks = new Map(opts.webhooks.map((w) => [w.id, w]))
+  const rows = opts.webhooks.map((w) => {
+    const health = w.lastFailureAt && (!w.lastSuccessAt || w.lastFailureAt > w.lastSuccessAt)
+      ? `<span class="health">last failed ${ago(w.lastFailureAt)}: ${esc(w.lastError ?? "")}</span>`
+      : w.lastSuccessAt ? `<span class="health">last delivered ${ago(w.lastSuccessAt)}</span>` : `<span class="health">nothing sent yet</span>`
+    const act = (action: string, label: string, cls = "btn quiet sm", confirm = "") =>
+      `<form method="post" action="/app/webhooks/${esc(w.id)}/${action}"${confirm ? ` data-confirm="${esc(confirm)}"` : ""}><button class="${cls}" type="submit">${label}</button></form>`
+    return `<tr>
+      <td><div class="whk"><span class="u">${esc(w.url)}</span>${w.description ? `<small>${esc(w.description)}</small>` : ""}<div class="evs">${w.events.length === WEBHOOK_EVENTS.length ? `<span class="ev">all events</span>` : w.events.map((e) => `<span class="ev">${esc(e)}</span>`).join("")}</div>
+        <small>added ${day(w.createdAt)} · ${esc(w.createdBy)} · <span class="nw">secret …${esc(w.secretHint)}</span></small>
+        <details class="edit"><summary>edit</summary>
+          <form method="post" action="/app/webhooks/${esc(w.id)}/update" class="addf" style="padding-top:0">
+            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" value="${esc(w.url)}" required></label>
+              <label class="field"><span>Description</span><input class="input" name="description" value="${esc(w.description ?? "")}" maxlength="200"></label></div>
+            ${eventPicker(w.events)}
+            <div><button class="btn line sm" type="submit">Save</button></div>
+          </form>
+        </details></div></td>
+      <td class="st-c">${w.enabled ? status("ok", "On") : status("idle", "Off")}${health}</td>
+      <td class="r"><div class="acts-row">
+        ${act("test", "Send test")}
+        ${act(w.enabled ? "disable" : "enable", w.enabled ? "Turn off" : "Turn on")}
+        ${act("secret", "Secret")}
+        ${act("rotate", "Rotate", "btn quiet sm", "Make a new signing secret? The current one stops working right away.")}
+        ${act("delete", icon("trash", 13), "btn quiet sm", `Delete the webhook to ${shortUrl(w.url)}? Nothing more is sent to it.`)}
+      </div></td>
+    </tr>`
+  }).join("")
+
+  const deliveryRows = opts.deliveries.map((d) => `<tr>
+      <td class="m faint">${esc(ago(d.createdAt))}</td>
+      <td class="m">${esc(d.event)}</td>
+      <td class="clip m">${esc(shortUrl(hooks.get(d.webhookId)?.url ?? ""))}</td>
+      <td>${status(DELIVERY_TONE[d.status], d.status)}</td>
+      <td class="m">${d.attempts}<span class="faint">/${MAX_ATTEMPTS}</span></td>
+      <td class="clip" title="${esc(deliveryResult(d))}">${esc(deliveryResult(d))}</td>
+    </tr>`).join("")
+
+  const revealed = opts.revealed && hooks.get(opts.revealed.id)
+  const secretNote = revealed ? `<div class="note reveal"><div class="secret">
+      <b>${opts.revealed!.fresh ? "Your signing secret" : "Signing secret"} for ${esc(shortUrl(revealed.url))}</b>
+      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request.</p>
+      ${copyLine(opts.revealed!.secret)}
+    </div></div>` : ""
+
+  return appShell({
+    title: "Webhooks", active: "webhooks", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, css: WEBHOOKS_CSS,
+    body: `${pageHead({ title: "Webhooks", sub: "Parley calls these URLs the moment a message, reaction or deletion happens on any of your accounts, so your app hears about it without polling. Only real, live changes are sent (never history or chats you ignore), and every request is signed." })}
+      ${opts.error ? `<div class="note bad"><div class="grow"><b>Couldn't do that</b><p>${esc(opts.error)}</p></div></div>` : ""}
+      ${opts.notice ? `<div class="note"><div class="grow"><p>${esc(opts.notice)}</p></div></div>` : ""}
+      ${secretNote}
+      ${section("Endpoints", opts.webhooks.length
+        ? `<table class="tbl whtbl"><thead><tr><th>Endpoint</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+        : empty("No webhooks yet", "Add one below, or ask your agent to (it can set them up with create_webhook)."), `${opts.webhooks.length}/${MAX_WEBHOOKS}`)}
+      ${opts.webhooks.length < MAX_WEBHOOKS ? section("Add webhook", `<form method="post" action="/app/webhooks" class="addf">
+          <div class="fields">
+            <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required></label>
+            <label class="field"><span>Description</span><input class="input" name="description" placeholder="CRM sync" maxlength="200"></label>
+          </div>
+          ${eventPicker(WEBHOOK_EVENTS)}
+          <div><button class="btn" type="submit">${icon("plus", 13)}Add webhook</button></div>
+        </form>`) : ""}
+      ${section("Recent deliveries", opts.deliveries.length
+        ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th></tr></thead><tbody>${deliveryRows}</tbody></table>`
+        : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), `<a class="all" href="/app/webhooks">Refresh ${icon("arrow", 12)}</a>`)}
+      ${foldSection("Receiving webhooks", `<p class="sec-note">A JSON <code>POST</code> per event, with headers <code>Parley-Event</code>, <code>Parley-Event-Id</code>, <code>Parley-Delivery-Id</code>, <code>Parley-Attempt</code> and <code>Parley-Signature: t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where v1 is HMAC-SHA256 of <code>&lt;t&gt;.&lt;raw body&gt;</code> under the secret. Answer any 2xx within 10 seconds. Anything else is tried again, ${MAX_ATTEMPTS} attempts in all (at once, after 30 seconds, after 5 minutes), so dedupe on the event id. Redirects aren't followed, and URLs that resolve to private addresses are refused.</p>${copyLine(VERIFY_SNIPPET, { multiline: true })}`)}`,
   })
 }
 

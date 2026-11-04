@@ -312,7 +312,8 @@ export const whatsappChannel: Channel = {
       if (!isJidGroup(raw)) pair(raw, m.key.remoteJidAlt)
       return { threadId: canon(raw), messageId: target }
     }
-    const handleMessages = (messages: WAMessage[]) => {
+    /** `live`: they just happened (messages.upsert), not history (the link-time sync, a backfill). */
+    const handleMessages = (messages: WAMessage[], live: boolean) => {
       for (const m of messages) traceProtocol(m)
       const reactions = messages.map(reactionMessageOf).filter((r): r is Reaction => Boolean(r))
       const deleted = messages.map(deletionOf).filter((d): d is { threadId: string; messageId: string } => Boolean(d))
@@ -327,11 +328,11 @@ export const whatsappChannel: Channel = {
       report(chats)
       const out = messages.map(messageOf).filter((m): m is InboundMessage => Boolean(m))
       // History arrives in batches of thousands: hand them over in chunks the host stores in one write each.
-      if (out.length === 1) emit({ type: "message", message: out[0]! })
-      else for (let i = 0; i < out.length; i += 500) emit({ type: "messages", messages: out.slice(i, i + 500) })
+      if (out.length === 1) emit({ type: "message", message: out[0]!, live })
+      else for (let i = 0; i < out.length; i += 500) emit({ type: "messages", messages: out.slice(i, i + 500), live })
       // After the messages, so a reaction that came in the same batch as its message finds it stored.
-      if (reactions.length) emit({ type: "reactions", reactions })
-      if (deleted.length) emit({ type: "deleted", messages: deleted })
+      if (reactions.length) emit({ type: "reactions", reactions, live })
+      if (deleted.length) emit({ type: "deleted", messages: deleted, live })
     }
 
     /**
@@ -481,7 +482,7 @@ export const whatsappChannel: Channel = {
           if (name && !isJidGroup(c.id)) learnName([...new Set([jidNormalizedUser(c.id), canon(c.id)])], name, Boolean(c.name))
         }
         report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
-        handleMessages(messages)
+        handleMessages(messages, false)
         // After the batch's chats and messages, so the host has stored them before it hears the progress (or "done").
         // History we asked for (a backfill) isn't the link-time sync: it mustn't show "Syncing" again.
         if (syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND) historyBatch(typeof progress === "number" ? progress : null, syncType)
@@ -511,7 +512,7 @@ export const whatsappChannel: Channel = {
       on("contacts.upsert", learnContacts)
       on("contacts.update", learnContacts)
       on("groups.update", (groups) => report(groups.filter((g) => g.id && g.subject).map((g) => chatOf(g.id!, g.subject))))
-      on("messages.upsert", ({ messages }) => handleMessages(messages))
+      on("messages.upsert", ({ messages }) => handleMessages(messages, true))
     }
 
     connect()
