@@ -39,19 +39,58 @@ function Tile({ title, children, visual, className = "" }: { title: string; chil
   )
 }
 
-/** On phones: a swipeable row that snaps card by card, with dots. From lg up: whatever grid `grid` describes. */
+const ADVANCE_MS = 4800
+const IDLE_AFTER_TOUCH_MS = 9000
+
+/** Glides `el` to `to` with an ease-in-out curve; snapping is off during the glide so it doesn't fight it. */
+function glide(el: HTMLElement, to: number, ms: number) {
+  const from = el.scrollLeft
+  const start = performance.now()
+  el.style.scrollSnapType = "none"
+  const step = (now: number) => {
+    const t = Math.min((now - start) / ms, 1)
+    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
+    el.scrollLeft = from + (to - from) * e
+    if (t < 1) requestAnimationFrame(step)
+    else el.style.scrollSnapType = ""
+  }
+  requestAnimationFrame(step)
+}
+
+/**
+ * On phones: a swipeable row that snaps card by card, with dots, and moves on by itself while it's on screen: one
+ * card every few seconds, then back to the first. A touch pauses it for a while. From lg up: the grid `grid` describes.
+ */
 function Carousel({ grid, count, list, children }: { grid: string; count: number; list?: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
   const [at, setAt] = useState(0)
+  const inView = useInView(ref, { amount: 0.6 })
+  const reduced = useReducedMotion()
+  const touched = useRef(0)
   const onScroll = () => {
     const el = ref.current
     const first = el?.firstElementChild as HTMLElement | null
     if (!el || !first) return
     setAt(Math.round(el.scrollLeft / (first.offsetWidth + 12)))
   }
+  useEffect(() => {
+    const el = ref.current
+    if (!el || reduced || !inView || !window.matchMedia("(max-width: 1023px)").matches) return
+    const id = setInterval(() => {
+      if (document.hidden || performance.now() - touched.current < IDLE_AFTER_TOUCH_MS) return
+      const slides = Array.from(el.children) as HTMLElement[]
+      const now = Math.round(el.scrollLeft / ((slides[0]?.offsetWidth ?? 1) + 12))
+      const max = el.scrollWidth - el.clientWidth
+      const next = now + 1 >= count || el.scrollLeft >= max - 2 ? 0 : now + 1
+      const to = Math.min(slides[next]!.offsetLeft - slides[0]!.offsetLeft, max)
+      glide(el, to, next === 0 ? 1100 : 750)
+    }, ADVANCE_MS)
+    return () => clearInterval(id)
+  }, [inView, reduced, count])
+  const touch = () => (touched.current = performance.now())
   return (
     <>
-      <div ref={ref} onScroll={onScroll} role={list ? "list" : undefined} className={`relative -mx-5 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-5 px-5 [scrollbar-width:none] sm:-mx-7 sm:scroll-px-7 sm:px-7 lg:mx-0 lg:grid lg:gap-4 lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden ${grid}`}>
+      <div ref={ref} onScroll={onScroll} onPointerDown={touch} onTouchStart={touch} onWheel={touch} role={list ? "list" : undefined} className={`relative -mx-5 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-5 px-5 [scrollbar-width:none] sm:-mx-7 sm:scroll-px-7 sm:px-7 lg:mx-0 lg:grid lg:gap-4 lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden ${grid}`}>
         {children}
       </div>
       <div className="mt-5 flex justify-center gap-1.5 lg:hidden" aria-hidden>

@@ -5,12 +5,12 @@ import "./globals.css"
 const mono = Geist_Mono({ variable: "--font-mono-face", subsets: ["latin"] })
 
 const description =
-  "Parley is open messaging infrastructure for AI agents. Link your WhatsApp once, and any MCP agent can message as you, paced like a person so the account stays safe."
+  "Parley is open source messaging infrastructure for agents. Link your accounts once, and any MCP agent can text people as you, at a human pace, with every message on record."
 
 export const metadata: Metadata = {
-  title: "Parley · Let your agents message as you",
+  title: "Parley · Let your agents text people as you",
   description,
-  openGraph: { title: "Parley · Let your agents message as you", description, type: "website" },
+  openGraph: { title: "Parley · Let your agents text people as you", description, type: "website" },
 }
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -21,7 +21,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <link rel="preconnect" href="https://cdn.fontshare.com" crossOrigin="anonymous" />
         <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" />
       </head>
-      <body className="min-h-screen overflow-x-hidden text-[15px] leading-relaxed">{children}</body>
+      {/* Browser extensions (ColorZilla, Grammarly…) add attributes to <body> before React hydrates. */}
+      <body suppressHydrationWarning className="min-h-screen overflow-x-hidden text-[15px] leading-relaxed">{children}</body>
     </html>
   )
 }
