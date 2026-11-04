@@ -168,8 +168,8 @@ function OpenSource() {
 }
 
 const FAQ: Array<[string, string]> = [
-  ["Will my WhatsApp account get banned?", "Nobody can promise it won't, because WhatsApp doesn't publish its limits for personal accounts. Parley's defaults stay below the levels where people report getting restricted. New accounts start slow, and Parley slows down as soon as WhatsApp pushes back."],
-  ["Is this the WhatsApp Business API?", "No. Parley links your own account as a device, like WhatsApp Web. Messages come from your number and your phone keeps working. You can unlink Parley from your phone at any time."],
+  ["Will my account get banned?", "Nobody can promise it won't, because messaging apps don't publish their limits for personal accounts. Parley's defaults stay below the levels where people report getting restricted. New accounts start slow, and Parley backs off as soon as an app pushes back."],
+  ["Is this an official business API?", "No. Parley links your own account, the same way you'd add a new device. Messages come from you, your phone keeps working, and you can unlink Parley at any time."],
   ["What can my agent see?", "Every chat except the ones you hide. When you hide a chat, Parley deletes what it stored from it and stops storing its messages."],
   ["Which agents can use it?", "Any agent that can connect to a remote MCP server: Claude, ChatGPT, Cursor, Codex, Grok Bot, Muse, Hermes, OpenClaw and others. You add one URL and sign in."],
 ]
@@ -222,7 +222,7 @@ function Footer() {
           <a href={APP_URL} className="hover:text-ink">Log in</a>
         </nav>
         <a href={GITHUB_URL} aria-label="Parley on GitHub" title="GitHub" className="ml-auto text-muted hover:text-ink"><GitHub size={17} /></a>
-        <p className="basis-full text-[12.5px] text-faint">Not affiliated with WhatsApp, Meta, Apple, Slack or LinkedIn.</p>
+        <p className="basis-full text-[12.5px] text-faint">Not affiliated with Meta, Apple, Google, Slack or LinkedIn.</p>
       </div>
     </footer>
   )

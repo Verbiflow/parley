@@ -39,6 +39,30 @@ function Tile({ title, children, visual, className = "" }: { title: string; chil
   )
 }
 
+/** On phones: a swipeable row that snaps card by card, with dots. From lg up: whatever grid `grid` describes. */
+function Carousel({ grid, count, list, children }: { grid: string; count: number; list?: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [at, setAt] = useState(0)
+  const onScroll = () => {
+    const el = ref.current
+    const first = el?.firstElementChild as HTMLElement | null
+    if (!el || !first) return
+    setAt(Math.round(el.scrollLeft / (first.offsetWidth + 12)))
+  }
+  return (
+    <>
+      <div ref={ref} onScroll={onScroll} role={list ? "list" : undefined} className={`relative -mx-5 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-5 px-5 [scrollbar-width:none] sm:-mx-7 sm:scroll-px-7 sm:px-7 lg:mx-0 lg:grid lg:gap-4 lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden ${grid}`}>
+        {children}
+      </div>
+      <div className="mt-5 flex justify-center gap-1.5 lg:hidden" aria-hidden>
+        {Array.from({ length: count }, (_, i) => <span key={i} className={`h-1.5 rounded-full transition-all duration-300 ${i === at ? "w-5 bg-ink-2" : "w-1.5 bg-white/15"}`} />)}
+      </div>
+    </>
+  )
+}
+
+const SLIDE = "w-[86%] shrink-0 snap-start sm:w-[62%] lg:w-auto"
+
 /* ---------- Sends as you: notifications from your name stack up on a lock screen ---------- */
 
 const NOTES = [
@@ -55,7 +79,7 @@ function Identity() {
   return (
     <div ref={ref} className="absolute inset-0 flex items-start justify-center pt-12">
       <div className="absolute left-1/2 top-[-140px] h-[420px] w-[520px] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,rgb(217_130_91/0.22),rgb(227_185_141/0.06)_60%,transparent)] blur-2xl" />
-      <div className="relative w-[340px]">
+      <div className="relative w-[300px] sm:w-[340px]">
         <p className="text-center font-[-apple-system,BlinkMacSystemFont,sans-serif] text-[44px] font-semibold leading-none tracking-[-0.02em] text-ink/90 tabular-nums">08:12</p>
         <p className="mt-1 text-center text-[11.5px] text-muted">Maya&apos;s phone</p>
         <div className="relative mt-5 h-[150px]">
@@ -140,7 +164,7 @@ function Rich() {
   const bubble = "max-w-[84%] rounded-[10px] text-[12.5px] leading-snug text-[#e9edef] shadow-[0_1px_0_rgb(0_0_0/0.25)]"
   return (
     <div ref={ref} className="absolute inset-0 flex justify-center pt-7">
-      <div className="flex h-[290px] w-[330px] flex-col justify-end gap-1.5 overflow-hidden rounded-[16px] bg-[#0b141a] p-3 font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Helvetica,sans-serif] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05),0_24px_50px_-24px_rgb(0_0_0/0.9)]">
+      <div className="flex h-[290px] w-[292px] flex-col sm:w-[330px] justify-end gap-1.5 overflow-hidden rounded-[16px] bg-[#0b141a] p-3 font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Helvetica,sans-serif] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05),0_24px_50px_-24px_rgb(0_0_0/0.9)]">
         <AnimatePresence initial={false}>
           <motion.p layout key="q" className={`${bubble} self-start rounded-tl-[3px] bg-[#202c33] px-2.5 py-1.5`}>Which slides changed?</motion.p>
           {shown(1) && (
@@ -202,7 +226,7 @@ function Record() {
   const rows = [0, 1, 2, 3, 4].map((k) => n - k).filter((i) => i >= 0)
   const paused = Math.floor(n / 6) % 2 === 1
   return (
-    <div ref={ref} className="absolute inset-0 flex flex-col px-7 pt-7">
+    <div ref={ref} className="absolute inset-0 flex flex-col px-5 pt-6 sm:px-7 sm:pt-7">
       <div className="flex items-center justify-between text-[11.5px]">
         <span className="flex items-center gap-2 text-ink-2"><span className="relative grid size-2 place-items-center"><span className="absolute size-2 animate-ping rounded-full bg-[#5fd38d]/60" /><span className="size-1.5 rounded-full bg-[#5fd38d]" /></span>Live</span>
         <button type="button" tabIndex={-1} aria-hidden className="flex items-center gap-2 text-muted">
@@ -248,19 +272,21 @@ function Record() {
 
 export function Features() {
   return (
-    <div className="mt-14 grid gap-4 lg:grid-cols-12">
-      <Tile className="lg:col-span-7" title="Sends as you" visual={<Identity />}>
+    <div className="mt-12 lg:mt-14">
+    <Carousel grid="lg:grid-cols-12" count={4}>
+      <Tile className={`${SLIDE} lg:col-span-7`} title="Sends as you" visual={<Identity />}>
         Messages come from your own number, in the chats people already have with you. No bot account, no &ldquo;sent by AI&rdquo; label.
       </Tile>
-      <Tile className="lg:col-span-5" title="Paced like a person" visual={<Pacing />}>
+      <Tile className={`${SLIDE} lg:col-span-5`} title="Paced like a person" visual={<Pacing />}>
         Accounts get flagged for sending like software. Parley spaces messages out, keeps to your waking hours and starts slow on new accounts.
       </Tile>
-      <Tile className="lg:col-span-5" title="Rich messages" visual={<Rich />}>
+      <Tile className={`${SLIDE} lg:col-span-5`} title="Rich messages" visual={<Rich />}>
         Formatting, photos, voice notes, files and reactions, shown the way each app shows them.
       </Tile>
-      <Tile className="lg:col-span-7" title="Everything on record" visual={<Record />}>
+      <Tile className={`${SLIDE} lg:col-span-7`} title="Everything on record" visual={<Record />}>
         See which agent sent what, when it went out and whether it was read. Cancel anything still queued, or pause an agent in one click.
       </Tile>
+    </Carousel>
     </div>
   )
 }
@@ -356,7 +382,7 @@ function Ask() {
 
 function Step({ n, title, visual, children }: { n: number; title: string; visual: React.ReactNode; children: React.ReactNode }) {
   return (
-    <li className={`flex flex-col overflow-hidden rounded-[18px] ${FRAME}`}>
+    <div role="listitem" className={`${SLIDE} relative flex flex-col overflow-hidden rounded-[18px] ${FRAME}`}>
       <div className="relative h-[200px] overflow-hidden">
         <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(rgb(255_246_232/0.06)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(65%_65%_at_50%_50%,black,transparent)]" />
         {visual}
@@ -365,15 +391,16 @@ function Step({ n, title, visual, children }: { n: number; title: string; visual
         <h3 className="text-[15px] font-medium tracking-[-0.01em]"><span className="sr-only">Step {n}: </span>{title}</h3>
         <div className="mt-1.5 flex flex-1 flex-col text-[14px] leading-[1.6] text-muted">{children}</div>
       </div>
-    </li>
+    </div>
   )
 }
 
 export function Steps({ channels, copy }: { channels: React.ReactNode; copy: React.ReactNode }) {
   return (
-    <ol className="mt-12 grid gap-4 lg:grid-cols-3">
+    <div className="mt-10 lg:mt-12">
+    <Carousel grid="lg:grid-cols-3" count={3} list>
       <Step n={1} title="Connect your accounts" visual={<LinkScene channels={channels} />}>
-        <p>Sign in and link the accounts your agents can use. WhatsApp links with a QR code, the same way WhatsApp Web does.</p>
+        <p>Sign in and link the accounts your agents can use. Each one takes a QR scan or a sign-in, the same as adding a new device.</p>
       </Step>
       <Step n={2} title="Add Parley to your agent" visual={<Wire />}>
         <p>Paste one URL into Claude, ChatGPT, Cursor or any MCP client, then sign in. No API keys.</p>
@@ -382,6 +409,7 @@ export function Steps({ channels, copy }: { channels: React.ReactNode; copy: Rea
       <Step n={3} title="Ask" visual={<Ask />}>
         <p>Your agent finds the chats that are waiting, writes the replies, and Parley sends them as you.</p>
       </Step>
-    </ol>
+    </Carousel>
+    </div>
   )
 }

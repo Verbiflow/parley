@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion, useInView, useReducedMotion } from "motion/react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { AgentMark, Claude, ParleyMark, WhatsApp } from "./logos"
+import { Claude, ParleyMark, WhatsApp } from "./logos"
 
 /** Claude asks → Parley holds it for a natural moment → sent → delivered → read, and Maya answers. Then it loops. */
 type Stage = 0 | 1 | 2 | 3 | 4
@@ -57,124 +57,11 @@ function Avatar({ initials, tone, size = 26 }: { initials: string; tone: string;
 
 const PANEL = "rounded-[18px] bg-[#161513] shadow-[inset_0_1px_0_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.075),0_40px_80px_-32px_rgb(0_0_0/0.95)]"
 
-function PanelHead({ icon, title, aside }: { icon: React.ReactNode; title: string; aside?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
-      {icon}
-      <span className="text-[12.5px] font-medium">{title}</span>
-      {aside && <span className="ml-auto flex items-center gap-1.5 text-[11px] text-muted">{aside}</span>}
-    </div>
-  )
-}
-
 const PMark = ({ size = 22 }: { size?: number }) => (
   <span className="grid place-items-center rounded-[7px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9)]" style={{ width: size, height: size }}>
     <ParleyMark size={Math.round(size * 0.6)} />
   </span>
 )
-
-const RULES: Array<[string, string]> = [
-  ["Inside your hours", "M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"],
-  ["1m 48s after your last send", "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
-  ["4 of 40 new chats today", "M4 19h16M7 16V10M12 16V6M17 16v-4"],
-]
-
-/** Parley holding the message: who it sends as, the countdown to a natural moment, and the rules it is keeping. */
-function ParleyPanel({ stage }: { stage: Stage }) {
-  const { left, label } = useCountdown(stage === 1)
-  const f = stage === 0 ? 1 : stage === 1 ? left / HOLD : 0
-  const holding = stage === 1
-  return (
-    <div className={`relative w-[360px] overflow-hidden ${PANEL}`}>
-      <motion.div aria-hidden className="pointer-events-none absolute -top-24 left-1/2 h-48 w-72 -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,rgb(227_185_141/0.22),transparent)]" animate={{ opacity: holding ? 1 : 0.35 }} transition={{ duration: 0.6 }} />
-      <PanelHead icon={<PMark size={20} />} title="Parley" aside={<><WhatsApp size={12} />+44 7700 900123</>} />
-      <div className="relative flex items-center gap-4 px-4 pb-4 pt-5">
-        <div className="relative grid size-[76px] shrink-0 place-items-center">
-          <svg viewBox="0 0 80 80" className="absolute inset-0 -rotate-90" aria-hidden>
-            <circle cx="40" cy="40" r="34" fill="none" stroke="rgb(255 246 232 / .08)" strokeWidth="5" />
-            <circle cx="40" cy="40" r="34" fill="none" stroke={stage >= 2 ? "#5fd38d" : "rgb(227 185 141)"} strokeWidth="5" strokeLinecap="round" strokeDasharray={213.6} strokeDashoffset={213.6 * (1 - (stage >= 2 ? 1 : f))} style={{ transition: "stroke .4s, stroke-dashoffset .1s linear" }} />
-          </svg>
-          <AnimatePresence mode="wait" initial={false}>
-            {stage >= 2 ? (
-              <motion.span key="ok" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={spring} className="text-[#5fd38d]"><Check size={22} /></motion.span>
-            ) : (
-              <motion.span key="clock" exit={{ scale: 0.5, opacity: 0 }} className="font-mono text-[17px] tabular-nums tracking-[-0.02em] text-ink">{stage === 0 ? "–" : label}</motion.span>
-            )}
-          </AnimatePresence>
-        </div>
-        <div className="min-w-0">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.p key={stage === 0 ? "a" : stage === 1 ? "b" : "c"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.25 }} className="text-[14px] font-medium tracking-[-0.01em]">
-              {stage === 0 ? "Waiting for your agent" : stage === 1 ? "Holding for a natural gap" : "Sent at 08:12"}
-            </motion.p>
-          </AnimatePresence>
-          <p className="mt-1 flex items-center gap-2 text-[12px] text-muted"><Avatar initials="AR" tone="#4a3a2c" size={18} />Sending as Alex Rivera</p>
-        </div>
-      </div>
-      <ul className="space-y-px border-t border-white/[0.06] px-2 py-2">
-        {RULES.map(([text, d], i) => {
-          const ok = stage >= 2 || (stage === 1 && left < HOLD - (i + 1) * 22)
-          return (
-            <li key={text} className="flex items-center gap-2.5 rounded-[9px] px-2 py-[7px] text-[12px]">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted" aria-hidden><path d={d} /></svg>
-              <span className="text-ink-2">{text}</span>
-              <span className={`ml-auto grid size-4 place-items-center rounded-full transition-all duration-300 ${ok ? "bg-[#5fd38d]/15 text-[#79d79f]" : "bg-white/[0.05] text-transparent"}`}><Check size={8} /></span>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-const AGENTS: Array<[string, string]> = [["Claude", "Sending to Maya"], ["Cursor", "Idle"], ["ChatGPT", "Idle"]]
-
-function AgentsPanel({ stage }: { stage: Stage }) {
-  return (
-    <div className={`w-[300px] overflow-hidden ${PANEL}`}>
-      <PanelHead icon={<span className="text-muted"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 3v3M8 11h.01M16 11h.01M6 6h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" /></svg></span>} title="Your agents" aside="3 connected" />
-      <ul className="p-2">
-        {AGENTS.map(([name, idle]) => {
-          const busy = name === "Claude" && stage <= 1
-          return (
-            <li key={name} className="flex items-center gap-2.5 rounded-[10px] px-2 py-2">
-              <span className={`grid size-7 place-items-center rounded-[8px] bg-white/[0.05] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)] ${name === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={name} size={14} /></span>
-              <div className="min-w-0 leading-tight">
-                <p className="text-[12.5px] font-medium">{name}</p>
-                <p className={`text-[11px] transition-colors ${busy ? "text-sand" : "text-faint"}`}>{name === "Claude" ? (stage <= 1 ? idle : "Sent 1 message") : idle}</p>
-              </div>
-              <span className="relative ml-auto h-[18px] w-8 rounded-full bg-[#5fd38d]/75"><span className="absolute right-[2px] top-[2px] size-[14px] rounded-full bg-ink shadow" /></span>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-const TRAIL: Array<[string, string, Stage]> = [["Queued by Claude", "08:10", 1], ["Sent from your number", "08:12", 2], ["Delivered", "08:12", 3], ["Read by Maya", "08:13", 4]]
-
-function RecordPanel({ stage }: { stage: Stage }) {
-  return (
-    <div className={`w-[360px] overflow-hidden ${PANEL}`}>
-      <PanelHead icon={<span className="text-muted"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01" /></svg></span>} title="Record" aside={<><Avatar initials="MO" tone="#4a3f30" size={16} />Maya Okafor</>} />
-      <ol className="relative px-4 py-3">
-        <span className="absolute left-[23px] top-[27px] h-[90px] w-px bg-white/[0.08]" />
-        <motion.span className="absolute left-[23px] top-[27px] w-px bg-sand" initial={false} animate={{ height: Math.max(0, stage - 1) * 30 }} transition={{ duration: 0.5, ease }} />
-        {TRAIL.map(([text, at, from]) => {
-          const on = stage >= from
-          return (
-            <li key={text} className="relative flex h-[30px] items-center gap-3">
-              <span className={`relative z-10 grid size-[15px] place-items-center rounded-full transition-all duration-300 ${on ? (from === 4 ? "bg-[#53bdeb] text-[#0b141a]" : "bg-sand text-[#1b140e]") : "bg-[#161513] shadow-[inset_0_0_0_1.5px_rgb(255_255_255/0.15)] text-transparent"}`}><Check size={8} /></span>
-              <span className={`text-[12.5px] transition-colors duration-300 ${on ? "text-ink" : "text-faint"}`}>{text}</span>
-              <span className={`ml-auto font-mono text-[10.5px] transition-opacity duration-300 ${on ? "text-muted opacity-100" : "opacity-0"}`}>{at}</span>
-            </li>
-          )
-        })}
-      </ol>
-    </div>
-  )
-}
 
 /** Thin wires between the panels; a light runs along one when the message crosses it. */
 function Wires({ stage, paths }: { stage: Stage; paths: Array<{ d: string; on: Stage[] }> }) {
@@ -221,7 +108,7 @@ function AgentCard({ stage }: { stage: Stage }) {
             </motion.div>
           ) : (
             <motion.p key={stage >= 4 ? "reply" : "done"} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="text-[12.5px] leading-relaxed text-ink-2">
-              {stage >= 4 ? <>Maya replied: <span className="text-ink">&ldquo;Perfect, see you then&rdquo;</span></> : "Queued. It goes out from your WhatsApp in about two minutes."}
+              {stage >= 4 ? <>Maya replied: <span className="text-ink">&ldquo;Perfect, see you then&rdquo;</span></> : "Queued. It goes out from your account in about two minutes."}
             </motion.p>
           )}
         </AnimatePresence>
@@ -292,6 +179,48 @@ function Phone({ stage }: { stage: Stage }) {
   )
 }
 
+/* ---------- the phone-sized scene ---------- */
+
+const GLASS = "rounded-[16px] bg-[rgb(30_28_25/0.92)] shadow-[inset_0_1px_0_rgb(255_255_255/0.09),0_0_0_1px_rgb(255_255_255/0.09),0_24px_48px_-16px_rgb(0_0_0/0.95)]"
+
+/** Parley holding the message for a natural moment, then confirming it went out from your number. */
+function ParleyPill({ stage, className = "" }: { stage: Stage; className?: string }) {
+  const { left, label } = useCountdown(stage === 1)
+  const done = stage >= 2
+  return (
+    <div className={`flex items-center gap-3 p-3 ${GLASS} ${className}`}>
+      <div className="relative grid size-11 shrink-0 place-items-center">
+        <svg viewBox="0 0 40 40" className="absolute inset-0 -rotate-90" aria-hidden>
+          <circle cx="20" cy="20" r="17" fill="none" stroke="rgb(255 246 232 / .1)" strokeWidth="3" />
+          <circle cx="20" cy="20" r="17" fill="none" stroke={done ? "#5fd38d" : "rgb(227 185 141)"} strokeWidth="3" strokeLinecap="round" strokeDasharray={106.8} strokeDashoffset={106.8 * (done ? 0 : stage === 0 ? 1 : 1 - left / HOLD)} style={{ transition: "stroke .4s" }} />
+        </svg>
+        {done ? <span className="text-[#5fd38d]"><Check size={13} /></span> : <span className="font-mono text-[10.5px] tabular-nums text-ink">{stage === 0 ? "–" : label}</span>}
+      </div>
+      <div className="min-w-0 leading-tight">
+        <p className="flex items-center gap-1.5 text-[11px] text-muted"><PMark size={14} />Parley</p>
+        <p className="mt-1 text-[12.5px] font-medium">{done ? "Sent from your number" : stage === 1 ? "Holding for a natural gap" : "Waiting for your agent"}</p>
+      </div>
+    </div>
+  )
+}
+
+function MobileScene({ stage }: { stage: Stage }) {
+  return (
+    <>
+      <div className="absolute left-1/2 top-0 -translate-x-1/2"><Phone stage={stage} /></div>
+      <motion.div className={`absolute left-0 top-[118px] w-[238px] p-3 ${GLASS}`} initial={false} animate={{ opacity: stage >= 2 ? 0 : 1, y: stage >= 2 ? -8 : 0 }} transition={{ duration: 0.4, ease }}>
+        <div className="flex items-center gap-2 text-[11.5px]"><Claude size={13} /><span className="font-medium">Claude</span>
+          <span className={`ml-auto grid size-4 place-items-center rounded-full transition-colors ${stage >= 1 ? "bg-[#5fd38d] text-[#0d1a12]" : "bg-white/10 text-transparent"}`}><Check size={8} /></span>
+        </div>
+        <p className="mt-1.5 text-[12.5px] leading-snug text-ink">Send Maya the Q4 deck and ask if Thursday at 3 still works</p>
+      </motion.div>
+      <motion.div className="absolute right-0 top-[212px] w-[226px]" initial={false} animate={{ opacity: stage === 0 || stage >= 3 ? 0 : 1, y: stage === 0 ? 10 : 0, scale: stage === 0 ? 0.96 : 1 }} transition={{ duration: 0.4, ease }}>
+        <ParleyPill stage={stage} />
+      </motion.div>
+    </>
+  )
+}
+
 /* ---------- composition ---------- */
 
 /**
@@ -317,8 +246,6 @@ function Fitted({ w, h, className = "", children }: { w: number; h: number; clas
   )
 }
 
-const float = (dy: number, duration: number) => ({ animate: { y: [0, dy, 0] }, transition: { repeat: Infinity, duration, ease: "easeInOut" as const } })
-
 export function Journey() {
   const outer = useRef<HTMLDivElement>(null)
   const inView = useInView(outer, { margin: "100px" })
@@ -326,25 +253,20 @@ export function Journey() {
   return (
     <div ref={outer} className="relative mx-auto w-full max-w-[1200px] px-5 sm:px-7">
       <div aria-hidden className="pointer-events-none absolute -inset-x-10 -bottom-24 top-24 -z-10 bg-[radial-gradient(60%_50%_at_55%_55%,rgb(227_185_141/0.08),transparent_70%)]" />
-      <Fitted w={1144} h={580} className="hidden md:block">
+      <Fitted w={1144} h={572} className="hidden md:block">
         <Wires
           stage={stage}
           paths={[
-            { d: "M330 118 C 362 118, 362 120, 400 120", on: [0] },
-            { d: "M330 420 C 368 420, 362 150, 400 150", on: [] },
-            { d: "M760 120 C 800 120, 790 300, 830 300", on: [2] },
-            { d: "M580 286 L 580 336", on: [3, 4] },
+            { d: "M380 290 C 420 290, 420 290, 462 290", on: [0] },
+            { d: "M722 290 C 770 290, 770 300, 818 300", on: [2] },
           ]}
         />
-        <div className="absolute left-[30px] top-[24px]"><AgentCard stage={stage} /></div>
-        <div className="absolute left-[30px] top-[322px]"><AgentsPanel stage={stage} /></div>
-        <div className="absolute left-[400px] top-0"><ParleyPanel stage={stage} /></div>
-        <div className="absolute left-[400px] top-[336px]"><RecordPanel stage={stage} /></div>
-        <div className="absolute left-[830px] top-[6px]"><Phone stage={stage} /></div>
+        <div className="absolute left-[80px] top-[176px]"><AgentCard stage={stage} /></div>
+        <div className="absolute left-[462px] top-[256px] w-[260px]"><ParleyPill stage={stage} /></div>
+        <div className="absolute left-[818px] top-[6px]"><Phone stage={stage} /></div>
       </Fitted>
-      <Fitted w={350} h={772} className="md:hidden">
-        <div className="absolute right-0 top-[216px]"><Phone stage={stage} /></div>
-        <motion.div className="absolute left-0 top-0 z-10" {...float(-4, 7)}><AgentCard stage={stage} /></motion.div>
+      <Fitted w={350} h={576} className="md:hidden">
+        <MobileScene stage={stage} />
       </Fitted>
     </div>
   )
