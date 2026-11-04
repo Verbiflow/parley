@@ -20,8 +20,8 @@ const COLS = "id, kind, name, synced, last_message_at, last_call_at, last_call_k
 export async function upsertChats(sql: Sql, connectionId: string, chats: Chat[]): Promise<void> {
   if (!chats.length) return
   await sql(
-    `insert into parley.chat (connection_id, id, kind, name, last_message_at, last_call_at, last_call_kind)
-     select $1, c.id, c.kind, nullif(left(c.name, 200), ''), greatest(c.at, c.call_at), c.call_at, c.call_kind
+    `insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind)
+     select $1, c.id, c.kind, nullif(left(c.name, 200), ''), not jsonb_exists((select ignored_chats from parley.connection where id = $1), c.id), greatest(c.at, c.call_at), c.call_at, c.call_kind
        from jsonb_to_recordset($2::jsonb) as c(id text, kind text, name text, at timestamptz, call_at timestamptz, call_kind text)
      on conflict (connection_id, id) do update set
        kind = excluded.kind,
@@ -47,12 +47,70 @@ export async function nameChats(sql: Sql, connectionId: string, names: Array<{ i
 }
 
 /**
+ * Fold chats that turned out to be the same person (`f`, e.g. a private id, into `t`, their phone number): the kept row
+ * gets the better name, the latest activity and call, and stays ignored if either was; messages move across; `f` goes.
+ */
+export async function mergeChats(sql: Sql, connectionId: string, pairs: Array<{ from: string; to: string }>): Promise<void> {
+  const list = pairs.filter((p) => p.from && p.to && p.from !== p.to)
+  if (!list.length) return
+  const json = JSON.stringify(list.map((p) => ({ f: p.from, t: p.to })))
+  const moved = await sql<{ f: string; t: string }>(
+    `with p as (select distinct on (t) f, t from jsonb_to_recordset($2::jsonb) as p(f text, t text) order by t, f),
+          src as (select c.*, p.t from parley.chat c join p on c.connection_id = $1 and c.id = p.f and c.kind = 'direct')
+     insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind)
+     select $1, t, 'direct', name, synced, last_message_at, last_call_at, last_call_kind from src
+     on conflict (connection_id, id) do update set
+       name = coalesce(parley.chat.name, excluded.name),
+       synced = parley.chat.synced and excluded.synced,
+       last_message_at = greatest(parley.chat.last_message_at, excluded.last_message_at),
+       last_call_kind = case when parley.chat.last_call_at is null or excluded.last_call_at > parley.chat.last_call_at
+                             then coalesce(excluded.last_call_kind, parley.chat.last_call_kind) else parley.chat.last_call_kind end,
+       last_call_at = greatest(parley.chat.last_call_at, excluded.last_call_at),
+       updated_at = now()
+     returning id as t, (select f from p where p.t = parley.chat.id) as f`,
+    [connectionId, json]
+  )
+  if (!moved.length) return
+  const done = JSON.stringify(moved)
+  // The same message can be stored under both ids: keep one, then move the rest across and drop the old rows.
+  await sql(
+    `with p as (select f, t from jsonb_to_recordset($2::jsonb) as p(f text, t text))
+     delete from parley.message m using p
+      where m.connection_id = $1 and m.chat_id = p.f
+        and exists (select 1 from parley.message x where x.connection_id = $1 and x.chat_id = p.t and x.id = m.id)`,
+    [connectionId, done]
+  )
+  await sql(
+    `with p as (select f, t from jsonb_to_recordset($2::jsonb) as p(f text, t text))
+     update parley.message m set chat_id = p.t from p where m.connection_id = $1 and m.chat_id = p.f`,
+    [connectionId, done]
+  )
+  await sql(`delete from parley.chat where connection_id = $1 and id in (select f from jsonb_to_recordset($2::jsonb) as p(f text, t text))`, [connectionId, done])
+  // An ignore made under either id now holds for the person under their number.
+  await sql(
+    `update parley.connection k set ignored_chats = coalesce((
+       select jsonb_agg(distinct x) from (
+         select jsonb_array_elements_text(k.ignored_chats) x
+         union select c.id from parley.chat c where c.connection_id = $1 and not c.synced and c.id in (select t from jsonb_to_recordset($2::jsonb) as p(f text, t text))) s), '[]'::jsonb)
+     where k.id = $1`,
+    [connectionId, done]
+  )
+  // A merged chat that's ignored keeps nothing.
+  await sql(
+    `delete from parley.message m using parley.chat c
+      where m.connection_id = $1 and c.connection_id = $1 and c.id = m.chat_id and not c.synced
+        and c.id in (select t from jsonb_to_recordset($2::jsonb) as p(f text, t text))`,
+    [connectionId, done]
+  )
+}
+
+/**
  * Record activity in a chat a message just arrived in. Channels normally report the chat first (with its kind and
  * name); if one didn't, it's listed as a direct chat until a `chats` event corrects it.
  */
 export async function touchChat(sql: Sql, connectionId: string, chatId: string, at: string): Promise<void> {
   await sql(
-    `insert into parley.chat (connection_id, id, kind, last_message_at) values ($1, $2, 'direct', $3)
+    `insert into parley.chat (connection_id, id, kind, synced, last_message_at) values ($1, $2, 'direct', not jsonb_exists((select ignored_chats from parley.connection where id = $1), $2), $3)
      on conflict (connection_id, id) do update set last_message_at = greatest(parley.chat.last_message_at, excluded.last_message_at), updated_at = now()`,
     [connectionId, chatId, at]
   )
@@ -108,6 +166,14 @@ export async function setIgnored(sql: Sql, connectionId: string, chatIds: string
     [connectionId, ids, !ignored]
   )
   if (ignored) await sql(`delete from parley.message where connection_id = $1 and chat_id in (select jsonb_array_elements_text($2::jsonb))`, [connectionId, ids])
+  await sql(
+    `update parley.connection set ignored_chats = coalesce((
+       select jsonb_agg(distinct x) from (
+         select x from jsonb_array_elements_text(ignored_chats) x where $3 or x not in (select jsonb_array_elements_text($2::jsonb))
+         union select jsonb_array_elements_text($2::jsonb) where $3) s), '[]'::jsonb)
+     where id = $1`,
+    [connectionId, ids, ignored]
+  )
   await sql(`update parley.connection set chats_chosen_at = coalesce(chats_chosen_at, now()), updated_at = now() where id = $1`, [connectionId])
 }
 

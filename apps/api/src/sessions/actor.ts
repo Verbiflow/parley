@@ -6,8 +6,8 @@ import { Transactor } from "../db/transactor.ts"
 import { Exits, ExitError } from "./exits.ts"
 import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, type Claimed, type Queued } from "./outbox.ts"
 import type { InboundMessage } from "@parley/channels"
-import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, touchChat, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, setHistorySync, type Connection, type Locale } from "./store.ts"
+import { upsertChats, nameChats, mergeChats, touchChat, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -383,6 +383,12 @@ export class Sessions {
         break
       case "names":
         await nameChats(this.ctx.sql, connectionId, event.names)
+        break
+      case "merge":
+        await mergeChats(this.ctx.sql, connectionId, event.pairs)
+        break
+      case "sync":
+        await setHistorySync(this.ctx.sql, connectionId, event.progress, event.done)
         break
       case "message": {
         const m = event.message

@@ -672,6 +672,13 @@ const CHATS_CSS = `
 .stale button{font:inherit;color:var(--text-2);background:none;border:0;padding:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .stale button:hover{color:var(--text)}
 .tally{font-family:var(--mono);font-size:12px;color:var(--text-2);margin:14px 0 0}
+.sync{margin:12px 0 0;padding:14px 16px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-1)}
+.sync .row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
+.sync .row b{font-weight:500}.sync .row span{font-family:var(--mono);font-size:12px;color:var(--text-2)}
+.sync p{margin:8px 0 0;font-size:12.5px;color:var(--faint)}
+.bar{height:4px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:10px}
+.bar i{display:block;height:100%;background:var(--text);border-radius:99px;transition:width .6s var(--ease)}
+.bar.busy i{animation:busy 1.4s var(--ease) infinite alternate}@keyframes busy{from{margin-left:0}to{margin-left:70%}}
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
@@ -687,6 +694,11 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   // A person WhatsApp gave only a private id for, with no name yet, is "Unknown contact": not worth a top spot.
   const isRecent = (c: ChatRow) => Boolean(c.lastMessageAt) && (c.kind === "group" || Boolean(c.name || phoneOf(c.id)))
   const recentCount = chats.filter(isRecent).length
+  // WhatsApp's link-time history (recent chats, names, calls) keeps arriving for a minute or two after linking.
+  // WhatsApp's link-time history (recent chats, names, calls) arrives for a minute or two after linking.
+  const since = conn.history.startedAt ?? conn.linkedAt
+  const syncing = Boolean(!conn.history.doneAt && since && Date.now() - Date.parse(since) < 5 * 60_000)
+  const pct = conn.history.progress
   const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length, ignored: chats.filter((c) => !c.synced).length }
   const rows = chats.map((c) => {
     const label = c.name || phoneOf(c.id) || (c.kind === "group" ? "Unnamed group" : "Unknown contact")
@@ -719,37 +731,56 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
             <button type="button" class="tag" data-t="off" aria-pressed="false">Ignored<span class="n" id="nign">${counts.ignored}</span></button>
           </div>
         </div>
-        ${counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}
+        <div id="status">${syncing ? `<div class="sync">
+            <div class="row"><b>Syncing your chats from ${esc(name)}${pct !== null ? ` · ${pct}%` : "…"}</b><span>${counts.direct} people · ${counts.group} groups so far</span></div>
+            <div class="bar${pct === null ? " busy" : ""}"><i style="width:${pct ?? 30}%"></i></div>
+            <p>Just linked: recent chats, names and calls are still arriving. The list fills in on its own.</p>
+          </div>` : counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}</div>
         <p class="tally" id="tally"></p>
-        <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div>${recentCount && recentCount < chats.length ? `<button type="button" class="older" id="older">Show ${chats.length - recentCount} older chats</button>` : ""}</div>
+        <div class="chats" id="list">${rows}</div>
+        <div class="empty none" id="nomatch">No chats match.</div>
+        <button type="button" class="older none" id="older"></button>
       <form id="relink" method="post" action="/app/connections/${esc(conn.id)}/relink"></form>
       <script>
         const list=document.getElementById('list'),q=document.getElementById('q'),older=document.getElementById('older'),tallyEl=document.getElementById('tally');
-        const rows=[...list.querySelectorAll('.chat')];
+        let rows=[...list.querySelectorAll('.chat')];
         // Tags switch on and off independently. People/Groups say which kinds show (both off = both); Ignored narrows to ignored chats.
-        const tag={direct:true,group:true,off:false};let all=!older;
+        const tag={direct:true,group:true,off:false};let all=false;
         function apply(){const t=q.value.trim().toLowerCase();const kinds=tag.direct||tag.group;let n=0,hid=0;
           for(const r of rows){const off=r.classList.contains('off');
             const match=(!kinds||tag[r.dataset.kind])&&(!tag.off||off)&&(!t||r.dataset.q.includes(t));
             const old=!t&&!all&&!tag.off&&r.dataset.recent!=='1';const ok=match&&!old;if(match&&old)hid++;
             r.classList.toggle('none',!ok);if(ok)n++}
+          // Nothing recent at all (an old link): show everything rather than an empty list.
+          if(!n&&hid&&!all){all=true;return apply()}
           document.getElementById('nomatch').classList.toggle('none',n>0||hid>0);
-          if(older){older.classList.toggle('none',!hid);older.textContent='Show '+hid+' older chat'+(hid===1?'':'s')}tally()}
+          older.classList.toggle('none',!hid);older.textContent='Show '+hid+' older chat'+(hid===1?'':'s');tally()}
         function tally(){const off=rows.filter(r=>r.classList.contains('off')).length;document.getElementById('nign').textContent=off;
           tallyEl.textContent=(rows.length-off)+' of '+rows.length+' chats sync to your agents'+(off?' · '+off+' ignored':'')}
         q.addEventListener('input',apply);
-        if(older)older.onclick=()=>{all=true;apply()};
+        older.onclick=()=>{all=true;apply()};
         document.getElementById('tags').addEventListener('click',e=>{const b=e.target.closest('.tag');if(!b)return;tag[b.dataset.t]=!tag[b.dataset.t];b.setAttribute('aria-pressed',String(tag[b.dataset.t]));apply()});
         // Ignore / un-ignore saves at once; only this chat changes on the server.
+        let saving=0;
         list.addEventListener('click',async e=>{const b=e.target.closest('.ign');if(!b)return;const r=b.closest('.chat');const ignored=!r.classList.contains('off');
-          b.disabled=true;
+          b.disabled=true;saving++;
           try{const res=await fetch(location.pathname+'/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
             if(!res.ok)throw new Error(res.status);
             r.classList.toggle('off',ignored);b.textContent=ignored?'Ignored':'Ignore';
             r.querySelector('.s').textContent=ignored?'ignored · agents never see it':r.dataset.sub;tally()}
           catch(x){alert("Couldn't save that. Check your connection and try again.")}
-          b.disabled=false});
+          finally{saving--;b.disabled=false}});
         apply();
+        // While a fresh link syncs, pull the page again every few seconds and swap in the list, counts and progress in
+        // place: search, tags and scroll stay put, nothing flashes. Stops once the sync has settled.
+        ${syncing ? `(function poll(){setTimeout(async()=>{
+          if(saving||document.hidden)return poll();
+          try{const doc=new DOMParser().parseFromString(await (await fetch(location.pathname,{cache:'no-store'})).text(),'text/html');
+            const nl=doc.getElementById('list');if(!nl)return poll();
+            list.innerHTML=nl.innerHTML;rows=[...list.querySelectorAll('.chat')];
+            for(const t of ['direct','group'])document.querySelector('[data-t='+t+'] .n').textContent=doc.querySelector('[data-t='+t+'] .n').textContent;
+            document.getElementById('status').innerHTML=doc.getElementById('status').innerHTML;apply();
+            if(doc.querySelector('#status .sync'))poll()}catch(x){poll()}},3000)})();` : ""}
       </script>` : `${loading}<script>setTimeout(()=>location.reload(),3000)</script>`}`,
   })
 }
