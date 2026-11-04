@@ -2,8 +2,8 @@ import { SignInKey, serverSeal, type IdentityConfig, type SecretSeal, type Sql }
 import { isPrivateHost } from "../mcp/media.ts"
 
 /**
- * Webhooks: URLs an account registers to hear, as it happens, about new messages, reactions and deletions on its
- * connections. This half is edge-safe (the dashboard and MCP on the Worker use it): registering, listing, changing and
+ * Webhooks: URLs that hear, as it happens, about new messages, reactions and deletions on one connection (one linked
+ * number; each number has its own). This half is edge-safe (the dashboard and MCP on the Worker use it): registering, listing, changing and
  * removing webhooks, their sealed signing secrets, and queueing events. Sending happens on the sessions service
  * (`webhook-delivery.ts`), which holds the network checks a request needs before it leaves.
  *
@@ -24,7 +24,7 @@ export const EVENT_TEXT: Record<WebhookEvent, string> = {
 /** The event a test delivery carries. Always sent, whatever the webhook subscribes to. */
 export const TEST_EVENT = "webhook.test"
 
-/** The most webhooks one account can have. */
+/** The most webhooks one connection (number) can have. */
 export const MAX_WEBHOOKS = 10
 /** Attempts per delivery: the first, then two retries. */
 export const MAX_ATTEMPTS = 3
@@ -48,7 +48,7 @@ export type Delivery = {
   nextAttemptAt: string | null; lastStatus: number | null; lastError: string | null; createdAt: string; deliveredAt: string | null
 }
 export type Webhook = {
-  id: string; url: string; events: WebhookEvent[]; description: string | null; enabled: boolean; createdBy: string
+  id: string; connectionId: string; url: string; events: WebhookEvent[]; description: string | null; enabled: boolean; createdBy: string
   /** The secret's last few characters, so a person can tell which one their receiver has. */
   secretHint: string
   lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string | null
@@ -56,7 +56,7 @@ export type Webhook = {
 }
 
 type Row = {
-  id: string; account_id: string; url: string; events: string[]; description: string | null; enabled: boolean; created_by: string; secret_hint: string
+  id: string; account_id: string; connection_id: string; url: string; events: string[]; description: string | null; enabled: boolean; created_by: string; secret_hint: string
   last_success_at: Date | null; last_failure_at: Date | null; last_error: string | null; created_at: Date; updated_at: Date
 }
 type SealedRow = Row & { sealed_version: string; sealed_key_id: string; sealed_iv: string; sealed: string }
@@ -65,10 +65,10 @@ type DeliveryRow = {
   last_status: number | null; last_error: string | null; created_at: Date; delivered_at: Date | null
 }
 
-const COLS = `id, account_id, url, events, description, enabled, created_by, secret_hint, last_success_at, last_failure_at, last_error, created_at, updated_at`
+const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, last_success_at, last_failure_at, last_error, created_at, updated_at`
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null)
 const view = (r: Row): Webhook => ({
-  id: r.id, url: r.url, events: r.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)),
+  id: r.id, connectionId: r.connection_id, url: r.url, events: r.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)),
   description: r.description, enabled: r.enabled, createdBy: r.created_by, secretHint: r.secret_hint,
   lastSuccessAt: iso(r.last_success_at), lastFailureAt: iso(r.last_failure_at), lastError: r.last_error,
   createdAt: iso(r.created_at)!, updatedAt: iso(r.updated_at)!,
@@ -154,8 +154,19 @@ export class Webhooks {
     return this.#config.env === "local"
   }
 
-  async list(sql: Sql, accountId: string): Promise<Webhook[]> {
-    return (await sql<Row>(`select ${COLS} from parley.webhook where account_id = $1 order by created_at`, [accountId])).map(view)
+  /** The account's webhooks, or one connection's. */
+  async list(sql: Sql, accountId: string, opts: { connectionId?: string | undefined } = {}): Promise<Webhook[]> {
+    if (opts.connectionId && !UUID.test(opts.connectionId)) return []
+    return (await sql<Row>(
+      `select ${COLS} from parley.webhook where account_id = $1 and ($2::uuid is null or connection_id = $2) order by created_at`,
+      [accountId, opts.connectionId ?? null]
+    )).map(view)
+  }
+
+  /** How many webhooks each of the account's connections has (on or off), by connection id. */
+  async counts(sql: Sql, accountId: string): Promise<Map<string, number>> {
+    const rows = await sql<{ connection_id: string; n: number }>(`select connection_id, count(*)::int as n from parley.webhook where account_id = $1 group by connection_id`, [accountId])
+    return new Map(rows.map((r) => [r.connection_id, r.n]))
   }
 
   async get(sql: Sql, accountId: string, id: string): Promise<Webhook> {
@@ -165,21 +176,24 @@ export class Webhooks {
     return view(row)
   }
 
-  /** Register a webhook. Answers it with its signing secret, the one time the secret is handed over unasked. */
-  async create(sql: Sql, accountId: string, req: { url: string; events?: readonly string[] | undefined; description?: string | null | undefined; createdBy?: string | undefined }): Promise<{ webhook: Webhook; secret: string }> {
+  /** Register a webhook on one of the account's connections. Answers it with its signing secret, the one time the secret is handed over unasked. */
+  async create(sql: Sql, accountId: string, req: { connectionId: string; url: string; events?: readonly string[] | undefined; description?: string | null | undefined; createdBy?: string | undefined }): Promise<{ webhook: Webhook; secret: string }> {
     const url = checkWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = checkEvents(req.events)
+    if (!UUID.test(req.connectionId)) throw new WebhookError("not_found", "no such connection")
+    const [conn] = await sql<{ id: string }>(`select id from parley.connection where id = $1 and account_id = $2`, [req.connectionId, accountId])
+    if (!conn) throw new WebhookError("not_found", "no such connection")
     const id = crypto.randomUUID()
     const secret = newWebhookSecret()
     const s = await this.#sealSecret(accountId, id, secret)
     const [row] = await sql<Row>(
-      `insert into parley.webhook (id, account_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint)
-       select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-        where (select count(*) from parley.webhook where account_id = $2) < $12
+      `insert into parley.webhook (id, account_id, connection_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint)
+       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        where (select count(*) from parley.webhook where connection_id = $13) < $12
        returning ${COLS}`,
-      [id, accountId, url, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS]
+      [id, accountId, url, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId]
     )
-    if (!row) throw new WebhookError("limit", `an account can have at most ${MAX_WEBHOOKS} webhooks; remove one first`)
+    if (!row) throw new WebhookError("limit", `a number can have at most ${MAX_WEBHOOKS} webhooks; remove one first`)
     return { webhook: view(row), secret }
   }
 
@@ -262,14 +276,14 @@ export class Webhooks {
     return row && deliveryView(row)
   }
 
-  /** The latest deliveries across the account's webhooks (or one), newest first. */
-  async deliveries(sql: Sql, accountId: string, opts: { webhookId?: string | undefined; limit: number }): Promise<Delivery[]> {
-    if (opts.webhookId && !UUID.test(opts.webhookId)) return []
+  /** The latest deliveries across the account's webhooks (or one connection's, or one webhook's), newest first. */
+  async deliveries(sql: Sql, accountId: string, opts: { webhookId?: string | undefined; connectionId?: string | undefined; limit: number }): Promise<Delivery[]> {
+    if ((opts.webhookId && !UUID.test(opts.webhookId)) || (opts.connectionId && !UUID.test(opts.connectionId))) return []
     const rows = await sql<DeliveryRow>(
       `select d.* from parley.webhook_delivery d join parley.webhook w on w.id = d.webhook_id
-        where w.account_id = $1 and ($2::uuid is null or d.webhook_id = $2)
+        where w.account_id = $1 and ($2::uuid is null or d.webhook_id = $2) and ($4::uuid is null or w.connection_id = $4)
         order by d.created_at desc limit $3`,
-      [accountId, opts.webhookId ?? null, opts.limit]
+      [accountId, opts.webhookId ?? null, opts.limit, opts.connectionId ?? null]
     )
     return rows.map(deliveryView)
   }
@@ -278,18 +292,24 @@ export class Webhooks {
 /** An event to fan out to every webhook of the account that wants it: its type and its `data`. */
 export type WebhookEventInput = { type: WebhookEvent; data: Record<string, unknown> }
 
-/** Whether an account has a webhook that's on (so a connection skips building events nobody will get). */
-export async function hasWebhooks(sql: Sql, accountId: string): Promise<boolean> {
-  const [r] = await sql<{ yes: boolean }>(`select exists (select 1 from parley.webhook where account_id = $1 and enabled) as yes`, [accountId])
+/** Whether a connection has a webhook that's on (so it skips building events nobody will get). */
+export async function hasWebhooks(sql: Sql, connectionId: string): Promise<boolean> {
+  const [r] = await sql<{ yes: boolean }>(`select exists (select 1 from parley.webhook where connection_id = $1 and enabled) as yes`, [connectionId])
   return Boolean(r?.yes)
 }
 
+/** A number relinked: its webhooks (and their secrets, bound to the webhook, not the link) move to the new connection. */
+export async function moveWebhooks(sql: Sql, from: string[], to: string): Promise<void> {
+  if (!from.length) return
+  await sql(`update parley.webhook set connection_id = $1, updated_at = now() where connection_id = any ($2::uuid[])`, [to, from])
+}
+
 /**
- * Queue events for every webhook of the account that's on and wants them: one delivery each, sent by the sessions
+ * Queue events for every webhook of the connection that's on and wants them: one delivery each, sent by the sessions
  * service's delivery loop. Each event gets one id, the same in every webhook's copy (and every retry).
- * `connection` is the envelope's account section. Answers how many deliveries were queued.
+ * `connection` is the envelope's account section (its `id` picks the webhooks). Answers how many deliveries were queued.
  */
-export async function queueEvents(sql: Sql, accountId: string, connection: Record<string, unknown>, events: WebhookEventInput[], now = new Date()): Promise<number> {
+export async function queueEvents(sql: Sql, connection: { id: string } & Record<string, unknown>, events: WebhookEventInput[], now = new Date()): Promise<number> {
   if (!events.length) return 0
   const rows = events.map((e) => {
     const id = crypto.randomUUID()
@@ -299,10 +319,10 @@ export async function queueEvents(sql: Sql, accountId: string, connection: Recor
     `insert into parley.webhook_delivery (webhook_id, event_id, event, payload)
      select w.id, (e.v ->> 'event_id')::uuid, e.v ->> 'type', e.v -> 'payload'
        from jsonb_array_elements($2::jsonb) with ordinality as e(v, ord)
-       join parley.webhook w on w.account_id = $1 and w.enabled and (e.v ->> 'type') = any (w.events)
+       join parley.webhook w on w.connection_id = $1 and w.enabled and (e.v ->> 'type') = any (w.events)
       order by e.ord
      returning id`,
-    [accountId, JSON.stringify(rows)]
+    [connection.id, JSON.stringify(rows)]
   )
   return out.length
 }

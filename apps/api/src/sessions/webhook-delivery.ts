@@ -155,7 +155,7 @@ async function chatsOf(sql: Sql, connectionId: string, ids: string[]): Promise<M
 const chatOut = (chats: Map<string, ChatInfo>, id: string) => ({ id, name: chats.get(id)?.name ?? null, kind: chats.get(id)?.kind ?? null })
 
 /**
- * What a connection just stored, as webhook events, queued for every webhook of its account that wants them. Callers
+ * What a connection just stored, as webhook events, queued for each of its webhooks that wants them. Callers
  * pass only live changes (see the channel contract's `live`). Best effort: a failure here is logged by the caller and
  * never stops the message being stored.
  */
@@ -168,7 +168,7 @@ export async function emitLiveEvents(
   const reactions = change.reactions ?? []
   const deleted = change.deleted ?? []
   if (!stored.length && !reactions.length && !deleted.length) return 0
-  if (!(await hasWebhooks(ctx.sql, conn.accountId))) return 0
+  if (!(await hasWebhooks(ctx.sql, conn.id))) return 0
   const [{ handle } = { handle: null }] = await ctx.sql<{ handle: string | null }>(`select handle from parley.connection where id = $1`, [conn.id])
   const chats = await chatsOf(ctx.sql, conn.id, [...stored.map((m) => m.chatId), ...reactions.map((r) => r.chatId), ...deleted.map((m) => m.chatId)])
   const events: WebhookEventInput[] = []
@@ -213,5 +213,5 @@ export async function emitLiveEvents(
     // What it said stays deleted: the event names the message, not its text.
     events.push({ type: "message.deleted", data: { chat: chatOut(chats, m.chatId), message: { id: m.id, from: m.fromMe ? "me" : m.sender, from_me: m.fromMe, at: m.at } } })
   }
-  return queueEvents(ctx.sql, conn.accountId, { id: conn.id, channel: conn.channel, account: accountLabel({ handle }) }, events)
+  return queueEvents(ctx.sql, { id: conn.id, channel: conn.channel, account: accountLabel({ handle }) }, events)
 }

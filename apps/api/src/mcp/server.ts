@@ -53,8 +53,8 @@ const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javasc
 
 const FOLLOW_UP = "Call message_status with this id to see whether it has gone out."
 
-const webhookView = (w: Webhook) => ({
-  id: w.id, url: w.url, events: w.events, description: w.description, enabled: w.enabled, created_by: w.createdBy,
+const webhookView = (w: Webhook, account?: string | null) => ({
+  id: w.id, connection_id: w.connectionId, ...(account !== undefined ? { account } : {}), url: w.url, events: w.events, description: w.description, enabled: w.enabled, created_by: w.createdBy,
   secret_ends_with: w.secretHint, last_success_at: w.lastSuccessAt, last_failure_at: w.lastFailureAt, last_error: w.lastError, created_at: w.createdAt,
 })
 const deliveryOut = (d: Delivery) => ({
@@ -760,17 +760,18 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_webhooks",
     {
       title: "List webhooks",
-      description: "The account's webhooks (URLs Parley calls the moment a message, reaction or deletion happens on any connected account), with each one's events, whether it's on, its last success and failure, and its latest deliveries.",
-      inputSchema: { deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5).") },
+      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's events, whether it's on, its last success and failure, and its latest deliveries.",
+      inputSchema: { connection_id: filters.connection_id, deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5).") },
     },
-    async ({ deliveries }, extra) => {
+    async ({ connection_id, deliveries }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const hooks = await ctx.webhooks.list(ctx.sql, userId)
+        const conn = connection_id ? await findConnection(ctx, userId, connection_id) : undefined
+        const [hooks, account] = await Promise.all([ctx.webhooks.list(ctx.sql, userId, { connectionId: conn?.id }), labels(userId)])
         const per = deliveries ?? 5
         const recent = await Promise.all(hooks.map((w) => (per ? ctx.webhooks.deliveries(ctx.sql, userId, { webhookId: w.id, limit: per }) : Promise.resolve([]))))
         return json({
-          webhooks: hooks.map((w, i) => ({ ...webhookView(w), recent_deliveries: recent[i]!.map(deliveryOut) })),
+          webhooks: hooks.map((w, i) => ({ ...webhookView(w, account.get(w.connectionId) ?? null), recent_deliveries: recent[i]!.map(deliveryOut) })),
           events: Object.fromEntries(WEBHOOK_EVENTS.map((e) => [e, EVENT_TEXT[e]])),
           ...(hooks.length ? {} : { note: "No webhooks yet. create_webhook adds one." }),
         })
@@ -784,18 +785,20 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "create_webhook",
     {
       title: "Create a webhook",
-      description: `Have Parley POST to a URL the moment something happens on any of the account's connected accounts, instead of polling read_inbox. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees every webhook on the Parley dashboard. At most ${MAX_WEBHOOKS} per account.`,
+      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
       inputSchema: {
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
         url: z.string().max(2000).describe("A public https URL (not a private, local or internal address)."),
         events: eventsInput.describe("Which events to send. Default: all of them."),
         description: z.string().max(200).optional().describe("What it's for, shown on the dashboard."),
       },
     },
-    async ({ url, events, description }, extra) => {
+    async ({ connection_id, url, events, description }, extra) => {
       const { userId, sessionId } = principalOf(extra)
       try {
-        const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, { url, events, description, createdBy: await agentName(sessionId) })
-        return json({ ...webhookView(webhook), secret, verify: VERIFY, next: "Call test_webhook with this id to send a test event and see that it arrives." })
+        const conn = await pickConnection(ctx, userId, connection_id)
+        const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, { connectionId: conn.id, url, events, description, createdBy: await agentName(sessionId) })
+        return json({ ...webhookView(webhook, accountLabel(conn)), secret, verify: VERIFY, next: "Call test_webhook with this id to send a test event and see that it arrives." })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not create the webhook")
       }

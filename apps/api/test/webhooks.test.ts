@@ -24,21 +24,22 @@ const post: WebhookPoster = async ({ url, body, headers }) => {
 const { ctx, sql, base } = await testServer([fake.channel], { PUBLIC_URL: "https://app.parley.test" }, { postWebhook: post })
 const sessions = ctx.sessions
 
-async function linked(email: string) {
+async function linked(email: string, handle = "6591363557@s.whatsapp.net") {
   const account = await store.upsertAccount(sql, { subject: `local:${email}`, email, name: email, signedInWith: "local" })
   const { connectionId } = await sessions.connect(account.id, "fake-wa", { timezone: "UTC" })
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
-  fake.simulator.completeLink(connectionId, "6591363557@s.whatsapp.net")
+  fake.simulator.completeLink(connectionId, handle)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
   fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }, { id: "team", name: "Team", kind: "group" }, { id: "quiet", name: "Quiet", kind: "direct" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 3)
   return { accountId: account.id, connectionId }
 }
 
-/** Let the connection's queued events land, then run the delivery loop once. */
+/** Let the connection's queued events land, then run the delivery loop once (after any pass already in flight). */
 async function flush(now?: Date) {
   await new Promise((r) => setTimeout(r, 60))
-  return sessions.deliverWebhooks(now)
+  const first = await sessions.deliverWebhooks(now)
+  return first + await sessions.deliverWebhooks(now)
 }
 const reset = () => { received.length = 0; answers = [] }
 const pending = async (accountId: string) => (await ctx.webhooks.deliveries(sql, accountId, { limit: 100 })).filter((d) => d.status === "pending" || d.status === "sending")
@@ -51,7 +52,7 @@ function verifies(r: Received, secret: string): boolean {
 test("a live message reaches the webhook, signed, with the chat and the account; the account's own sends are message.sent", async () => {
   reset()
   const { accountId, connectionId } = await linked("live@parley.test")
-  const { webhook, secret } = await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/parley" })
+  const { webhook, secret } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/parley" })
   assert.match(secret, /^whsec_[\w-]{43}$/)
   assert.equal(webhook.secretHint, secret.slice(-4))
 
@@ -84,7 +85,7 @@ test("a live message reaches the webhook, signed, with the chat and the account;
 test("only real, live changes: history, repeats and ignored chats send nothing", async () => {
   reset()
   const { accountId, connectionId } = await linked("history@parley.test")
-  await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/h" })
+  await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/h" })
   fake.simulator.history(connectionId, [
     { id: "old1", threadId: "ana", from: "ana", text: "from last year", at: "2025-01-01T00:00:00Z" },
     { id: "old2", threadId: "ana", from: "ana", text: "and this", at: new Date().toISOString(), reactions: [{ threadId: "ana", messageId: "old2", from: "ana", emoji: "👍", at: new Date().toISOString() }] },
@@ -105,7 +106,7 @@ test("only real, live changes: history, repeats and ignored chats send nothing",
 test("reactions: added, changed, removed; a late older one and a removal of nothing send nothing", async () => {
   reset()
   const { accountId, connectionId } = await linked("react@parley.test")
-  await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/r", events: ["reaction.added", "reaction.removed"] })
+  await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/r", events: ["reaction.added", "reaction.removed"] })
   fake.simulator.deliver(connectionId, { id: "g1", threadId: "team", from: "bo", text: "lunch?" })
   await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 1)
   const r = (from: string, emoji: string, at: string, fromMe = false) => ({ threadId: "team", messageId: "g1", from, fromMe, emoji, at })
@@ -130,7 +131,7 @@ test("reactions: added, changed, removed; a late older one and a removal of noth
 test("a deletion names the message, not what it said; events a webhook didn't pick aren't sent to it", async () => {
   reset()
   const { accountId, connectionId } = await linked("delete@parley.test")
-  await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/d", events: ["message.deleted"] })
+  await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/d", events: ["message.deleted"] })
   fake.simulator.deliver(connectionId, { id: "x1", threadId: "ana", from: "ana", text: "oops, secret" })
   await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 1)
   fake.simulator.unsend(connectionId, [{ threadId: "ana", messageId: "x1" }, { threadId: "ana", messageId: "never-stored" }])
@@ -144,7 +145,7 @@ test("a deletion names the message, not what it said; events a webhook didn't pi
 test("media comes with what it is and an expiring download link", async () => {
   reset()
   const { accountId, connectionId } = await linked("media@parley.test")
-  await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/m" })
+  await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/m" })
   fake.simulator.deliver(connectionId, { id: "p1", threadId: "ana", from: "ana", text: "look", media: { kind: "image", mimetype: "image/jpeg", width: 8, height: 6, size: 12, ref: "ref-1" } })
   await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 1)
   await flush()
@@ -158,7 +159,7 @@ test("media comes with what it is and an expiring download link", async () => {
 test("three attempts at most: at once, after 30 s, after 5 min; a later success delivers", async () => {
   reset()
   const { accountId, connectionId } = await linked("retry@parley.test")
-  const { webhook } = await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/flaky" })
+  const { webhook } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/flaky" })
   answers = [500, 0, 503]
   fake.simulator.deliver(connectionId, { id: "f1", threadId: "ana", from: "ana", text: "one" })
   await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 1)
@@ -201,7 +202,7 @@ test("three attempts at most: at once, after 30 s, after 5 min; a later success 
 test("a webhook that's off gets nothing, and turning it off drops what was waiting; a test still goes", async () => {
   reset()
   const { accountId, connectionId } = await linked("off@parley.test")
-  const { webhook } = await ctx.webhooks.create(sql, accountId, { url: "https://hooks.example.com/off" })
+  const { webhook } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/off" })
   fake.simulator.deliver(connectionId, { id: "o1", threadId: "ana", from: "ana", text: "queued" })
   await waitUntil(async () => (await pending(accountId)).length, (n) => n === 1)
   await ctx.webhooks.update(sql, accountId, webhook.id, { enabled: false })
@@ -218,18 +219,19 @@ test("a webhook that's off gets nothing, and turning it off drops what was waiti
 
 test("URLs: public http(s) only, no credentials, at most ten per account; secrets rotate", async () => {
   const account = await store.upsertAccount(sql, { subject: "local:urls@parley.test", email: "urls@parley.test", name: "U", signedInWith: "local" })
+  const { connectionId } = await sessions.connect(account.id, "fake-wa", { timezone: "UTC" })
   for (const bad of ["ftp://x.example.com", "https://localhost/x", "http://127.0.0.1:8080/x", "https://169.254.169.254/latest/meta-data", "https://10.0.0.5/x",
     "https://[::1]/x", "https://[::ffff:127.0.0.1]/x", "https://db.internal/x", "https://user:pw@example.com/x", "not a url"]) {
-    await assert.rejects(ctx.webhooks.create(sql, account.id, { url: bad }), /URL|url/, bad)
+    await assert.rejects(ctx.webhooks.create(sql, account.id, { connectionId, url: bad }), /URL|url/, bad)
   }
   assert.throws(() => checkWebhookUrl("http://example.com/x", { allowHttp: false }), /must be https/)
   assert.equal(checkWebhookUrl(" https://example.com/x#frag ", { allowHttp: false }), "https://example.com/x")
-  await assert.rejects(ctx.webhooks.create(sql, account.id, { url: "https://example.com", events: ["message.nope"] }), /unknown event/)
-  await assert.rejects(ctx.webhooks.create(sql, account.id, { url: "https://example.com", events: [] }), /at least one/)
+  await assert.rejects(ctx.webhooks.create(sql, account.id, { connectionId, url: "https://example.com", events: ["message.nope"] }), /unknown event/)
+  await assert.rejects(ctx.webhooks.create(sql, account.id, { connectionId, url: "https://example.com", events: [] }), /at least one/)
 
   const made = []
-  for (let i = 0; i < MAX_WEBHOOKS; i++) made.push(await ctx.webhooks.create(sql, account.id, { url: `https://example.com/${i}` }))
-  await assert.rejects(ctx.webhooks.create(sql, account.id, { url: "https://example.com/too-many" }), /at most 10/)
+  for (let i = 0; i < MAX_WEBHOOKS; i++) made.push(await ctx.webhooks.create(sql, account.id, { connectionId, url: `https://example.com/${i}` }))
+  await assert.rejects(ctx.webhooks.create(sql, account.id, { connectionId, url: "https://example.com/too-many" }), /a number can have at most 10/)
 
   const { webhook, secret } = made[0]!
   assert.equal(await ctx.webhooks.secret(sql, account.id, webhook.id), secret)
@@ -285,16 +287,18 @@ test("the real sender refuses private addresses (even by name) and never follows
   }
 })
 
-test("agents manage webhooks over MCP, and the dashboard shows them", async () => {
+test("agents manage webhooks over MCP, and each number's page shows and configures them", async () => {
   reset()
   const email = "mcp-hooks@parley.test"
-  await linked(email)
+  const { connectionId: cid } = await linked(email)
   const token = await agentToken(base, email, "Hook Agent")
   const created = await callTool(base, token, "create_webhook", { url: "https://hooks.example.com/agent", events: ["message.received"], description: "CRM sync" })
   assert.equal(created.isError, false, JSON.stringify(created.result))
   assert.match(created.result.secret, /^whsec_/)
   assert.match(created.result.verify, /Parley-Signature/)
   assert.equal(created.result.created_by, "agent: Hook Agent")
+  assert.equal(created.result.connection_id, cid, "with one number, it's that one")
+  assert.equal(created.result.account, "+65 9136 3557")
   const id = created.result.id
 
   const bad = await callTool(base, token, "create_webhook", { url: "http://10.1.2.3/x" })
@@ -311,23 +315,29 @@ test("agents manage webhooks over MCP, and the dashboard shows them", async () =
   const listed = await callTool(base, token, "list_webhooks")
   assert.equal(listed.result.webhooks.length, 1)
   assert.equal(listed.result.webhooks[0].secret, undefined, "listing never shows the secret")
+  assert.equal(listed.result.webhooks[0].account, "+65 9136 3557")
   assert.equal(listed.result.webhooks[0].recent_deliveries[0].event, "webhook.test")
 
   const updated = await callTool(base, token, "update_webhook", { webhook_id: id, enabled: false, rotate_secret: true })
   assert.equal(updated.result.enabled, false)
   assert.notEqual(updated.result.secret, created.result.secret)
 
-  // The account holder sees it on the dashboard, with who made it.
+  // The account holder sees it on that number's page, with who made it.
   const cookie = (await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email }) })).headers.get("set-cookie")!.split(";")[0]!
-  const page = await (await fetch(`${base}/app/webhooks`, { headers: { cookie } })).text()
+  const pageOf = async () => (await fetch(`${base}/app/connections/${cid}`, { headers: { cookie } })).text()
+  const page = await pageOf()
+  assert.match(page, /id="webhooks"/)
   assert.match(page, /hooks\.example\.com\/agent/)
   assert.match(page, /agent: Hook Agent/)
   assert.match(page, /CRM sync/)
   assert.match(page, /webhook\.test/)
   assert.ok(!page.includes(updated.result.secret), "the secret isn't on the page unless asked for")
+  // The old top-level page sends people to the overview.
+  assert.equal((await fetch(`${base}/app/webhooks`, { headers: { cookie }, redirect: "manual" })).headers.get("location"), "/app")
 
   // Adding one from the page shows its secret right there, once.
-  const add = await fetch(`${base}/app/webhooks`, { method: "POST", headers: { cookie }, body: new URLSearchParams([["url", "https://hooks.example.com/dash"], ["events", "message.received"], ["events", "reaction.added"]]) })
+  const at = `${base}/app/connections/${cid}/webhooks`
+  const add = await fetch(at, { method: "POST", headers: { cookie }, body: new URLSearchParams([["url", "https://hooks.example.com/dash"], ["events", "message.received"], ["events", "reaction.added"]]) })
   assert.equal(add.status, 200)
   const added = await add.text()
   const secret = added.match(/whsec_[\w-]{43}/)?.[0]
@@ -335,42 +345,84 @@ test("agents manage webhooks over MCP, and the dashboard shows them", async () =
   const mine = (await callTool(base, token, "list_webhooks")).result.webhooks.find((w: { url: string }) => w.url === "https://hooks.example.com/dash")
   assert.deepEqual(mine.events, ["message.received", "reaction.added"])
   assert.equal(mine.created_by, "dashboard")
-  const reveal = await (await fetch(`${base}/app/webhooks/${mine.id}/secret`, { method: "POST", headers: { cookie } })).text()
+  assert.equal(mine.connection_id, cid)
+  const reveal = await (await fetch(`${at}/${mine.id}/secret`, { method: "POST", headers: { cookie } })).text()
   assert.ok(reveal.includes(secret!))
 
   // Everything else is configurable from the page too: edit, off/on, test, rotate.
-  const form = (action: string, body?: URLSearchParams) => fetch(`${base}/app/webhooks/${mine.id}/${action}`, { method: "POST", headers: { cookie }, body, redirect: "manual" })
+  const form = (action: string, body?: URLSearchParams) => fetch(`${at}/${mine.id}/${action}`, { method: "POST", headers: { cookie }, body, redirect: "manual" })
   const hook = async () => (await callTool(base, token, "list_webhooks")).result.webhooks.find((w: { id: string }) => w.id === mine.id)
   const edited = await form("update", new URLSearchParams([["url", "https://hooks.example.com/dash2"], ["description", "Edited"], ["events", "message.deleted"]]))
   assert.equal(edited.status, 302)
+  assert.equal(edited.headers.get("location"), `/app/connections/${cid}?webhook=saved#webhooks`)
   assert.deepEqual([(await hook()).url, (await hook()).description, (await hook()).events], ["https://hooks.example.com/dash2", "Edited", ["message.deleted"]])
   const badEdit = await form("update", new URLSearchParams([["url", "https://10.0.0.1/x"], ["events", "message.deleted"]]))
   assert.equal(badEdit.status, 400)
   assert.equal((await hook()).url, "https://hooks.example.com/dash2", "a refused edit changes nothing")
   await form("disable")
   assert.equal((await hook()).enabled, false)
-  assert.match(await (await fetch(`${base}/app/webhooks`, { headers: { cookie } })).text(), /Turn on/)
+  assert.match(await pageOf(), /Turn on/)
   await form("enable")
   assert.equal((await hook()).enabled, true)
   reset()
-  assert.equal((await form("test")).headers.get("location"), "/app/webhooks?done=tested")
-  await sessions.deliverWebhooks()
+  assert.equal((await form("test")).headers.get("location"), `/app/connections/${cid}?webhook=tested#webhooks`)
+  await flush()
   assert.equal(received.at(-1)!.url, "https://hooks.example.com/dash2")
   assert.ok(verifies(received.at(-1)!, secret!))
   const rotatedPage = await (await form("rotate")).text()
   const newSecret = rotatedPage.match(/whsec_[\w-]{43}/)?.[0]
   assert.ok(newSecret && newSecret !== secret)
   await form("test")
-  await sessions.deliverWebhooks()
+  await flush()
   assert.ok(verifies(received.at(-1)!, newSecret!), "signed with the rotated secret")
   assert.ok(!verifies(received.at(-1)!, secret!))
 
-  const rejected = await fetch(`${base}/app/webhooks`, { method: "POST", headers: { cookie }, body: new URLSearchParams({ url: "https://localhost/x" }) })
+  const rejected = await fetch(at, { method: "POST", headers: { cookie }, body: new URLSearchParams({ url: "https://localhost/x" }) })
   assert.equal(rejected.status, 400)
   assert.match(await rejected.text(), /public internet/)
 
-  await fetch(`${base}/app/webhooks/${mine.id}/delete`, { method: "POST", headers: { cookie }, redirect: "manual" })
+  // Someone else's number or webhook: not found.
+  const other = await linked("nosy-hooks@parley.test", "447700900222@s.whatsapp.net")
+  assert.equal((await fetch(`${base}/app/connections/${other.connectionId}/webhooks`, { method: "POST", headers: { cookie }, body: new URLSearchParams({ url: "https://example.com/x" }) })).status, 404)
+  assert.equal((await fetch(`${base}/app/connections/${other.connectionId}/webhooks/${mine.id}/delete`, { method: "POST", headers: { cookie }, redirect: "manual" })).status, 404)
+
+  await form("delete")
   const deleted = await callTool(base, token, "delete_webhook", { webhook_id: id })
   assert.equal(deleted.isError, false)
   assert.equal((await callTool(base, token, "list_webhooks")).result.webhooks.length, 0)
+})
+
+test("each number has its own webhooks: the overview says which have them, and a relink keeps them", async () => {
+  reset()
+  const email = "two-numbers@parley.test"
+  const a = await linked(email, "6591110000@s.whatsapp.net")
+  const b = await linked(email, "6592220000@s.whatsapp.net")
+  const token = await agentToken(base, email, "Hook Agent")
+  // With two numbers an agent has to say which.
+  const which = await callTool(base, token, "create_webhook", { url: "https://hooks.example.com/which" })
+  assert.equal(which.isError, true)
+  const onA = await callTool(base, token, "create_webhook", { connection_id: "+65 9111 0000", url: "https://hooks.example.com/a" })
+  assert.equal(onA.result.connection_id, a.connectionId)
+
+  fake.simulator.deliver(b.connectionId, { id: "b1", threadId: "ana", from: "ana", text: "to B" })
+  fake.simulator.deliver(a.connectionId, { id: "a1", threadId: "ana", from: "ana", text: "to A" })
+  await waitUntil(async () => (await sessions.inbox(a.accountId, { limit: 5 })).length, (n) => n === 2)
+  await flush()
+  assert.deepEqual(received.map((r) => [r.url, r.body.data.message.id]), [["https://hooks.example.com/a", "a1"]], "B's message doesn't reach A's webhook")
+
+  const cookie = (await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email }) })).headers.get("set-cookie")!.split(";")[0]!
+  const overview = await (await fetch(`${base}/app`, { headers: { cookie } })).text()
+  const card = (cid: string) => overview.match(new RegExp(`href="/app/connections/${cid}#webhooks">([\\s\\S]*?)</a>`))?.[1] ?? ""
+  assert.match(card(a.connectionId), /Webhooks<\/span><span class="m">1</)
+  assert.match(card(b.connectionId), /Configure/)
+  assert.match(await (await fetch(`${base}/app/connections/${b.connectionId}`, { headers: { cookie } })).text(), /Configure a webhook/)
+
+  // Linking number A again replaces its old connection; the webhook comes along.
+  reset()
+  const again = await linked(email, "6591110000@s.whatsapp.net")
+  await waitUntil(async () => (await ctx.webhooks.list(sql, a.accountId, { connectionId: again.connectionId })).length, (n) => n === 1)
+  fake.simulator.deliver(again.connectionId, { id: "a2", threadId: "ana", from: "ana", text: "after relink" })
+  await waitUntil(async () => (await pending(a.accountId)).length, (n) => n === 1)
+  await flush()
+  assert.deepEqual(received.map((r) => [r.url, r.body.connection.id]), [["https://hooks.example.com/a", again.connectionId]])
 })

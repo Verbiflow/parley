@@ -1,4 +1,5 @@
 import type { Sql } from "@parley/auth/db"
+import { moveWebhooks } from "./webhooks.ts"
 
 /** CRUD for `parley.connection`. Channel-neutral — `channel` is text and never switched on here. */
 
@@ -114,6 +115,7 @@ export async function supersede(sql: Sql, id: string): Promise<string[]> {
        where n.id = $1`,
       [id, rows.map((r) => r.id)]
     )
+    await moveWebhooks(sql, rows.map((r) => r.id), id)
   }
   return rows.map((r) => r.id)
 }
