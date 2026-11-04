@@ -143,6 +143,9 @@ export function webRoutes(ctx: AppContext): Hono {
     const form = await c.req.formData().catch(() => undefined)
     const timezone = String(form?.get("timezone") ?? "")
     const country = String(form?.get("country") ?? "")
+    // A link still waiting for its scan is where "add a number" picks up, rather than a second pending link.
+    const pending = (await ctx.sessions.list(userId)).find((x) => x.channel === "whatsapp" && x.status === "linking" && !x.handle)
+    if (pending) return c.redirect(`/link/${pending.id}`)
     try {
       const started = await ctx.sessions.connect(userId, "whatsapp", {
         timezone: isValidTimeZone(timezone) && timezone ? timezone : undefined,

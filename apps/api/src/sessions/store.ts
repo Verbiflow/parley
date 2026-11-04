@@ -65,6 +65,35 @@ export async function markConnected(sql: Sql, id: string, handle: string, countr
   )
 }
 
+/** The account a handle names, without the device part: "6591363557:12@s.whatsapp.net" → "6591363557". */
+const ACCOUNT_OF = (col: string) => `(case when ${col} like '%@%' then split_part(split_part(${col}, '@', 1), ':', 1) || '@' || split_part(${col}, '@', 2) else ${col} end)`
+
+/**
+ * Older links of the same account (same person, channel and number) as this freshly opened one — what linking a
+ * number again replaces. The new link takes over what the old ones ignored, so relinking never un-ignores a chat.
+ */
+export async function supersede(sql: Sql, id: string): Promise<string[]> {
+  const rows = await sql<{ id: string }>(
+    `select o.id from parley.connection n join parley.connection o
+        on o.account_id = n.account_id and o.channel = n.channel and o.id <> n.id and o.created_at < n.created_at
+       and o.status <> 'logged_out' and o.handle is not null and ${ACCOUNT_OF("o.handle")} = ${ACCOUNT_OF("n.handle")}
+      where n.id = $1 and n.handle is not null`,
+    [id]
+  )
+  if (rows.length) {
+    await sql(
+      `update parley.connection n set ignored_chats = coalesce((
+         select jsonb_agg(distinct x) from (
+           select jsonb_array_elements_text(n.ignored_chats) x
+           union select jsonb_array_elements_text(o.ignored_chats) from parley.connection o where o.id = any($2::uuid[])
+         ) s), '[]'::jsonb), updated_at = now()
+       where n.id = $1`,
+      [id, rows.map((r) => r.id)]
+    )
+  }
+  return rows.map((r) => r.id)
+}
+
 /** Record the link-time history sync's progress. Progress only moves forward; `done` stamps when it settled. */
 export async function setHistorySync(sql: Sql, id: string, progress: number | null, done: boolean): Promise<void> {
   await sql(
