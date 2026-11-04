@@ -85,6 +85,12 @@ export function reactionOf(m: WAMessage): RawReaction | undefined {
   return { reactor: m.key, target: r.key.id, emoji: r.text ?? "", atMs: num(r.senderTimestampMs) || num(m.messageTimestamp) * 1000 }
 }
 
+/** A "delete for everyone": the id of the message it takes back (in the same chat). Undefined for anything else. */
+export function revokedOf(m: WAMessage): string | undefined {
+  const p = normalizeMessageContent(m.message)?.protocolMessage
+  return p?.type === proto.Message.ProtocolMessage.Type.REVOKE && p.key?.id ? p.key.id : undefined
+}
+
 /** The reactions a history message already had (history carries them on the message, not as messages of their own). */
 export function embeddedReactions(m: WAMessage): RawReaction[] {
   if (!m.key.id) return []

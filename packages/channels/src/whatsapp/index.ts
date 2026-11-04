@@ -6,7 +6,7 @@ import { proxyAgent } from "@parley/proxies/agent"
 import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions, type OutboundContent, type Reaction } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 import { Readable } from "node:stream"
-import { textOf, mediaOf, messageOfRef, reactionOf, embeddedReactions, mp4Seconds, type RawReaction } from "./parse.ts"
+import { textOf, mediaOf, messageOfRef, reactionOf, revokedOf, embeddedReactions, mp4Seconds, type RawReaction } from "./parse.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
 // Baileys wants a pino-like logger. Keep it quiet except errors, which go to the service log as one JSON line (Baileys'
@@ -60,9 +60,15 @@ const seconds = (t: unknown): string | undefined => {
   return n > 0 ? new Date(n * 1000).toISOString() : undefined
 }
 
-/** A send in Baileys' terms: plain text, a file with its caption, or a reaction to a stored message. */
+/** A send in Baileys' terms: plain text, a file with its caption, a reaction to a stored message, or a deletion of one. */
 function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
-  const { text, media, react } = content
+  const { text, media, react, unsend } = content
+  if (unsend) {
+    const key: WAMessageKey = { remoteJid: jid, id: unsend.messageId, fromMe: unsend.fromMe }
+    // A group admin deleting someone else's message names whose it was.
+    if (isJidGroup(jid) && !unsend.fromMe && unsend.sender) key.participant = toJid(unsend.sender)
+    return { delete: key }
+  }
   if (react) {
     const key: WAMessageKey = { remoteJid: jid, id: react.messageId, fromMe: react.fromMe }
     if (isJidGroup(jid) && !react.fromMe && react.sender) key.participant = toJid(react.sender)
@@ -274,9 +280,18 @@ export const whatsappChannel: Channel = {
         }))
       }
     }
+    /** A "delete for everyone" (by the other person, or by the account from any of its devices): which message it took back. */
+    const deletionOf = (m: WAMessage): { threadId: string; messageId: string } | undefined => {
+      const raw = m.key.remoteJid
+      const target = revokedOf(m)
+      if (!target || !isChatJid(raw)) return undefined
+      if (!isJidGroup(raw)) pair(raw, m.key.remoteJidAlt)
+      return { threadId: canon(raw), messageId: target }
+    }
     const handleMessages = (messages: WAMessage[]) => {
       for (const m of messages) traceProtocol(m)
       const reactions = messages.map(reactionMessageOf).filter((r): r is Reaction => Boolean(r))
+      const deleted = messages.map(deletionOf).filter((d): d is { threadId: string; messageId: string } => Boolean(d))
       const chats: Chat[] = []
       for (const m of messages) {
         const msg = messageOf(m)
@@ -292,6 +307,7 @@ export const whatsappChannel: Channel = {
       else for (let i = 0; i < out.length; i += 500) emit({ type: "messages", messages: out.slice(i, i + 500) })
       // After the messages, so a reaction that came in the same batch as its message finds it stored.
       if (reactions.length) emit({ type: "reactions", reactions })
+      if (deleted.length) emit({ type: "deleted", messages: deleted })
     }
 
     /**

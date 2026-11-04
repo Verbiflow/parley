@@ -13,7 +13,7 @@ type ConnState = {
 }
 
 export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities>): ChannelFake {
-  const caps: Capabilities = { linkMethod: "qr", media: false, groups: false, threads: true, presence: false, ...capabilities }
+  const caps: Capabilities = { linkMethod: "qr", media: false, groups: false, threads: true, presence: false, unsend: true, ...capabilities }
   const conns = new Map<string, ConnState>()
   const failNext = new Set<string>()
   const failSend = new Map<string, SendOutcome>()
@@ -86,6 +86,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
       conn.emit({ type: "reactions", reactions })
+    },
+    unsend(connectionId, messages) {
+      const conn = conns.get(connectionId)
+      if (!conn) throw new Error(`no open connection ${connectionId}`)
+      conn.emit({ type: "deleted", messages })
     },
     announceChats(connectionId, chats: Chat[]) {
       const conn = conns.get(connectionId)

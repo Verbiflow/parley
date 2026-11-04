@@ -1,7 +1,7 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
-import type { DailyUsage, Outbound } from "../sessions/outbox.ts"
+import { UNSEND_WINDOW_MS, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
   CHANNELS, LOGO, agentMark, ago, appShell, avatar, bar, brandMark, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
@@ -265,6 +265,7 @@ function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; st
 const MEDIA_LABEL: Record<string, string> = { image: "photo", video: "video", audio: "audio", document: "document" }
 /** How a queued send reads in a list: its text, with what it carries when it's a file or a reaction. */
 function outText(m: Outbound): string {
+  if (m.unsend) return "deleted a message for everyone"
   if (m.reactTo) return m.text ? `reacted ${m.text}` : "took back a reaction"
   if (m.media) return `[${MEDIA_LABEL[m.media.kind] ?? m.media.kind}${m.media.fileName && m.media.kind === "document" ? `: ${m.media.fileName}` : ""}]${m.text ? ` ${m.text}` : ""}`
   return m.text
@@ -346,6 +347,11 @@ export function dashboardPage(opts: {
 
 // ---- Outbox -------------------------------------------------------------------------------------------------------
 
+/** A sent message (not a reaction or a deletion) still young enough to delete for everyone. */
+function unsendable(m: Outbound): boolean {
+  return m.status === "sent" && !m.reactTo && !m.unsend && Boolean(m.sentAt) && Date.parse(m.sentAt!) + UNSEND_WINDOW_MS > Date.now()
+}
+
 export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: Outbound[]; connections: Connection[]; agentCount: number; filter: "scheduled" | "recent" }): string {
   const byId = new Map(opts.connections.map((c) => [c.id, c]))
   const scheduled = opts.filter === "scheduled"
@@ -359,7 +365,9 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: 
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
       <td class="m">${scheduled ? (m.scheduledFor ? esc(until(m.scheduledFor, tz)) : `<span class="faint">held — channel paused</span>`) : outcome(m)}</td>
       <td class="m faint">${scheduled ? (m.scheduledFor ? `${clock(m.scheduledFor, tz)} ${esc(tz.split("/").pop()!.replace(/_/g, " ").toLowerCase())}` : "") : ago(m.sentAt ?? m.createdAt)}</td>
-      <td class="r">${scheduled ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">cancel</button></form>` : ""}</td>
+      <td class="r">${scheduled
+        ? `<form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">cancel</button></form>`
+        : unsendable(m) ? `<form method="post" action="/app/outbox/${esc(m.id)}/unsend"><button class="btn quiet sm" type="submit" title="Delete it for everyone in the chat">delete</button></form>` : ""}</td>
     </tr>`
   }).join("")
   return appShell({
@@ -377,7 +385,7 @@ const TOOL_LABEL: Record<string, string> = {
   read_inbox: "read your inbox", list_chats: "listed your chats", send_message: "queued a message", connect: "started linking a channel",
   connection_status: "checked a connection", list_connections: "listed connections", list_channels: "listed channels",
   send_availability: "checked when it can send", list_outbox: "read the outbox", cancel_message: "canceled a message",
-  react_to_message: "queued a reaction", get_media: "opened a photo or file", message_status: "checked on a queued message",
+  react_to_message: "queued a reaction", delete_message: "deleted a sent message", get_media: "opened a photo or file", message_status: "checked on a queued message",
 }
 function activity(a: AgentView): string {
   if (!a.lastUsedAt) return `Authorized ${ago(a.connectedAt)} · hasn't used Parley yet`

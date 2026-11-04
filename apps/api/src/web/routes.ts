@@ -8,7 +8,7 @@ import { workosClient, redirectUri } from "./workos.ts"
 import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
-import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, listOutbound, resume } from "../sessions/outbox.ts"
+import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listOutbound, resume } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
@@ -227,6 +227,23 @@ export function webRoutes(ctx: AppContext): Hono {
     })
     const back = String((await c.req.formData().catch(() => undefined))?.get("back") ?? "")
     return c.redirect(/^\/app\/[\w/-]*$/.test(back) ? back : "/app/outbox")
+  })
+
+  // Delete a sent message for everyone: queued like any other send, so it shows under scheduled until it goes out.
+  app.post("/app/outbox/:id/unsend", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const id = c.req.param("id")
+    const m = await getOutbound(ctx.sql, userId, id).catch((e) => {
+      if (e instanceof OutboxError) return undefined
+      throw e
+    })
+    if (m) {
+      await ctx.sessions.enqueue(userId, m.connectionId, { to: m.chatId, text: "", unsend: id }).catch((e) => {
+        if (!(e instanceof OutboxError)) throw e
+      })
+    }
+    return c.redirect("/app/outbox")
   })
 
   app.get("/app/network", async (c) => {

@@ -18,6 +18,8 @@ export type Capabilities = {
   threads: boolean
   /** Does it report presence/typing? */
   presence: boolean
+  /** Can the account delete a message it sent, for everyone in the chat? */
+  unsend: boolean
 }
 
 /**
@@ -59,12 +61,13 @@ export type CallKind = "incoming" | "outgoing" | "missed"
 export type Chat = { id: string; name: string | null; kind: "direct" | "group"; lastMessageAt?: string | undefined; lastCall?: { at: string; kind: CallKind } | undefined }
 /**
  * What to send. `text` alone is a message. With `media`, it's a photo/video/voice note/document and `text` is its
- * caption (may be empty). With `react`, it's a reaction: `text` is the emoji, empty to take a reaction back.
+ * caption (may be empty). With `react`, it's a reaction: `text` is the emoji, empty to take a reaction back. With
+ * `unsend`, it deletes that message (one the account sent) for everyone in the chat; `text` is ignored.
  */
-export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined }
+export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined; unsend?: ReactTarget | undefined }
 /** A file to send, already fetched: the bytes and what they are. */
 export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined; seconds?: number | undefined }
-/** The message a reaction is for, as stored: its id, whether the account sent it, and (in a group) who did. */
+/** The message a reaction (or a deletion) is for, as stored: its id, whether the account sent it, and (in a group) who did. */
 export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
 /** A stored message to fetch history from (backwards): which chat, which message, who sent it, when. */
@@ -92,6 +95,8 @@ export type ChannelEvent =
   | { type: "message"; message: InboundMessage }
   /** Reactions added, changed or taken back on messages already seen. */
   | { type: "reactions"; reactions: Reaction[] }
+  /** Messages their sender deleted for everyone (from a phone, or through Parley): forget them. */
+  | { type: "deleted"; messages: Array<{ threadId: string; messageId: string }> }
   /** The connection closed. `reason` is for logs/UI, not control flow. */
   | { type: "closed"; reason: string }
 
@@ -165,6 +170,8 @@ export interface ChannelSimulator {
   deliver(connectionId: string, message: { id?: string; at?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
   /** Simulate reactions arriving (added, changed or taken back). */
   react(connectionId: string, reactions: Reaction[]): void
+  /** Simulate messages being deleted for everyone. */
+  unsend(connectionId: string, messages: Array<{ threadId: string; messageId: string }>): void
   /** Simulate the channel reporting the account's chats (as on first link / history sync). */
   announceChats(connectionId: string, chats: Chat[]): void
   /** Make the next `open(connectionId)` fail. */

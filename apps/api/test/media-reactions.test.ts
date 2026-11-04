@@ -6,7 +6,7 @@ import { getOutbound } from "../src/sessions/outbox.ts"
 import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
-const textOnly = makeFakeChannel("fake-txt")
+const textOnly = makeFakeChannel("fake-txt", { unsend: false })
 // Sending from a URL downloads on the sessions service; here a stand-in serves a few known files.
 const served: Record<string, { body: string; type?: string }> = {
   "https://cdn.example.com/clip.mp4": { body: "mp4-bytes", type: "video/mp4" },
@@ -268,4 +268,71 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
 
   const other = await store.upsertAccount(sql, { subject: "local:nosy2@parley.test", email: "nosy2@parley.test", name: "N", signedInWith: "local" })
   await assert.rejects(sessions.loadHistory(other.id, connectionId, "ana", 5), /not your connection/)
+})
+
+test("deleting a sent message for everyone: by its outbox id or its inbox id, paced, only the account's own and only for ~2 days", async () => {
+  const email = "unsend@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const { accountId, connectionId } = await linked(email)
+  const hour = 60 * 60 * 1000
+  const at = (ms: number) => new Date(T0.getTime() + ms)
+  fake.simulator.deliver(connectionId, { id: "mine", threadId: "ana", from: "me", fromMe: true, text: "typo", at: at(-hour).toISOString() })
+  fake.simulator.deliver(connectionId, { id: "hers", threadId: "ana", from: "ana", text: "hi", at: at(-hour).toISOString() })
+  fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "me", fromMe: true, text: "ages ago", at: at(-49 * hour).toISOString() })
+  fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: at(-2 * hour).toISOString() })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 4)
+  const dispatch = async (q: { message: { scheduledFor: string | null } }) => sessions.dispatchDue(new Date(Date.parse(q.message.scheduledFor!) + 1000))
+
+  // One sent through Parley, deleted by the id send_message returned.
+  const sent = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "wrong chat" }, T0)
+  await dispatch(sent)
+  const externalId = `msg-${fake.simulator.sent(connectionId).length}`
+  const del = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "ignored", unsend: sent.message.id }, T0)
+  assert.equal(del.message.unsend, externalId)
+  assert.equal(del.message.kind, "message")
+  assert.equal(del.message.text, "")
+  await dispatch(del)
+  assert.deepEqual(fake.simulator.sent(connectionId).at(-1)!.content.unsend, { messageId: externalId, fromMe: true })
+  assert.equal((await getOutbound(sql, accountId, del.message.id)).status, "sent")
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: sent.message.id }, T0), /already being deleted/)
+
+  // One from the phone, by its read_inbox id, over MCP: gone from the inbox once it's out.
+  const viaMcp = await callTool(base, token, "delete_message", { connection_id: connectionId, chat_id: "ana", message_id: "mine" })
+  assert.equal(viaMcp.isError, false, String(viaMcp.result))
+  assert.equal(viaMcp.result.deletes, "mine")
+  await dispatch({ message: { scheduledFor: viaMcp.result.scheduled_for } })
+  assert.deepEqual(fake.simulator.sent(connectionId).at(-1)!.content.unsend, { messageId: "mine", fromMe: true })
+  assert.ok(!(await sessions.inbox(accountId, { limit: 10 })).some((m) => m.id === "mine"))
+  assert.match((await callTool(base, token, "message_status", { message_id: viaMcp.result.id })).result.note, /The deletion went out/)
+
+  // Not someone else's, not a stale one, not one still queued (cancel that), and a read_inbox id needs its chat.
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "hers" }, T0), /only messages the account sent/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "old" }, T0), /about two days/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "nope" }, T0), /no such message/)
+  assert.match((await callTool(base, token, "delete_message", { message_id: "mine" })).result, /pass chat_id/)
+
+  // Queued in time, but by the time its slot comes up it's too late (here: the message turns out older than it was
+  // when queued): it fails without reaching the platform.
+  const before = fake.simulator.sent(connectionId).length
+  const late = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "edge" }, T0)
+  await sql(`update parley.message set sent_at = $2 where connection_id = $1 and id = 'edge'`, [connectionId, at(-49 * hour)])
+  await dispatch(late)
+  assert.equal(fake.simulator.sent(connectionId).length, before)
+  const failed = await getOutbound(sql, accountId, late.message.id)
+  assert.equal(failed.status, "failed")
+  assert.equal(failed.error?.code, "too_late")
+
+  const queued = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "later", notBefore: at(5 * hour) }, T0)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: queued.message.id }, T0), /cancel_message/)
+
+  // The other person deleting theirs: it drops out of the inbox, reactions and all.
+  fake.simulator.unsend(connectionId, [{ threadId: "ana", messageId: "hers" }])
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => !ms.some((m) => m.id === "hers"))
+})
+
+test("a channel that can't delete sent messages refuses up front", async () => {
+  const { accountId, connectionId } = await linked("unsend-txt@parley.test", "fake-txt", textOnly.simulator)
+  textOnly.simulator.deliver(connectionId, { id: "t1", threadId: "ana", from: "me", fromMe: true, text: "hey" })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 5 }), (ms) => ms.length === 1)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", unsend: "t1" }, T0), /can't delete sent messages/)
 })
