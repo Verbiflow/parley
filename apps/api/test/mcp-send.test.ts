@@ -38,8 +38,19 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: "2099-01-01T12:00:00Z" })
   const queued = (await callTool(base, token, "list_outbox", { status: "scheduled" })).result.messages
   assert.deepEqual(queued.map((m: { id: string }) => m.id).sort(), [sent.result.id, second.result.id].sort())
+  assert.match(second.result.next, /message_status/)
+  const waiting2 = await callTool(base, token, "message_status", { message_id: second.result.id })
+  assert.equal(waiting2.isError, false)
+  assert.equal(waiting2.result.status, "scheduled")
+  assert.equal(waiting2.result.scheduled_for, "2099-01-01T12:00:00.000Z")
+  assert.match(waiting2.result.note, /waiting its turn/)
   const canceled = await callTool(base, token, "cancel_message", { message_id: second.result.id })
   assert.equal(canceled.result.status, "canceled")
+  assert.equal((await callTool(base, token, "message_status", { message_id: second.result.id })).result.status, "canceled")
+  assert.equal((await callTool(base, token, "message_status", { message_id: "nope" })).isError, true)
+  const otherToken = await agentToken(base, "agent-nosy@parley.test", "Nosy")
+  const nosy = await callTool(base, otherToken, "message_status", { message_id: sent.result.id })
+  assert.equal(nosy.isError, true)
 
   // A synced chat whose last word was theirs is waiting on the agent.
   fake.simulator.announceChats(connectionId, [{ id: "sam", name: "Sam", kind: "direct" }, { id: "kim", name: "Kim", kind: "direct" }])

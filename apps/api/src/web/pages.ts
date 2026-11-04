@@ -485,7 +485,7 @@ const TOOL_LABEL: Record<string, string> = {
   read_inbox: "read your inbox", list_chats: "listed your chats", send_message: "queued a message", connect: "started linking a channel",
   connection_status: "checked a connection", list_connections: "listed connections", list_channels: "listed channels",
   send_availability: "checked when it can send", list_outbox: "read the outbox", cancel_message: "canceled a message",
-  react_to_message: "queued a reaction", get_media: "opened a photo or file",
+  react_to_message: "queued a reaction", get_media: "opened a photo or file", message_status: "checked on a queued message",
 }
 function activity(a: AgentView): string {
   if (!a.lastUsedAt) return `Authorized ${ago(a.connectedAt)} · hasn't used Parley yet`
