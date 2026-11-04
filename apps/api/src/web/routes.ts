@@ -308,6 +308,8 @@ export function webRoutes(ctx: AppContext): Hono {
     await ctx.sessions.logout(userId, old.id).catch(() => {})
     try {
       const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined })
+      // The new link keeps what was ignored (by number / group id), so a rebuilt list doesn't un-ignore anything.
+      await ctx.sql(`update parley.connection n set ignored_chats = o.ignored_chats from parley.connection o where n.id = $1 and o.id = $2`, [started.connectionId, old.id])
       return c.redirect(`/link/${started.connectionId}`)
     } catch (e) {
       if (e instanceof ConnectError && e.code === "no_exit") return c.redirect(`/app/network?error=${encodeURIComponent(e.message)}`)

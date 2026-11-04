@@ -3,7 +3,8 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { testServer } from "./support.ts"
-import { nameChats, setIgnored } from "../src/sessions/chats.ts"
+import { nameChats, setIgnored, mergeChats } from "../src/sessions/chats.ts"
+import { setHistorySync } from "../src/sessions/store.ts"
 
 const fake = makeFakeChannel("fake")
 const { ctx, sql, base } = await testServer([fake.channel])
@@ -133,12 +134,21 @@ test("relink signs the old link out and opens a fresh QR for the same account; n
   await waitUntil(() => sessions.chats(accountId, oldId), (c) => c.length === 1)
   assert.match(await (await fetch(`${base}/app/connections/${oldId}/chats`, { headers: { cookie } })).text(), new RegExp(`action="/app/connections/${oldId}/relink"`))
 
+  // Ignore the group first: the new link must keep that.
+  await setIgnored(sql, oldId, ["club"], true)
   const res = await fetch(`${base}/app/connections/${oldId}/relink`, { method: "POST", redirect: "manual", headers: { cookie } })
   assert.equal(res.status, 302)
   const newId = res.headers.get("location")!.match(/\/link\/([0-9a-f-]{36})/)![1]!
   assert.notEqual(newId, oldId)
   const all = await sessions.list(accountId)
   assert.equal(all.find((c) => c.id === oldId)?.status, "logged_out")
+  // The ignore carried over by id: when the group turns up on the new link, it's already ignored.
+  fake.simulator.completeLink(newId)
+  await waitUntil(() => sessions.status(accountId, newId), (st) => st.status === "connected")
+  fake.simulator.announceChats(newId, [{ id: "club", name: "Club", kind: "group" }, { id: "other", name: "Other", kind: "group" }])
+  const fresh = await waitUntil(() => sessions.chats(accountId, newId), (c) => c.length === 2)
+  assert.equal(fresh.find((c) => c.id === "club")!.synced, false)
+  assert.equal(fresh.find((c) => c.id === "other")!.synced, true)
   assert.ok(all.find((c) => c.id === newId))
 })
 
@@ -176,4 +186,59 @@ test("a call is activity: it moves the chat up, and the list says which way the 
   const html = await (await fetch(`${base}/app/connections/${connectionId}/chats`, { headers: { cookie: await browser("caller@parley.test") } })).text()
   assert.match(html, /class="s miss">Missed call</)
   assert.match(html, /contact · called /)
+})
+
+test("one person, two ids: the private-id row folds into the phone-number row (call, name, messages), no duplicate", async () => {
+  const { accountId, connectionId } = await linked("merger@parley.test")
+  fake.simulator.announceChats(connectionId, [
+    { id: "123@lid", name: "Akshaya Direct", kind: "direct", lastCall: { at: "2026-11-03T10:00:00.000Z", kind: "outgoing" } },
+    { id: "16024132657@s.whatsapp.net", name: null, kind: "direct", lastMessageAt: "2026-11-03T09:00:00.000Z" },
+  ])
+  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 2)
+  fake.simulator.deliver(connectionId, { threadId: "123@lid", from: "123@lid", text: "under the private id" })
+  fake.simulator.deliver(connectionId, { threadId: "16024132657@s.whatsapp.net", from: "x", text: "under the number" })
+  await waitUntil(() => sessions.messages(accountId, connectionId, "16024132657@s.whatsapp.net", { limit: 10 }), (r) => r.messages.length === 1)
+  await waitUntil(() => sessions.messages(accountId, connectionId, "123@lid", { limit: 10 }), (r) => r.messages.length === 1)
+
+  await mergeChats(sql, connectionId, [{ from: "123@lid", to: "16024132657@s.whatsapp.net" }])
+  const chats = await sessions.chats(accountId, connectionId)
+  assert.deepEqual(chats.map((c) => c.id), ["16024132657@s.whatsapp.net"])
+  assert.equal(chats[0]!.name, "Akshaya Direct")
+  assert.equal(chats[0]!.lastCallKind, "outgoing")
+  assert.equal(chats[0]!.lastMessageAt! >= "2026-11-03T10:00:00.000Z", true)
+  const read = await sessions.messages(accountId, connectionId, "16024132657@s.whatsapp.net", { limit: 10 })
+  assert.deepEqual(read.messages.map((m) => m.text).sort(), ["under the number", "under the private id"])
+  // Merging again (or a pair with nothing behind it) is a no-op.
+  await mergeChats(sql, connectionId, [{ from: "123@lid", to: "16024132657@s.whatsapp.net" }, { from: "nobody@lid", to: "1@s.whatsapp.net" }])
+  assert.equal((await sessions.chats(accountId, connectionId)).length, 1)
+})
+
+test("while a fresh link syncs, the chat page shows progress; once settled it doesn't", async () => {
+  const { connectionId } = await linked("syncer@parley.test")
+  fake.simulator.announceChats(connectionId, [{ id: "g", name: "G", kind: "group" }])
+  const cookie = await browser("syncer@parley.test")
+  const page = async () => (await fetch(`${base}/app/connections/${connectionId}/chats`, { headers: { cookie } })).text()
+  await waitUntil(page, (h) => h.includes('data-id="g"'))
+  await setHistorySync(sql, connectionId, 42, false)
+  assert.match(await page(), /Syncing your chats from \w+ · 42%/)
+  await setHistorySync(sql, connectionId, 10, false) // progress never goes backwards
+  assert.match(await page(), /· 42%/)
+  await setHistorySync(sql, connectionId, 100, true)
+  assert.doesNotMatch(await page(), /Syncing your chats/)
+})
+
+test("an ignore made under a private id carries to the number once they're matched", async () => {
+  const { accountId, connectionId } = await linked("lidignore@parley.test")
+  fake.simulator.announceChats(connectionId, [{ id: "9@lid", name: "Sam", kind: "direct", lastMessageAt: "2026-11-03T09:00:00.000Z" }])
+  await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.length === 1)
+  await setIgnored(sql, connectionId, ["9@lid"], true)
+  await mergeChats(sql, connectionId, [{ from: "9@lid", to: "6599990000@s.whatsapp.net" }])
+  const [row] = await sessions.chats(accountId, connectionId)
+  assert.equal(row!.id, "6599990000@s.whatsapp.net")
+  assert.equal(row!.synced, false)
+  // And a message to that number later isn't kept.
+  fake.simulator.deliver(connectionId, { threadId: "6599990000@s.whatsapp.net", from: "x", text: "nope" })
+  await new Promise((r) => setTimeout(r, 100))
+  const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
+  assert.equal(n, "0")
 })

@@ -47,6 +47,10 @@ export type ChannelEvent =
   | { type: "chats"; chats: Chat[] }
   /** Names for one-to-one chats (e.g. the address book). Only names chats the host already has; never adds any. */
   | { type: "names"; names: Array<{ id: string; name: string }> }
+  /** `from` and `to` turned out to be the same chat (e.g. a private id and a phone number): fold `from` into `to`. */
+  | { type: "merge"; pairs: Array<{ from: string; to: string }> }
+  /** The link-time history sync: `progress` 0–100 when the channel knows it; `done` once it has settled. */
+  | { type: "sync"; progress: number | null; done: boolean }
   /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
   | { type: "message"; message: InboundMessage }
   /** The connection closed. `reason` is for logs/UI, not control flow. */

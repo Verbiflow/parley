@@ -85,10 +85,24 @@ export const whatsappChannel: Channel = {
     // WhatsApp addresses a person by phone number (…@s.whatsapp.net) or by a private id (…@lid). Private ids we've
     // seen paired with a number, so a person is one chat under their number, not two (or one opaque id).
     const phoneOfLid = new Map<string, string>()
+    // Newly learned pairs, sent to the host in one batch per tick: a person filed under their private id before we knew
+    // their number (a call log entry, say) is folded into their phone-number chat, so nobody is listed twice.
+    let merges: Array<{ from: string; to: string }> = []
     const pair = (a?: string | null, b?: string | null) => {
       const ids = [a, b].filter((x): x is string => Boolean(x)).map(jidNormalizedUser)
       const lid = ids.find((j) => j.endsWith("@lid")), pn = ids.find((j) => j.endsWith("@s.whatsapp.net"))
-      if (lid && pn) phoneOfLid.set(lid, pn)
+      if (!lid || !pn || phoneOfLid.get(lid) === pn) return
+      phoneOfLid.set(lid, pn)
+      const old = known.get(lid)
+      if (old) {
+        known.delete(lid)
+        const cur = known.get(pn)
+        known.set(pn, { ...old, ...cur, id: pn, name: cur?.name ?? old.name,
+          lastMessageAt: [old.lastMessageAt, cur?.lastMessageAt].filter(Boolean).sort().pop(),
+          lastCall: !cur?.lastCall || (old.lastCall && old.lastCall.at > cur.lastCall.at) ? old.lastCall ?? cur?.lastCall : cur.lastCall })
+      }
+      if (!merges.length) queueMicrotask(() => { const pairs = merges; merges = []; if (pairs.length) emit({ type: "merge", pairs }) })
+      merges.push({ from: lid, to: pn })
     }
     /** The id a direct chat is kept under: its phone-number form when we know it. Groups are unchanged. */
     const canon = (jid: string): string => (jid.endsWith("@lid") ? phoneOfLid.get(jidNormalizedUser(jid)) ?? jid : jid)
@@ -229,6 +243,21 @@ export const whatsappChannel: Channel = {
     }
     const called = (jid: string, at: string, kind: CallKind): Chat => ({ ...chatOf(jid, null, at), lastCall: { at, kind } })
 
+    /**
+     * The link-time history sync arrives as a run of batches. Tell the host how far along it is (WhatsApp reports a
+     * percentage on most batches), and that it's done once WhatsApp says 100% or no batch has come for 15 seconds.
+     */
+    let quiet: ReturnType<typeof setTimeout> | undefined
+    let lastProgress: number | null = null
+    const historyBatch = (progress: number | null) => {
+      if (progress !== null) lastProgress = Math.max(lastProgress ?? 0, progress)
+      if (quiet) clearTimeout(quiet)
+      if (lastProgress !== null && lastProgress >= 100) { emit({ type: "sync", progress: 100, done: true }); return }
+      emit({ type: "sync", progress: lastProgress, done: false })
+      quiet = setTimeout(() => { if (!stopped) emit({ type: "sync", progress: 100, done: true }) }, 15_000)
+      quiet.unref?.()
+    }
+
     const connect = () => {
       sock = makeWASocket({
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
@@ -271,7 +300,8 @@ export const whatsappChannel: Channel = {
         }
       })
 
-      sock.ev.on("messaging-history.set", ({ chats, contacts, messages }) => {
+      sock.ev.on("messaging-history.set", ({ chats, contacts, messages, progress }) => {
+        historyBatch(typeof progress === "number" ? progress : null)
         for (const c of chats) pair(c.id, (c as { pnJid?: string }).pnJid ?? (c as { lidJid?: string }).lidJid)
         learnContacts(contacts)
         // Recency comes only from real messages (below) and calls. A chat's own timestamp also moves for group notices
