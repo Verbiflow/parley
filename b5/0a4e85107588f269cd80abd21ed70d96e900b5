@@ -1,0 +1,19 @@
+apps/api/src/web/pages.ts
+  s_481957885a0e56::t_d3cbff7896a2de 502,557-558
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b50a4e85107588f269cd80abd21ed70d96e900b5",
+  "prompts": {},
+  "sessions": {
+    "s_481957885a0e56": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01f45949-fa25-4178-9bc5-096118b6a5e4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
