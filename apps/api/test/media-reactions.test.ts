@@ -395,3 +395,19 @@ test("GIFs go out as people send them: converted to MP4 and sent as a looping GI
   const asDoc = fake.simulator.sent(connectionId).at(-1)!.content.media!
   assert.deepEqual([asDoc.kind, asDoc.mimetype, asDoc.gif], ["document", "image/gif", undefined])
 })
+
+test("sent messages are kept for resend requests, so a device that couldn't decrypt one still gets it after a restart", async () => {
+  const { accountId, connectionId } = await linked("resend@parley.test")
+  const q = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "did you get this?" }, T0)
+  await sessions.dispatchDue(new Date(Date.parse(q.message.scheduledFor!) + 1000))
+  const id = `msg-${fake.simulator.sent(connectionId).length}`
+  const stored = await waitUntil(() => fake.simulator.requestResend(connectionId, id), (m) => Boolean(m))
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(stored)), { to: "ana", text: "did you get this?" })
+  assert.equal(await fake.simulator.requestResend(connectionId, "never-sent"), undefined)
+
+  // A month on, it's pruned (the next send clears the old ones).
+  await sql(`update parley.sent_message set sent_at = now() - interval '31 days' where connection_id = $1`, [connectionId])
+  const next = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "again" }, T0)
+  await sessions.dispatchDue(new Date(Date.parse(next.message.scheduledFor!) + 60_000))
+  await waitUntil(() => fake.simulator.requestResend(connectionId, id), (m) => m === undefined)
+})

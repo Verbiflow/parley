@@ -674,7 +674,11 @@ export class Sessions {
         console.error(JSON.stringify({ msg: "session event failed", connectionId, event: event.type, error: e instanceof Error ? e.message : String(e) }))
       })
     }
-    const live = await channel.open({ connectionId, state, proxy, emit })
+    const sentMessage = async (id: string) => {
+      const [row] = await this.ctx.sql<{ message: Uint8Array }>(`select message from parley.sent_message where connection_id = $1 and id = $2`, [connectionId, id])
+      return row ? new Uint8Array(row.message) : undefined
+    }
+    const live = await channel.open({ connectionId, state, proxy, emit, sentMessage })
     entry.live = live
     await this.ctx.coordinator?.claim(connectionId)
     return entry
@@ -728,6 +732,14 @@ export class Sessions {
         break
       case "deleted":
         await forgetMessages(this.ctx.sql, connectionId, event.messages)
+        break
+      case "sent":
+        // Kept so a device can still get it resent after a restart; a month is far past any phone's retry.
+        await this.ctx.sql(
+          `insert into parley.sent_message (connection_id, id, message) values ($1, $2, $3) on conflict (connection_id, id) do update set message = excluded.message`,
+          [connectionId, event.id, Buffer.from(event.message)]
+        )
+        await this.ctx.sql(`delete from parley.sent_message where connection_id = $1 and sent_at < now() - interval '30 days'`, [connectionId])
         break
       case "closed":
         await setStatus(this.ctx.sql, connectionId, entry.loggingOut ? "logged_out" : "closed")

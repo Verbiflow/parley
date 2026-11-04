@@ -105,6 +105,11 @@ export type ChannelEvent =
   | { type: "reactions"; reactions: Reaction[] }
   /** Messages their sender deleted for everyone (from a phone, or through Parley): forget them. */
   | { type: "deleted"; messages: Array<{ threadId: string; messageId: string }> }
+  /**
+   * A message this connection sent, encoded the platform's way, for the host to keep: a device that couldn't decrypt it
+   * may ask for it again later, after a restart (see `OpenOptions.sentMessage`).
+   */
+  | { type: "sent"; id: string; message: Uint8Array }
   /** The connection closed. `reason` is for logs/UI, not control flow. */
   | { type: "closed"; reason: string }
 
@@ -141,6 +146,8 @@ export type OpenOptions = {
   /** Proxy URL every socket of this connection must leave through (its exit IP). Undefined means connect directly. */
   proxy?: string | undefined
   emit: Emit
+  /** A message this connection sent earlier (from a `sent` event), to send again when a device asks for it. */
+  sentMessage?: ((id: string) => Promise<Uint8Array | undefined>) | undefined
 }
 
 /**
@@ -193,6 +200,8 @@ export interface ChannelSimulator {
   failNextOpen(connectionId: string): void
   /** What was sent on a connection, for assertions. */
   sent(connectionId: string): Array<{ to: string; content: OutboundContent }>
+  /** Ask for a sent message again, as a device that couldn't decrypt it would: what the host kept for it. */
+  requestResend(connectionId: string, id: string): Promise<Uint8Array | undefined>
   /** The history requests made on a connection (`LiveConnection.backfill`), for assertions. */
   backfills(connectionId: string): Array<{ anchor: HistoryAnchor; count: number }>
   /** The messages marked read on the platform (`LiveConnection.markRead`), for assertions. */
