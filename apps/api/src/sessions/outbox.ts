@@ -1,8 +1,8 @@
 import type { Sql } from "@parley/auth"
 import {
-  ACTIONS, DAY, OUTCOME_POLICIES, PUSHBACK_OUTCOMES, REFUSED_OUTCOMES,
-  allowanceFor, backoffMs, defaultAction, localDate, planNext, policyFor, startOfNextLocalDay,
-  type ActionKind, type ActionLimit, type Outcome, type PacingPolicy, type PlanResult, type Slot, type Wait, type WarmupState,
+  ACTIONS, DAY, OUTCOME_POLICIES, REFUSED_OUTCOMES,
+  backoffMs, defaultAction, localDate, planNext, policyFor, startOfNextLocalDay,
+  type ActionKind, type Outcome, type PacingPolicy, type PlanResult, type Slot, type Wait,
 } from "@parley/pacing"
 import type { OutboundMedia } from "@parley/channels"
 import type { Transactor } from "../db/transactor.ts"
@@ -28,18 +28,22 @@ export class OutboxError extends Error {
 
 export type PacedConnection = {
   id: string; accountId: string; channel: string; status: string; timezone: string; country: string | null
-  warmup: WarmupState; pausedUntil: Date | null; actionPauses: Partial<Record<ActionKind, string>>
+  pausedUntil: Date | null; actionPauses: Partial<Record<ActionKind, string>>
   consecutiveRateLimits: number; haltedReason: string | null
+  /** Sends a local day may hold, every kind together. The person sets it. */
+  dailyLimit: number
 }
 
 type ConnRow = {
-  id: string; account_id: string; channel: string; status: string; timezone: string; country: string | null; warmup: WarmupState
+  id: string; account_id: string; channel: string; status: string; timezone: string; country: string | null
   paused_until: Date | null; action_pauses: Partial<Record<ActionKind, string>>; consecutive_rate_limits: number; halted_reason: string | null
+  daily_limit: number
 }
-const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, warmup, paused_until, action_pauses, consecutive_rate_limits, halted_reason"
+const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit"
 const conn = (r: ConnRow): PacedConnection => ({
-  id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, timezone: r.timezone, country: r.country, warmup: r.warmup,
+  id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, timezone: r.timezone, country: r.country,
   pausedUntil: r.paused_until, actionPauses: r.action_pauses, consecutiveRateLimits: r.consecutive_rate_limits, haltedReason: r.halted_reason,
+  dailyLimit: r.daily_limit,
 })
 
 export type OutboundStatus = "scheduled" | "sending" | "sent" | "failed" | "canceled"
@@ -103,34 +107,18 @@ async function loadSlots(sql: Sql, connectionId: string, now: Date, opts: { sett
   return [...rows.map((r) => ({ at: r.at, action: r.kind })), ...refused.map((r) => ({ at: r.at, action: r.kind, activityOnly: true }))]
 }
 
-type Context = { policy: PacingPolicy; slots: Slot[]; warmup: WarmupState; allowance: Partial<Record<ActionKind, number>> }
+type Context = { policy: PacingPolicy; slots: Slot[] }
 
-async function pacingContext(sql: Sql, c: PacedConnection, now: Date, slots: Slot[]): Promise<Context> {
-  const policy = policyFor(c.channel)
-  const pushbacks = await sql<{ at: Date }>(
-    `select at from parley.connection_event where connection_id = $1 and outcome = any($2) and at > $3`,
-    [c.id, PUSHBACK_OUTCOMES, new Date(now.getTime() - LOOKBACK_MS)]
-  )
-  const warmup: WarmupState = { ...c.warmup }
-  const allowance: Partial<Record<ActionKind, number>> = {}
-  const today = localDate(now, c.timezone)
-  for (const [action, limit] of Object.entries(policy.actions) as Array<[ActionKind, ActionLimit]>) {
-    const entry = allowanceFor({
-      entry: warmup[action], limit, today,
-      usedOn: (date) => slots.filter((s) => s.action === action && !s.activityOnly && s.at <= now && localDate(s.at, c.timezone) === date).length,
-      pushbackSince: (date) => pushbacks.some((p) => localDate(p.at, c.timezone) >= date),
-    })
-    warmup[action] = entry
-    allowance[action] = entry.allowance
-  }
-  return { policy, slots, warmup, allowance }
+/** The one daily limit (`dailyLimit`) replaced the per-kind warmup ramp; pushback still pauses and backs off. */
+function pacingContext(c: PacedConnection, slots: Slot[]): Context {
+  return { policy: policyFor(c.channel), slots }
 }
 
 function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, notBefore?: Date | null): PlanResult {
   const pause = c.actionPauses[action] ? new Date(c.actionPauses[action]!) : null
   const pausedUntil = [c.pausedUntil, notBefore, pause].reduce<Date | null>((max, d) => (d && (!max || d > max) ? d : max), null)
   return planNext(
-    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, pausedIndefinitely: halted(c), allowance: ctx.allowance },
+    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, pausedIndefinitely: halted(c), dailyTotal: c.dailyLimit },
     action
   )
 }
@@ -174,8 +162,7 @@ export async function enqueue(
     const kind = req.reactTo ? "message" : req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
     if (!policyFor(c.channel).actions[kind]) throw new OutboxError("action_unsupported", `${c.channel} can't send a ${kind}`)
 
-    const ctx = await pacingContext(sql, c, now, await loadSlots(sql, c.id, now))
-    await sql(`update parley.connection set warmup = $2 where id = $1`, [c.id, JSON.stringify(ctx.warmup)])
+    const ctx = pacingContext(c, await loadSlots(sql, c.id, now))
     const r = plan(c, ctx, kind, now, req.notBefore)
     if (!r.ok && r.reason !== "paused") throw new OutboxError(r.reason, r.reason === "no_capacity" ? `no capacity left for a ${kind} on this connection` : `${c.channel} can't send a ${kind}`)
 
@@ -201,7 +188,7 @@ export async function replan(sql: Sql, c: PacedConnection, now: Date): Promise<v
     [c.id]
   )
   if (!queued.length) return
-  const ctx = await pacingContext(sql, c, now, await loadSlots(sql, c.id, now, { settledOnly: true }))
+  const ctx = pacingContext(c, await loadSlots(sql, c.id, now, { settledOnly: true }))
   for (const m of queued) {
     const r = plan(c, ctx, m.kind, now, m.not_before)
     await sql(`update parley.outbound set scheduled_for = $2 where id = $1`, [m.id, r.ok ? r.at : null])
@@ -216,24 +203,26 @@ export async function replanConnection(tx: Transactor, connectionId: string, now
   })
 }
 
-export type Availability = Partial<Record<ActionKind, { canSendNow: boolean; earliestAt: string | null; waits: Wait[]; reason?: string; allowance: number; usedToday: number }>>
+export type Availability = Partial<Record<ActionKind, { canSendNow: boolean; earliestAt: string | null; waits: Wait[]; reason?: string; usedToday: number }>>
+/** Today's sends on the connection, every kind together, against its daily limit. */
+export type DailyUsage = { sentToday: number; dailyLimit: number }
 
 /** When each action could next go out, without reserving anything: an agent's "can I send now?" */
-export async function availability(sql: Sql, accountId: string, connectionId: string, now: Date): Promise<{ connection: PacedConnection; actions: Availability }> {
+export async function availability(sql: Sql, accountId: string, connectionId: string, now: Date): Promise<{ connection: PacedConnection; actions: Availability; today: DailyUsage }> {
   const c = await owned(sql, accountId, connectionId, false)
-  const ctx = await pacingContext(sql, c, now, await loadSlots(sql, c.id, now))
+  const ctx = pacingContext(c, await loadSlots(sql, c.id, now))
   const today = localDate(now, c.timezone)
   const actions: Availability = {}
   for (const action of ACTIONS) {
     if (!ctx.policy.actions[action]) continue
     const r = plan(c, ctx, action, now)
     const usedToday = ctx.slots.filter((s) => s.action === action && !s.activityOnly && s.at <= now && localDate(s.at, c.timezone) === today).length
-    const allowance = ctx.allowance[action] ?? ctx.policy.actions[action]!.daily
     actions[action] = r.ok
-      ? { canSendNow: r.at <= now, earliestAt: r.at.toISOString(), waits: r.waits, allowance, usedToday }
-      : { canSendNow: false, earliestAt: null, waits: [], reason: r.reason, allowance, usedToday }
+      ? { canSendNow: r.at <= now, earliestAt: r.at.toISOString(), waits: r.waits, usedToday }
+      : { canSendNow: false, earliestAt: null, waits: [], reason: r.reason, usedToday }
   }
-  return { connection: c, actions }
+  const sentToday = ctx.slots.filter((s) => !s.activityOnly && s.at <= now && localDate(s.at, c.timezone) === today).length
+  return { connection: c, actions, today: { sentToday, dailyLimit: c.dailyLimit } }
 }
 
 export type Claimed = {
@@ -371,13 +360,21 @@ export async function resume(tx: Transactor, accountId: string, connectionId: st
   })
 }
 
-/** Set where the account appears to live: its active hours follow this time zone. */
-export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined }, now: Date): Promise<void> {
+/** Highest daily limit a person can set; past it no account sends like a person. */
+export const MAX_DAILY_LIMIT = 1000
+
+/**
+ * Set where the account appears to live (its active hours follow this time zone) and how many messages it may send a
+ * day. The queue is laid out again, so a lower limit pushes the overflow to tomorrow and a higher one pulls it in.
+ */
+export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined }, now: Date): Promise<void> {
+  const limit = locale.dailyLimit !== undefined && Number.isInteger(locale.dailyLimit) && locale.dailyLimit >= 1 && locale.dailyLimit <= MAX_DAILY_LIMIT ? locale.dailyLimit : null
   await tx.transaction(async (sql) => {
     await owned(sql, accountId, connectionId, true)
     const [r] = await sql<ConnRow>(
-      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), updated_at = now() where id = $1 returning ${CONN_COLUMNS}`,
-      [connectionId, locale.timezone ?? null, locale.country ?? null]
+      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), updated_at = now()
+        where id = $1 returning ${CONN_COLUMNS}`,
+      [connectionId, locale.timezone ?? null, locale.country ?? null, limit]
     )
     await replan(sql, conn(r!), now)
   })

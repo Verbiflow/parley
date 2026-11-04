@@ -355,19 +355,20 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "send_availability",
     {
       title: "Send availability",
-      description: "Whether a connection can send right now, and if not, when each kind of message could next go out and why. Includes today's usage against the account's (warming-up) daily allowance.",
+      description: "Whether a connection can send right now, and if not, when each kind of message could next go out and why. Includes today's sends against the account's daily limit, which every kind of message counts toward.",
       inputSchema: { connection_id: z.string().optional().describe(ACCOUNT_REF) },
     },
     async ({ connection_id }, extra) => {
       const { userId } = principalOf(extra)
       try {
         const conn = await pickConnection(ctx, userId, connection_id)
-        const { connection, actions } = await availability(ctx.sql, userId, conn.id, new Date())
+        const { connection, actions, today } = await availability(ctx.sql, userId, conn.id, new Date())
         return json({
           connection_id: conn.id, account: accountLabel(conn), timezone: connection.timezone, halted: connection.haltedReason,
           paused_until: connection.pausedUntil && connection.pausedUntil > new Date() ? connection.pausedUntil.toISOString() : null,
+          sent_today: today.sentToday, daily_limit: today.dailyLimit,
           actions: Object.fromEntries(Object.entries(actions).map(([k, a]) => [k, {
-            can_send_now: a!.canSendNow, earliest_at: a!.earliestAt, waits: a!.waits, reason: a!.reason, used_today: a!.usedToday, daily_allowance: a!.allowance,
+            can_send_now: a!.canSendNow, earliest_at: a!.earliestAt, waits: a!.waits, reason: a!.reason, used_today: a!.usedToday,
           }])),
         })
       } catch (e) {
