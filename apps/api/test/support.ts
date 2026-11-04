@@ -33,16 +33,24 @@ async function createMigratedDatabase(): Promise<{ url: string; drop: () => Prom
   return { url, drop }
 }
 
-/** A fresh migrated database (no HTTP server) for one test file, with a local config incl. REDIS_URL. */
-export async function freshDatabase(): Promise<{ url: string; db: RequestDatabase; sql: Sql; config: IdentityConfig }> {
+/**
+ * A fresh migrated database (no HTTP server) for one test file, with a local config incl. REDIS_URL. Whatever the
+ * file starts on it (a session pool, a server) goes in `teardown`, which runs before the database is dropped: the
+ * drop forces connections closed, and a pool still holding one would fail the file after its tests have passed.
+ */
+export async function freshDatabase(): Promise<{
+  url: string; db: RequestDatabase; sql: Sql; config: IdentityConfig; teardown: (stop: () => Promise<void>) => void
+}> {
   const { url, drop } = await createMigratedDatabase()
   const db = new RequestDatabase(url)
+  const stops: (() => Promise<void>)[] = []
   after(async () => {
+    for (const stop of stops.reverse()) await stop()
     await db.close()
     await drop()
   })
   const config = readConfig({ PARLEY_ENV: "local", DATABASE_URL: url, REDIS_URL })
-  return { url, db, sql: db.query, config }
+  return { url, db, sql: db.query, config, teardown: (stop) => void stops.push(stop) }
 }
 
 /** A fresh migrated database + a running HTTP server (single-process, no Redis) for one test file. */

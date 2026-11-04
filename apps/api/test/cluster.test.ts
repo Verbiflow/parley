@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { after, test } from "node:test"
+import { test } from "node:test"
 import { Redis } from "ioredis"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
@@ -33,14 +33,16 @@ if (!redisOk) {
   test(`cluster routing (skipped: no Redis at ${REDIS_URL})`, { skip: true }, () => {})
 } else {
   const fake = makeFakeChannel("fake")
-  const { sql, config } = await freshDatabase()
+  const { sql, config, teardown } = await freshDatabase()
   const coordA = new RedisCoordinator(REDIS_URL)
   const coordB = new RedisCoordinator(REDIS_URL)
   const A = new Sessions({ sql, channels: [fake.channel], config, coordinator: coordA })
   const B = new Sessions({ sql, channels: [fake.channel], config, coordinator: coordB })
   await A.start()
   await B.start()
-  after(async () => {
+  teardown(async () => {
+    await A.stop()
+    await B.stop()
     await coordA.close()
     await coordB.close()
   })
