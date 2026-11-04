@@ -65,7 +65,12 @@ if (!redisOk) {
     // B can read status through the owner too.
     assert.equal((await B.status(account.id, connectionId)).status, "connected")
 
-    // The owner "leaves" (crash / lease expiry): B takes over from the sealed creds and keeps serving.
+    // The owner "leaves" (crash / lease expiry): B takes over from the sealed creds and keeps serving. The creds are
+    // saved by an event that can land just after "connected", so wait for them before the owner goes.
+    await waitUntil(
+      async () => (await sql<{ n: string }>(`select count(*)::text as n from secret.record where kind = 'channel-creds' and purpose = 'fake' and name = $1`, [connectionId]))[0]!.n,
+      (n) => n === "1"
+    )
     await coordA.release(connectionId)
     const afterTakeover = await B.send(account.id, connectionId, "+15550100", "after A gone")
     assert.ok(afterTakeover.id)
