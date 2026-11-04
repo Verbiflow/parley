@@ -662,6 +662,13 @@ const CHATS_CSS = `
 .save{position:sticky;bottom:20px;display:flex;align-items:center;gap:8px;margin-top:20px;padding:10px 10px 10px 18px;border:1px solid var(--line-2);border-radius:999px;background:var(--bg-1);box-shadow:var(--shadow)}
 .save .grow{flex:1;font-family:var(--mono);font-size:12px;color:var(--text-2)}
 .none{display:none!important}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.tag{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;transition:all .12s var(--ease)}
+.tag:hover{border-color:var(--line-3);color:var(--text)}
+.tag[aria-pressed="true"]{background:var(--text);border-color:var(--text);color:var(--bg)}
+.tag .n{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:5px}
+.older{display:block;width:100%;padding:14px 0;border:0;background:none;color:var(--text-2);font:inherit;font-size:13px;cursor:pointer;text-align:center}
+.older:hover{color:var(--text)}
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
@@ -672,11 +679,15 @@ const CHATS_CSS = `
 export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean }): string {
   const { connection: conn, chats } = opts
   const name = channelName(conn.channel)
+  // Like your phone: chats with recent activity first. The rest (old groups, people you only share a group with) are
+  // a click or a search away, so hundreds of dead groups don't bury the people you actually talk to.
+  const recentCount = chats.filter((c) => c.lastMessageAt).length
+  const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length }
   const rows = chats.map((c) => {
     const label = c.name || phoneOf(c.id) || (c.kind === "group" ? "Unnamed group" : "Unknown contact")
     const sub = c.kind === "group" ? "group" : c.name ? phoneOf(c.id) || "contact" : "contact"
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
-    return `<label class="chat" data-kind="${c.kind}" data-q="${esc(search)}">
+    return `<label class="chat" data-kind="${c.kind}" data-recent="${c.lastMessageAt ? 1 : 0}" data-q="${esc(search)}">
       <input type="checkbox" name="chat" value="${esc(c.id)}"${c.synced ? " checked" : ""}>
       <span class="box">${icon("check", 11, 3)}</span>
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
@@ -695,22 +706,37 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ${chats.length ? `<form method="post" id="f">
         <div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
-          <div class="seg" id="seg"><button type="button" class="on" data-f="all">all</button><button type="button" data-f="direct">people</button><button type="button" data-f="group">groups</button><button type="button" data-f="on">selected</button></div>
+          <div class="tags" id="tags">
+            <button type="button" class="tag" data-t="direct" aria-pressed="true">People<span class="n">${counts.direct}</span></button>
+            <button type="button" class="tag" data-t="group" aria-pressed="true">Groups<span class="n">${counts.group}</span></button>
+            <button type="button" class="tag" data-t="on" aria-pressed="false">Selected</button>
+          </div>
         </div>
-        <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div></div>
+        ${counts.direct === 0 ? `<div class="note"><div class="grow"><b>No people yet, only groups</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking. Disconnect this account and link it again (about 20 seconds) to load them.</p></div></div>` : ""}
+        <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div>${recentCount && recentCount < chats.length ? `<button type="button" class="older" id="older">Show ${chats.length - recentCount} older chats</button>` : ""}</div>
         <div class="save"><span class="grow" id="count"></span>
           <button class="btn quiet sm" type="button" id="all">select shown</button>
           <button class="btn quiet sm" type="button" id="clear">clear shown</button>
           <button class="btn" type="submit">Save</button></div>
       </form>
       <script>
-        const list=document.getElementById('list'),q=document.getElementById('q'),count=document.getElementById('count');let f='all';
+        const list=document.getElementById('list'),q=document.getElementById('q'),count=document.getElementById('count'),older=document.getElementById('older');
         const rows=[...list.querySelectorAll('.chat')];
+        // Tags switch on and off independently. People/Groups say which kinds show (both off = both); Selected narrows to ticked chats.
+        const tag={direct:true,group:true,on:false};let all=!older;
         const shown=()=>rows.filter(r=>!r.classList.contains('none'));
-        function apply(){const t=q.value.trim().toLowerCase();let n=0;for(const r of rows){const on=r.querySelector('input').checked;const ok=(f==='all'||(f==='on'?on:r.dataset.kind===f))&&(!t||r.dataset.q.includes(t));r.classList.toggle('none',!ok);if(ok)n++}document.getElementById('nomatch').classList.toggle('none',n>0);tally()}
+        function apply(){const t=q.value.trim().toLowerCase();const kinds=tag.direct||tag.group;let n=0,hid=0;
+          for(const r of rows){const on=r.querySelector('input').checked;
+            const match=(!kinds||tag[r.dataset.kind])&&(!tag.on||on)&&(!t||r.dataset.q.includes(t));
+            const old=!t&&!all&&!on&&r.dataset.recent!=='1';const ok=match&&!old;if(match&&old)hid++;
+            r.classList.toggle('none',!ok);if(ok)n++}
+          document.getElementById('nomatch').classList.toggle('none',n>0||hid>0);
+          if(older){older.classList.toggle('none',!hid);older.textContent='Show '+hid+' older chat'+(hid===1?'':'s')}tally()}
         function tally(){const n=rows.filter(r=>r.querySelector('input').checked).length;count.textContent=n?n+' of '+rows.length+' selected':'nothing selected — agents see no chats'}
         q.addEventListener('input',apply);list.addEventListener('change',tally);
-        document.getElementById('seg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;f=b.dataset.f;document.querySelectorAll('#seg button').forEach(x=>x.classList.toggle('on',x===b));apply()});
+        if(older)older.onclick=()=>{all=true;apply()};
+        document.getElementById('tags').addEventListener('click',e=>{const b=e.target.closest('.tag');if(!b)return;tag[b.dataset.t]=!tag[b.dataset.t];b.setAttribute('aria-pressed',String(tag[b.dataset.t]));apply()});
+        apply();
         document.getElementById('all').onclick=()=>{shown().forEach(r=>r.querySelector('input').checked=true);tally()};
         document.getElementById('clear').onclick=()=>{shown().forEach(r=>r.querySelector('input').checked=false);tally()};
         tally();
