@@ -78,7 +78,7 @@ test("sign out ends the server-side session, not just the cookie", async () => {
 test("an agent's tool calls show up as live activity, and the dashboard shows how to add Parley", async () => {
   const cookie = await browser("gus@parley.test")
   let dash = await (await fetch(`${base}/app`, { headers: { cookie } })).text()
-  assert.match(dash, /Add Parley to your AI/)
+  assert.match(dash, /Connect your agent/)
   assert.doesNotMatch(dash, /Ask it something/)
   assert.match(dash, /claude mcp add --transport http parley http:\/\/127\.0\.0\.1:\d+\/mcp/)
 
@@ -95,9 +95,9 @@ test("an agent's tool calls show up as live activity, and the dashboard shows ho
   assert.equal(call.status, 200)
   await new Promise((r) => setTimeout(r, 100)) // activity is recorded best-effort, after the response
   agents = await (await fetch(`${base}/app/agents`, { headers: { cookie } })).text()
-  assert.match(agents, /Using Parley right now · last read your inbox just now · 1 tool call/)
-  assert.match(agents, /class="live"/)
+  assert.match(agents, /Active now · last read your inbox just now · 1 tool call/)
 
+  // With an agent connected, the setup marks its second step done (no account linked yet, so it stays on setup).
   dash = await (await fetch(`${base}/app`, { headers: { cookie } })).text()
-  assert.match(dash, /Gus&#39;s Claude<\/b> is using Parley right now/)
+  assert.match(dash, /Connect your agent<\/span><span class="aside"><span class="done-tag">/)
 })
