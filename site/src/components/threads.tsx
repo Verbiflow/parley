@@ -5,7 +5,9 @@ import { useEffect, useRef } from "react"
 type Pt = [number, number]
 
 /** Where the threads pinch together, as a fraction of the box. */
-export const PINCH = { desktop: [0.72, 0.46] as Pt, mobile: [0.5, 0.7] as Pt }
+export const PINCH = { desktop: [0.64, 0.48] as Pt, mobile: [0.5, 0.7] as Pt }
+/** Matches the hero's `lg` breakpoint, where the phone moves beside the copy. */
+const WIDE = 1024
 
 const LINES = 44
 const PULSES = 7
@@ -42,7 +44,7 @@ export function Threads({ className = "" }: { className?: string }) {
     const pulses = Array.from({ length: PULSES }, (_, k) => ({ line: (k * 23) % LINES, u: k / PULSES, speed: 0.06 + (k % 3) * 0.018 }))
 
     const curve = (i: number, t: number): [Pt, Pt, Pt, Pt] => {
-      const mobile = w < 768
+      const mobile = w < WIDE
       const [px, py] = mobile ? PINCH.mobile : PINCH.desktop
       const f = i / (LINES - 1)
       const sway = Math.sin(t * 0.35 + f * 5.5) * 0.018
@@ -66,7 +68,7 @@ export function Threads({ className = "" }: { className?: string }) {
       const dt = Math.min((now - last) / 1000, 0.05)
       last = now
       ctx.clearRect(0, 0, w, h)
-      const [px] = w < 768 ? PINCH.mobile : PINCH.desktop
+      const [px] = w < WIDE ? PINCH.mobile : PINCH.desktop
 
       const grad = ctx.createLinearGradient(0, 0, w, 0)
       grad.addColorStop(0, "rgba(227,185,141,0)")

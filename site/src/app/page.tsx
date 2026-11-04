@@ -68,28 +68,30 @@ function Channels({ className = "" }: { className?: string }) {
 function Hero() {
   return (
     <div className="relative isolate">
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[820px] overflow-hidden sm:h-[700px]">
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[820px] overflow-hidden sm:h-[700px] lg:h-[900px]">
         <Threads className="absolute inset-0 size-full" />
       </div>
-      <Shell className="pb-16 pt-32 sm:pb-20 sm:pt-44">
-        <a href={GITHUB_URL} className="group inline-flex h-7 items-center gap-2 rounded-full pl-1 pr-3 text-[12.5px] text-ink-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.08)] transition-colors hover:text-ink">
-          <span className="rounded-full bg-sand/15 px-2 py-0.5 text-[11px] font-medium text-sand">New</span>
-          Photos, files and reactions
-          <Arrow />
-        </a>
-        <h1 className="mt-6 max-w-[14ch] text-[clamp(38px,5vw,60px)] leading-[1.04] font-normal tracking-[-0.035em] text-balance">
-          Let your agents text people as you
-        </h1>
-        <p className="mt-5 max-w-[430px] text-[16px] leading-[1.6] text-muted">
-          Open source messaging infrastructure for AI agents. They send from your own account, at a human pace, with every message on record.
-        </p>
-        <div className="mt-8 flex flex-wrap gap-2">
-          <Button href={APP_URL}>Get started <Arrow /></Button>
-          <a href={GITHUB_URL} className={buttonClass()}><GitHub size={14} />Star on GitHub</a>
+      <Shell className="grid items-center gap-16 pt-32 sm:gap-20 sm:pt-44 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-10 lg:pt-36">
+        <div>
+          <a href={GITHUB_URL} className="group inline-flex h-7 items-center gap-2 rounded-full pl-1 pr-3 text-[12.5px] text-ink-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.08)] transition-colors hover:text-ink">
+            <span className="rounded-full bg-sand/15 px-2 py-0.5 text-[11px] font-medium text-sand">New</span>
+            Photos, files and reactions
+            <Arrow />
+          </a>
+          <h1 className="mt-6 max-w-[14ch] text-[clamp(38px,5vw,60px)] leading-[1.04] font-normal tracking-[-0.035em] text-balance">
+            Let your agents text people as you
+          </h1>
+          <p className="mt-5 max-w-[430px] text-[16px] leading-[1.6] text-muted">
+            Open source messaging infrastructure for AI agents. They send from your own account, at a human pace, with every message on record.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-2">
+            <Button href={APP_URL}>Get started <Arrow /></Button>
+            <a href={GITHUB_URL} className={buttonClass()}><GitHub size={14} />Star on GitHub</a>
+          </div>
+          <Channels className="mt-12" />
         </div>
-        <Channels className="mt-12" />
+        <Journey />
       </Shell>
-      <Journey />
     </div>
   )
 }
