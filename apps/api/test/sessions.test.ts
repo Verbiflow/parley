@@ -19,7 +19,7 @@ async function waitUntil<T>(get: () => Promise<T>, ok: (v: T) => boolean, ms = 2
   }
 }
 
-test("connect → link → complete → connected → send; creds are sealed and the connection reconnects from the DB", async () => {
+test("connect → link → complete → connected → send; creds are sealed and the connection reconnects from the DB", async (t) => {
   const account = await store.upsertAccount(sql, { subject: "local:ses@parley.test", email: "ses@parley.test", name: "Ses", signedInWith: "local" })
 
   // connect starts a fresh link
@@ -46,6 +46,7 @@ test("connect → link → complete → connected → send; creds are sealed and
 
   // a brand-new pool (as after a restart) re-opens the connection from the sealed creds and can send
   const afterRestart = new Sessions({ sql, channels: [fake.channel], config: ctx.config })
+  t.after(() => afterRestart.stop())
   const reopened = await afterRestart.hydrateAll()
   assert.ok(reopened >= 1)
   const again = await afterRestart.send(account.id, connectionId, "+15550100", "back online")

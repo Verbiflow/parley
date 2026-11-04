@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { after, test } from "node:test"
+import { test } from "node:test"
 import { serve, type ServerType } from "@hono/node-server"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
@@ -13,15 +13,15 @@ import { freshDatabase } from "./support.ts"
 const SECRET = "test-secret-0123456789abcdef0123456789abcdef"
 const fake = makeFakeChannel("fake")
 const wa = makeFakeChannel("fake-wa")
-const { sql, config } = await freshDatabase()
+const { sql, config, teardown } = await freshDatabase()
 const pool = new Sessions({ sql, channels: [fake.channel, wa.channel], config })
-after(() => pool.stop())
+teardown(() => pool.stop())
 let server!: ServerType
 const port = await new Promise<number>((resolve) => {
   server = serve({ fetch: rpcApp(pool, SECRET).fetch, port: 0, hostname: "127.0.0.1" }, (info) => resolve(info.port))
 })
 const baseUrl = `http://127.0.0.1:${port}`
-after(() => new Promise<void>((resolve) => server.close(() => resolve())))
+teardown(() => new Promise<void>((resolve) => server.close(() => resolve())))
 
 const remote = new RemoteSessions(sql, { fetch, baseUrl, secret: SECRET })
 
