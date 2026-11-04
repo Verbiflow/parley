@@ -83,6 +83,10 @@ export class RemoteSessions implements SessionsApi {
   loadHistory(accountId: string, connectionId: string, chatId: string, count: number): Promise<{ answered: boolean; messages: StoredMessage[] }> {
     return this.#call("loadHistory", [accountId, connectionId, chatId, count], HISTORY_TIMEOUT_MS)
   }
+  /** Read receipts go out over the live socket, so they're sent by the sessions service. */
+  sendReadReceipts(accountId: string, connectionId: string, messages: Array<{ chatId: string; messageId: string }>): Promise<{ marked: number }> {
+    return this.#call("sendReadReceipts", [accountId, connectionId, messages])
+  }
   /** Fetching an attachment needs the live socket, so it runs on the sessions service. */
   media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
     return this.#call("media", [accountId, connectionId, chatId, messageId], MEDIA_TIMEOUT_MS)

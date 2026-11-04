@@ -75,7 +75,7 @@ export async function readAll(body: ReadableStream<Uint8Array>, max: number): Pr
 export type SessionsApi = Pick<
   Sessions,
   | "connect" | "status" | "list" | "linkView" | "ensureLinking" | "send" | "logout" | "chats" | "chooseChats" | "messages" | "inbox" | "inboxChats"
-  | "media" | "mediaInfo" | "mediaStream" | "loadHistory"
+  | "media" | "mediaInfo" | "mediaStream" | "loadHistory" | "sendReadReceipts"
   | "enqueue" | "setLocale"
 >
 
@@ -84,7 +84,7 @@ export type SessionsApi = Pick<
  * (`enqueue`, `setLocale`) so pacing, its row locks and the dispatcher stay in one place. Everything else is a plain
  * Postgres read the edge does itself.
  */
-export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media", "loadHistory"] as const
+export const LIVE_OPS = ["connect", "status", "linkView", "ensureLinking", "send", "logout", "chooseChats", "enqueue", "setLocale", "media", "loadHistory", "sendReadReceipts"] as const
 export type LiveOp = (typeof LIVE_OPS)[number]
 
 /**
@@ -421,6 +421,36 @@ export class Sessions {
     return { answered: await answered, messages: await readMessages(this.ctx.sql, connectionId, chatId, { limit: n }) }
   }
 
+  /**
+   * Mark these messages read on the channel itself (blue ticks on WhatsApp, if the account holder's read-receipt
+   * setting allows). Only messages from the other side in synced chats count; the rest are skipped. Says how many
+   * were marked. Needs the connection live.
+   */
+  async sendReadReceipts(accountId: string, connectionId: string, messages: Array<{ chatId: string; messageId: string }>): Promise<{ marked: number }> {
+    await this.#owned(accountId, connectionId)
+    const routed = await this.#route(connectionId, { op: "sendReadReceipts", args: { messages } })
+    if (routed.ok) return routed.result as { marked: number }
+    return this.#localReadReceipts(connectionId, messages)
+  }
+
+  async #localReadReceipts(connectionId: string, messages: Array<{ chatId: string; messageId: string }>): Promise<{ marked: number }> {
+    if (!messages.length) return { marked: 0 }
+    const rows = await this.ctx.sql<{ chat_id: string; id: string; sender: string }>(
+      `select m.chat_id, m.id, m.sender
+         from jsonb_to_recordset($2::jsonb) as x(chat_id text, id text)
+         join parley.message m on m.connection_id = $1 and m.chat_id = x.chat_id and m.id = x.id and not m.from_me
+         join parley.chat c on c.connection_id = m.connection_id and c.id = m.chat_id and c.synced`,
+      [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.chatId, id: m.messageId })))]
+    )
+    if (!rows.length) return { marked: 0 }
+    let entry = this.#live.get(connectionId)
+    if (!entry?.live) entry = await this.#hydrate(connectionId)
+    if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
+    if (!entry.live.markRead) throw new ConnectError("not_found", "this channel has no read receipts")
+    await entry.live.markRead(rows.map((r) => ({ threadId: r.chat_id, messageId: r.id, sender: r.sender })))
+    return { marked: rows.length }
+  }
+
   /** What a message's attachment is, from the database alone (no download). */
   async mediaInfo(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaDetails> {
     const { ref: _ref, ...details } = await this.#attachment(accountId, connectionId, chatId, messageId)
@@ -590,6 +620,8 @@ export class Sessions {
         return this.#localMedia(connId, String(args.ref))
       case "loadHistory":
         return this.#localLoadHistory(connId, String(args.chatId), Number(args.count))
+      case "sendReadReceipts":
+        return this.#localReadReceipts(connId, (args.messages as Array<{ chatId: string; messageId: string }>) ?? [])
       case "flushHistory":
         await this.#flushHistory(connId, (args.chatIds as string[]) ?? [])
         return null

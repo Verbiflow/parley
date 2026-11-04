@@ -57,7 +57,7 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
       // A file's bytes cross the wire as base64 (a URL to download instead has none).
       if (req?.media && typeof req.media.data === "string") req.media.data = Buffer.from(req.media.data, "base64")
     }
-    if (op === "setLocale") args.length = Math.min(args.length, 3)
+    if (op === "setLocale" || op === "sendReadReceipts") args.length = Math.min(args.length, 3)
     if (op === "media" || op === "loadHistory") args.length = Math.min(args.length, 4)
 
     try {

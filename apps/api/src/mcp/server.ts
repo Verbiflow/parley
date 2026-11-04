@@ -3,6 +3,7 @@ import { ACTIONS, isValidTimeZone } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
+import { agentBehaviour } from "../sessions/settings.ts"
 import { markRead, newByChat, newReactions, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
@@ -252,6 +253,41 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   const ACCOUNT_REF = "Which of your accounts: a connection id from list_connections, or the account's number. Optional when only one account fits."
   const pickUrl = `${base}/app`
   const MARK_READ = z.boolean().optional().describe("Mark what this returns as read (default true). Pass false to look without changing what counts as new.")
+  const READ_RECEIPTS = z.boolean().optional().describe(
+    "Also mark the messages this returns read on WhatsApp itself, as opening the chat on the phone would. On by default whenever this marks them read (the account holder's setting in Parley); pass false to read without telling the sender. The senders see blue ticks only if the account holder's WhatsApp has read receipts on; otherwise only their own devices mark the chat read. If the account holder turned read receipts off in Parley, none are sent."
+  )
+
+  /**
+   * Send platform read receipts for the shown messages from the other side, per connection. Best effort: the read
+   * itself never fails over it; the answer says how many were marked, or why none were.
+   */
+  const RECEIPTS_OFF = "The account holder turned read receipts off in Parley's settings, so none were sent."
+  /** Whether to send receipts for a read: asked for, or by default when it marks read; never if the account holder said no. */
+  const receiptsFor = async (userId: string, asked: boolean | undefined, marking: boolean) => {
+    const want = asked ?? marking
+    if (!want) return { send: false as const }
+    if (!(await agentBehaviour(ctx.sql, userId)).readReceipts) return { send: false as const, off: asked === true }
+    return { send: true as const }
+  }
+
+  const sendReceipts = async (userId: string, messages: Array<{ connectionId: string; chatId: string; id: string; fromMe: boolean }>) => {
+    const byConn = new Map<string, Array<{ chatId: string; messageId: string }>>()
+    for (const m of messages) {
+      if (m.fromMe) continue
+      if (!byConn.has(m.connectionId)) byConn.set(m.connectionId, [])
+      byConn.get(m.connectionId)!.push({ chatId: m.chatId, messageId: m.id })
+    }
+    let marked = 0
+    const errors: string[] = []
+    for (const [connectionId, list] of byConn) {
+      try {
+        marked += (await ctx.sessions.sendReadReceipts(userId, connectionId, list)).marked
+      } catch (e) {
+        errors.push(known(e) ? (e as Error).message : "could not send read receipts")
+      }
+    }
+    return { marked, ...(errors.length ? { error: [...new Set(errors)].join("; ") } : {}) }
+  }
 
   /**
    * What came in since the chats in scope were last read: totals, per-chat counts, and the new reactions themselves
@@ -305,16 +341,17 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what. `new_since_last_read` says how much came in from the other side since these chats were last read (messages and reactions, per chat); new messages and reactions carry `new: true`, and `new_reactions` lists every new reaction with the message it's on (even one on an old message not shown). Reading marks what it shows as read, for every agent on the account; pass mark_read: false to just look. Paging back with `before` never marks anything.",
+      description: "Read recent messages across all your connected accounts, newest first (each says which `account` it is on) — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`. A message with `media` carries a photo, video, voice note, document or sticker (its `text` is the caption, or a placeholder like \"[photo]\"): call get_media to see it. `reactions` lists who reacted with what. `new_since_last_read` says how much came in from the other side since these chats were last read (messages and reactions, per chat); new messages and reactions carry `new: true`, and `new_reactions` lists every new reaction with the message it's on (even one on an old message not shown). Reading marks what it shows as read, for every agent on the account; pass mark_read: false to just look. Paging back with `before` never marks anything. Reading that marks read also sends read receipts on WhatsApp by default (blue ticks, if the account holder has them on; they can turn this off in Parley): pass read_receipts: false to read without telling the sender. Looking (mark_read: false) or paging back sends none unless read_receipts is true.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
         limit: z.number().int().min(1).max(200).optional().describe("How many messages (default 50)."),
         before: z.string().datetime().optional().describe("Only messages sent before this ISO time — pass the `at` of the oldest message you have to page back."),
         mark_read: MARK_READ,
+        read_receipts: READ_RECEIPTS,
       },
     },
-    async ({ channel, connection_id, chat_id, limit, before, mark_read }, extra) => {
+    async ({ channel, connection_id, chat_id, limit, before, mark_read, read_receipts }, extra) => {
       const { userId } = principalOf(extra)
       try {
         const where = { ...(await scope(userId, { channel, connection_id })), chatId: chat_id }
@@ -337,6 +374,9 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
             : `${plural(unshown, "new message")} didn't fit in this answer${marking ? " (chats shown here still count as read up to their newest message)" : ""}: page back with \`before\`, raise \`limit\`, or read one chat with chat_id.`
         }
         if (marking) await markShown(userId, messages, fresh.reactions)
+        const receipts = await receiptsFor(userId, read_receipts, marking)
+        if (receipts.send) out.read_receipts = await sendReceipts(userId, messages)
+        else if (receipts.off) out.read_receipts = { marked: 0, off: RECEIPTS_OFF }
         if (!messages.length) {
           const chats = await ctx.sessions.inboxChats(userId, where)
           out.note = chats.length
@@ -428,7 +468,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),
         idempotency_key: z.string().min(1).max(200).optional().describe("Retrying with the same key returns the original message instead of sending twice."),
-        typing: z.boolean().optional().describe("Show \"typing…\" in the chat first (\"recording…\" before a voice note), for about as long as a person would take: ~24s per 100 characters (50 words a minute), at most a minute, then send. Good for a conversational reply; leave it off (the default) when it should just go."),
+        typing: z.boolean().optional().describe("Show \"typing…\" in the chat first (\"recording…\" before a voice note), for about as long as a person would take: ~24s per 100 characters (50 words a minute), at most a minute, then send. On by default (the account holder's setting in Parley); pass false when it should just go. If the account holder turned typing off, it never shows."),
       },
     },
     async ({ connection_id, to, text, media, kind, not_before, idempotency_key, typing }, extra) => {
@@ -437,10 +477,15 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         if (!text && !media) return fail("give `text`, `media`, or both")
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: to })
         const file = media ? resolveMedia(media) : undefined
+        const typingOn = (await agentBehaviour(ctx.sql, userId)).typing
+        const showTyping = typingOn && typing !== false
         const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
-          to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId, typing,
+          to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId, typing: showTyping,
         })
-        return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
+        return json({
+          ...queuedView(message, replayed), account: accountLabel(conn),
+          ...(typing === true && !typingOn ? { typing_note: "The account holder turned typing off in Parley's settings, so it sends without it." } : {}),
+        })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not send")
       }
@@ -451,15 +496,16 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "load_history",
     {
       title: "Load a chat's history",
-      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false.",
+      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false — and then, by default, sends read receipts on WhatsApp too (see read_receipts).",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the chat.`),
         chat_id: z.string().describe("The chat (chat_id from list_chats or read_inbox)."),
         count: z.number().int().min(1).max(50).optional().describe("How many of the latest messages (default 20, at most 50)."),
         mark_read: MARK_READ,
+        read_receipts: READ_RECEIPTS,
       },
     },
-    async ({ connection_id, chat_id, count, mark_read }, extra) => {
+    async ({ connection_id, chat_id, count, mark_read, read_receipts }, extra) => {
       const { userId } = principalOf(extra)
       try {
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id })
@@ -468,8 +514,11 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         const fresh = await newSince(userId, { connectionId: conn.id, chatId: chat_id }, account)
         const shownNew = messages.filter((m) => m.isNew).length
         if (mark_read !== false) await markShown(userId, messages.map((m) => ({ ...m, connectionId: conn.id })), fresh.reactions)
+        const want = await receiptsFor(userId, read_receipts, mark_read !== false)
+        const receipts = want.send ? await sendReceipts(userId, messages.map((m) => ({ ...m, connectionId: conn.id }))) : want.off ? { marked: 0, off: RECEIPTS_OFF } : undefined
         return json({
           account: accountLabel(conn), chat_id, answered, new_since_last_read: fresh.summary, messages: messages.map(messageOut),
+          ...(receipts ? { read_receipts: receipts } : {}),
           ...(fresh.newReactionsOut.length ? { new_reactions: fresh.newReactionsOut } : {}),
           ...(fresh.summary.messages > shownNew ? { more_new: `${plural(fresh.summary.messages - shownNew, "new message")} didn't fit in \`count\`: read_inbox with this chat_id and a bigger limit shows them.` } : {}),
           ...(answered ? {} : { note: "The phone didn't answer in time (it may be offline or asleep). These are the messages Parley already has; try again later." }),

@@ -36,7 +36,11 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   assert.equal(avail.result.daily_limit, 100)
 
   const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: "2099-01-01T12:00:00Z" })
-  assert.equal(second.result.typing, undefined)
+  // Typing is on by default (the account holder's setting); an agent can skip it.
+  assert.equal(second.result.typing, true)
+  const plain = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900790", text: "plain", typing: false, not_before: "2099-01-01T12:00:00Z" })
+  assert.equal(plain.result.typing, undefined)
+  await callTool(base, token, "cancel_message", { message_id: plain.result.id })
   const typed = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900789", text: "typed", typing: true, not_before: "2099-01-01T12:00:00Z" })
   assert.equal(typed.result.typing, true)
   await callTool(base, token, "cancel_message", { message_id: typed.result.id })

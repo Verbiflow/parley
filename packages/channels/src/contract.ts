@@ -72,6 +72,9 @@ export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Ar
 /** The message a reaction (or a deletion) is for, as stored: its id, whether the account sent it, and (in a group) who did. */
 export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
+/** A message from the other side to mark read on the platform: its chat, its id, and (in a group) who sent it. */
+export type ReadTarget = { threadId: string; messageId: string; sender?: string | undefined }
+
 /** A stored message to fetch history from (backwards): which chat, which message, who sent it, when. */
 export type HistoryAnchor = { threadId: string; messageId: string; fromMe: boolean; sender?: string | undefined; at: string }
 
@@ -115,6 +118,13 @@ export interface LiveConnection {
    * that can't fetch history leave this out.
    */
   backfill?(anchor: HistoryAnchor, count: number): Promise<void>
+  /**
+   * Mark messages from the other side read on the platform itself, as opening the chat on the phone would: senders
+   * see them read only if the account holder's own read-receipt setting allows it (otherwise just the account's own
+   * devices mark the chat read). The host only calls this when asked to; reading in Parley never does. Channels
+   * without read receipts leave this out.
+   */
+  markRead?(messages: ReadTarget[]): Promise<void>
   /** Unlink the account on the channel; the saved state becomes useless afterward. */
   logout(): Promise<void>
   /** Drop the connection locally (e.g. idle eviction) without unlinking. */
@@ -182,6 +192,8 @@ export interface ChannelSimulator {
   sent(connectionId: string): Array<{ to: string; content: OutboundContent }>
   /** The history requests made on a connection (`LiveConnection.backfill`), for assertions. */
   backfills(connectionId: string): Array<{ anchor: HistoryAnchor; count: number }>
+  /** The messages marked read on the platform (`LiveConnection.markRead`), for assertions. */
+  readReceipts(connectionId: string): ReadTarget[]
   /** Make the next send on a connection fail the way the platform would. */
   failNextSend(connectionId: string, outcome: SendOutcome): void
   /** Hold the next send on a connection open (as a long "typing…" would) until the returned function is called. */

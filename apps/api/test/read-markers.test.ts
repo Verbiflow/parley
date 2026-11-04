@@ -160,3 +160,60 @@ test("every other tool's answer carries what's new, split into this chat and the
   assert.equal(await news("list_connections"), undefined)
   assert.deepEqual((await callTool(base, token, "get_notifications")).result, { all_chats: { chats: 0, messages: 0, reactions: 0 }, chats: [] })
 })
+
+test("read receipts: sent by default when reading marks read, skippable per call, never once the account holder turns them off", async () => {
+  const email = "receipts@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const { accountId, connectionId } = await linked(email)
+  const { setAgentBehaviour } = await import("../src/sessions/settings.ts")
+  const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString()
+  fake.simulator.deliver(connectionId, { id: "r1", threadId: "ana", from: "ana", text: "hi", at: at(1) })
+  fake.simulator.deliver(connectionId, { id: "r2", threadId: "ana", from: "me", fromMe: true, text: "hey", at: at(2) })
+  fake.simulator.deliver(connectionId, { id: "r3", threadId: "team", from: "bo", text: "yo", at: at(3) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 3)
+  const receipts = () => fake.simulator.readReceipts(connectionId)
+
+  // Looking, paging back, or reading with read_receipts: false tells the channel nothing.
+  await callTool(base, token, "read_inbox", { mark_read: false })
+  await callTool(base, token, "read_inbox", { before: at(10) })
+  const skipped = (await callTool(base, token, "read_inbox", { chat_id: "team", read_receipts: false })).result
+  assert.equal(skipped.read_receipts, undefined)
+  assert.deepEqual(receipts(), [])
+
+  // Reading (which marks read) sends them by default: the other side's shown messages, with the sender; not the account's own.
+  const one = (await callTool(base, token, "read_inbox", { chat_id: "ana" })).result
+  assert.deepEqual(one.read_receipts, { marked: 1 })
+  assert.deepEqual(receipts(), [{ threadId: "ana", messageId: "r1", sender: "ana" }])
+  // Asked for while only looking: sent, and Team stays new in Parley.
+  const looked = (await callTool(base, token, "read_inbox", { read_receipts: true, mark_read: false })).result
+  assert.deepEqual(looked.read_receipts, { marked: 2 })
+  assert.deepEqual(receipts().slice(1).map((r) => r.messageId).sort(), ["r1", "r3"])
+  assert.equal((await callTool(base, token, "get_notifications")).result.all_chats.messages, 0)
+
+  // Turned off by the account holder: none by default, and an agent asking is told why.
+  await setAgentBehaviour(sql, accountId, { readReceipts: false, typing: true })
+  const before = receipts().length
+  const quiet = (await callTool(base, token, "read_inbox", { chat_id: "ana" })).result
+  assert.equal(quiet.read_receipts, undefined)
+  const refused = (await callTool(base, token, "read_inbox", { chat_id: "ana", read_receipts: true })).result
+  assert.equal(refused.read_receipts.marked, 0)
+  assert.match(refused.read_receipts.off, /turned read receipts off/)
+  assert.equal(receipts().length, before)
+})
+
+test("typing: on by default, skippable per message, never once the account holder turns it off", async () => {
+  const email = "typing-setting@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const { accountId, connectionId } = await linked(email)
+  const { setAgentBehaviour, agentBehaviour } = await import("../src/sessions/settings.ts")
+  assert.deepEqual(await agentBehaviour(sql, accountId), { readReceipts: true, typing: true })
+  const later = "2099-01-01T12:00:00Z"
+  const send = (args: Record<string, unknown>) => callTool(base, token, "send_message", { connection_id: connectionId, to: "ana", text: "hi", not_before: later, ...args })
+  assert.equal((await send({})).result.typing, true)
+  assert.equal((await send({ typing: false })).result.typing, undefined)
+  await setAgentBehaviour(sql, accountId, { readReceipts: true, typing: false })
+  assert.equal((await send({})).result.typing, undefined)
+  const asked = (await send({ typing: true })).result
+  assert.equal(asked.typing, undefined)
+  assert.match(asked.typing_note, /turned typing off/)
+})

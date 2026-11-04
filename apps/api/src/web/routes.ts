@@ -10,6 +10,7 @@ import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
 import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listOutbound, resume } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
+import { agentBehaviour, setAgentBehaviour } from "../sessions/settings.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
 
@@ -379,8 +380,17 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/settings", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [sessions, agents, queued] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id)])
-    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: queued }))
+    const [sessions, agents, queued, behaviour] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id), agentBehaviour(ctx.sql, v.profile.id)])
+    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: queued, behaviour, saved: c.req.query("saved") === "1" }))
+  })
+
+  // An unchecked box isn't sent at all: absent means off.
+  app.post("/app/settings/behaviour", async (c) => {
+    const v = await viewer(c)
+    if (!v) return c.redirect("/")
+    const form = await c.req.formData()
+    await setAgentBehaviour(ctx.sql, v.profile.id, { readReceipts: form.get("read_receipts") === "on", typing: form.get("typing") === "on" })
+    return c.redirect("/app/settings?saved=1")
   })
 
   app.post("/app/settings/sessions/:id/end", async (c) => {
