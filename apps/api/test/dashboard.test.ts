@@ -49,23 +49,6 @@ test("dashboard pages show the signed-in account and escape it", async () => {
   assert.match(settings, /This browser/)
 })
 
-test("settings: read receipts and typing start on, and saving the form turns each off and back on", async () => {
-  const cookie = await browser("fern@parley.test")
-  const page = async () => (await fetch(`${base}/app/settings`, { headers: { cookie } })).text()
-  const checked = (html: string, name: string) => new RegExp(`name="${name}" value="on" checked`).test(html)
-  const save = (fields: Record<string, string>) => fetch(`${base}/app/settings/behaviour`, { method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields), redirect: "manual" })
-  const first = await page()
-  assert.ok(checked(first, "read_receipts") && checked(first, "typing"))
-
-  // An unchecked box isn't sent: only typing left on.
-  const res = await save({ typing: "on" })
-  assert.equal(res.headers.get("location"), "/app/settings?saved=1")
-  const after = await page()
-  assert.ok(!checked(after, "read_receipts") && checked(after, "typing"))
-  await save({ read_receipts: "on", typing: "on" })
-  assert.ok(checked(await page(), "read_receipts"))
-})
-
 test("disconnecting an agent lists it, then cuts off its live access token immediately", async () => {
   const cookie = await browser("erin@parley.test")
   const token = await agent("erin@parley.test", "Erin's <Agent>")

@@ -161,11 +161,11 @@ test("every other tool's answer carries what's new, split into this chat and the
   assert.deepEqual((await callTool(base, token, "get_notifications")).result, { all_chats: { chats: 0, messages: 0, reactions: 0 }, chats: [] })
 })
 
-test("read receipts: sent by default when reading marks read, skippable per call, never once the account holder turns them off", async () => {
+test("read receipts: sent by default when reading marks read, skippable per call, never on a number the account holder turned them off for", async () => {
   const email = "receipts@parley.test"
   const token = await agentToken(base, email, "Claude")
   const { accountId, connectionId } = await linked(email)
-  const { setAgentBehaviour } = await import("../src/sessions/settings.ts")
+  const { setBehaviour } = await import("../src/sessions/store.ts")
   const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString()
   fake.simulator.deliver(connectionId, { id: "r1", threadId: "ana", from: "ana", text: "hi", at: at(1) })
   fake.simulator.deliver(connectionId, { id: "r2", threadId: "ana", from: "me", fromMe: true, text: "hey", at: at(2) })
@@ -190,28 +190,46 @@ test("read receipts: sent by default when reading marks read, skippable per call
   assert.deepEqual(receipts().slice(1).map((r) => r.messageId).sort(), ["r1", "r3"])
   assert.equal((await callTool(base, token, "get_notifications")).result.all_chats.messages, 0)
 
-  // Turned off by the account holder: none by default, and an agent asking is told why.
-  await setAgentBehaviour(sql, accountId, { readReceipts: false, typing: true })
+  // Turned off for this number: none by default, and an agent asking is told why.
+  assert.equal(await setBehaviour(sql, accountId, connectionId, { readReceipts: false, typing: true }), true)
   const before = receipts().length
   const quiet = (await callTool(base, token, "read_inbox", { chat_id: "ana" })).result
   assert.equal(quiet.read_receipts, undefined)
   const refused = (await callTool(base, token, "read_inbox", { chat_id: "ana", read_receipts: true })).result
   assert.equal(refused.read_receipts.marked, 0)
-  assert.match(refused.read_receipts.off, /turned read receipts off/)
+  assert.match(refused.read_receipts.off, /turned read receipts off for/)
   assert.equal(receipts().length, before)
+
+  // Per number: a second number on the same account still sends them.
+  const second = await sessions.connect(accountId, "fake-wa", { timezone: "UTC" })
+  await waitUntil(() => sessions.status(accountId, second.connectionId), (s) => Boolean(s.link))
+  fake.simulator.completeLink(second.connectionId)
+  await waitUntil(() => sessions.status(accountId, second.connectionId), (s) => s.status === "connected")
+  fake.simulator.announceChats(second.connectionId, [{ id: "cy", name: "Cy", kind: "direct" }])
+  fake.simulator.deliver(second.connectionId, { id: "s1", threadId: "cy", from: "cy", text: "hello", at: at(4) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10, connectionId: second.connectionId }), (ms) => ms.length === 1)
+  const both = (await callTool(base, token, "read_inbox", { read_receipts: true })).result
+  assert.equal(both.read_receipts.marked, 1)
+  assert.match(both.read_receipts.off, /turned read receipts off for/)
+  assert.deepEqual(fake.simulator.readReceipts(second.connectionId).map((r) => r.messageId), ["s1"])
+  assert.equal(receipts().length, before)
+  // Another account can't change this one's numbers.
+  const other = await store.upsertAccount(sql, { subject: "local:nosy2@parley.test", email: "nosy2@parley.test", name: "N", signedInWith: "local" })
+  assert.equal(await setBehaviour(sql, other.id, connectionId, { readReceipts: true, typing: true }), false)
 })
 
-test("typing: on by default, skippable per message, never once the account holder turns it off", async () => {
+test("typing: on by default, skippable per message, never on a number the account holder turned it off for", async () => {
   const email = "typing-setting@parley.test"
   const token = await agentToken(base, email, "Claude")
   const { accountId, connectionId } = await linked(email)
-  const { setAgentBehaviour, agentBehaviour } = await import("../src/sessions/settings.ts")
-  assert.deepEqual(await agentBehaviour(sql, accountId), { readReceipts: true, typing: true })
+  const { setBehaviour, getConnection } = await import("../src/sessions/store.ts")
+  const conn = await getConnection(sql, connectionId)
+  assert.deepEqual([conn!.readReceipts, conn!.typing], [true, true])
   const later = "2099-01-01T12:00:00Z"
   const send = (args: Record<string, unknown>) => callTool(base, token, "send_message", { connection_id: connectionId, to: "ana", text: "hi", not_before: later, ...args })
   assert.equal((await send({})).result.typing, true)
   assert.equal((await send({ typing: false })).result.typing, undefined)
-  await setAgentBehaviour(sql, accountId, { readReceipts: true, typing: false })
+  await setBehaviour(sql, accountId, connectionId, { readReceipts: true, typing: false })
   assert.equal((await send({})).result.typing, undefined)
   const asked = (await send({ typing: true })).result
   assert.equal(asked.typing, undefined)

@@ -484,26 +484,8 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
 
 // ---- Settings -----------------------------------------------------------------------------------------------------
 
-const BEHAVIOUR_CSS = `
-.sw{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line);cursor:pointer}
-.sw:first-child{border-top:1px solid var(--line)}
-.sw input{appearance:none;flex:0 0 34px;height:20px;margin:1px 0 0;border-radius:10px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
-.sw input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
-.sw input:checked{background:var(--ok)}.sw input:checked::after{transform:translateX(14px)}
-.sw input:focus-visible{outline:2px solid var(--info);outline-offset:2px}
-.sw b{display:block;font-weight:500;font-size:13.5px}.sw small{display:block;margin-top:3px;font-size:12.5px;color:var(--muted);max-width:70ch}
-.sw-save{display:flex;gap:12px;align-items:center;padding-top:14px}
-`
-
-export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[]; currentSessionId: string; agentCount?: number; queuedTotal?: number; behaviour: { readReceipts: boolean; typing: boolean }; saved?: boolean }): string {
+export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[]; currentSessionId: string; agentCount?: number; queuedTotal?: number }): string {
   const u = opts.user
-  const toggle = (name: string, on: boolean, label: string, help: string) =>
-    `<label class="sw"><input type="checkbox" name="${name}" value="on"${on ? " checked" : ""}><span><b>${label}</b><small>${help}</small></span></label>`
-  const behaviour = `<form method="post" action="/app/settings/behaviour">
-      ${toggle("read_receipts", opts.behaviour.readReceipts, "Send read receipts", "When an agent reads a chat, mark it read on WhatsApp too, as opening it on your phone would. People see blue ticks only if your WhatsApp has read receipts on. Off: agents read without anyone knowing.")}
-      ${toggle("typing", opts.behaviour.typing, "Show typing", "Before a message goes, the chat shows \u201ctyping\u2026\u201d (\u201crecording\u2026\u201d before a voice note) for about as long as you'd take to write it. Off: messages just send.")}
-      <div class="sw-save"><button class="btn sm" type="submit">Save</button>${opts.saved ? `<span class="m faint">Saved.</span>` : ""}</div>
-    </form>`
   const rows = opts.sessions.map((s) => {
     const here = s.id === opts.currentSessionId
     return `<tr>
@@ -516,7 +498,7 @@ export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[
   }).join("")
   const others = opts.sessions.length > 1 ? `<form method="post" action="/app/settings/sessions/end-others"><button class="btn quiet sm" type="submit">sign out other sessions</button></form>` : ""
   return appShell({
-    title: "Settings", active: "settings", user: u, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, css: BEHAVIOUR_CSS,
+    title: "Settings", active: "settings", user: u, counts: { agents: opts.agentCount, outbox: opts.queuedTotal },
     body: `${pageHead({ title: "Settings", sub: "Your Parley account and where you're signed in.", lead: avatar(u, 40) })}
       ${section("Profile", `<div class="kv">
           <div class="k">name</div><div>${esc(u.name)}</div>
@@ -524,7 +506,6 @@ export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[
           <div class="k">signed in with</div><div>${esc(METHOD[u.signedInWith ?? ""] ?? "—")}</div>
           <div class="k">member since</div><div>${day(u.createdAt)}</div>
         </div>`, "from your sign-in provider")}
-      ${section("In your chats", behaviour, "every connected account", "Agents can skip these on a message, but can't turn on one you've turned off.")}
       ${section("Sessions", rows ? `<table class="tbl"><thead><tr><th>Browser</th><th>Method</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : empty("No active sessions", ""), others)}
       ${section("Security", `<p class="sec-note">Channel credentials and proxy logins are sealed with AES-256-GCM, bound to the record they belong to. Agents only get the access you authorize; disconnect any of them from <a href="/app/agents" style="color:var(--text);text-decoration:underline;text-underline-offset:3px">Agents</a>.</p>`)}`,
   })
@@ -582,6 +563,14 @@ const CHATS_CSS = `
 .pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
 .pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
+.behave{margin-top:16px;padding-top:4px;border-top:1px solid var(--line)}
+.sw{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.sw input{appearance:none;flex:0 0 34px;height:20px;margin:1px 0 0;border-radius:10px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
+.sw input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
+.sw input:checked{background:var(--ok)}.sw input:checked::after{transform:translateX(14px)}
+.sw input:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+.sw b{display:block;font-weight:500;font-size:13.5px}.sw small{display:block;margin-top:3px;font-size:12.5px;color:var(--muted);max-width:70ch}
+.behave .btn{margin-top:12px}
 .lede{font-size:13px;color:var(--text-2);margin:0}
 .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 0 4px}
 .search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:11px;top:10px;color:var(--faint)}
@@ -619,7 +608,10 @@ const CHATS_CSS = `
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
-/** Today's sending, and the one setting: how many messages a day. */
+/** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
+const toggle = (name: string, on: boolean, label: string, help: string) =>
+  `<label class="sw"><input type="checkbox" name="${name}" value="on"${on ? " checked" : ""}><span><b>${label}</b><small>${help}</small></span></label>`
+
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
   return `<div class="prefs">
@@ -629,6 +621,11 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
       <button class="btn line sm" type="submit">Save</button>
     </form>
     <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count.</p>
+    <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" class="behave">
+      ${toggle("read_receipts", conn.readReceipts, "Send read receipts", "When an agent reads a chat, mark it read on WhatsApp too, as opening it on this phone would. People see blue ticks only if this number's WhatsApp has read receipts on. Off: agents read without anyone knowing.")}
+      ${toggle("typing", conn.typing, "Show typing", "Before a message goes, the chat shows \u201ctyping\u2026\u201d (\u201crecording\u2026\u201d before a voice note) for about as long as you'd take to write it. Off: messages just send.")}
+      <button class="btn line sm" type="submit">Save</button>
+    </form>
   </div>`
 }
 
