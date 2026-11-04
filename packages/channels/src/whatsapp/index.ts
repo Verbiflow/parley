@@ -257,15 +257,15 @@ export const whatsappChannel: Channel = {
     const called = (jid: string, at: string, kind: CallKind): Chat => ({ ...chatOf(jid, null, at), lastCall: { at, kind } })
 
     /**
-     * The link-time history sync arrives as a run of batches. Tell the host how far along it is (WhatsApp reports a
-     * percentage on most batches), and that it's done once WhatsApp says 100% or no batch has come for 15 seconds.
+     * The link-time history sync arrives as a run of batches of different kinds. Each kind reports its own percentage
+     * (the tiny first bootstrap batch says 100% by itself), so the progress shown is the recent-chats batches' — what
+     * the person is waiting for — and "done" means no batch has come for 15 seconds, never a single batch's 100%.
      */
     let quiet: ReturnType<typeof setTimeout> | undefined
     let lastProgress: number | null = null
-    const historyBatch = (progress: number | null) => {
-      if (progress !== null) lastProgress = Math.max(lastProgress ?? 0, progress)
+    const historyBatch = (progress: number | null, syncType: number | null | undefined) => {
+      if (progress !== null && syncType === proto.HistorySync.HistorySyncType.RECENT) lastProgress = Math.max(lastProgress ?? 0, progress)
       if (quiet) clearTimeout(quiet)
-      if (lastProgress !== null && lastProgress >= 100) { emit({ type: "sync", progress: 100, done: true }); return }
       emit({ type: "sync", progress: lastProgress, done: false })
       quiet = setTimeout(() => { if (!stopped) emit({ type: "sync", progress: 100, done: true }) }, 15_000)
       quiet.unref?.()
@@ -337,7 +337,7 @@ export const whatsappChannel: Channel = {
         report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
         handleMessages(messages)
         // After the batch's chats and messages, so the host has stored them before it hears the progress (or "done").
-        historyBatch(typeof progress === "number" ? progress : null)
+        historyBatch(typeof progress === "number" ? progress : null, syncType)
       })
       // Calls: someone you're talking to by phone is as recent as a message. Only who, when and which way; nothing about
       // the call itself. A call ringing this account now:
