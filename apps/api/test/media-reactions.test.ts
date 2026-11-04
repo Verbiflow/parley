@@ -236,33 +236,36 @@ test("sending from a URL: the sessions service downloads it (videos past 16 MB a
   assert.equal(new TextDecoder().decode(out!.content.media!.data), "mp4-bytes")
 })
 
-test("backfill: asks for each recent chat's history before its newest message, and a message seen again gets its media and reactions filled in", async () => {
-  const { accountId, connectionId } = await linked("backfill@parley.test")
+test("load_history: asks the phone for the chat's last N, adds what Parley never had, fills in what it had without media, and returns them", async () => {
+  const { accountId, connectionId } = await linked("history@parley.test")
   const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
-  // Stored by older code: a photo with no media info, then two more messages.
-  fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "ana", text: "[photo]", at: at(-600) })
+  await assert.rejects(sessions.loadHistory(accountId, connectionId, "ana", 5), /no message in this chat yet/)
+  // Stored by older code: a photo with no media info, then a reply.
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0) })
   fake.simulator.deliver(connectionId, { id: "t", threadId: "ana", from: "me", fromMe: true, text: "nice", at: at(5) })
-  fake.simulator.deliver(connectionId, { id: "g", threadId: "team", from: "bo@s.whatsapp.net", text: "hi", at: at(2) })
-  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (m) => m.length === 4)
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (m) => m.length === 2)
 
-  const plan = await sessions.backfill(accountId, connectionId, at(-60))
-  assert.deepEqual(plan, { chats: 2, messages: 3 })
-  await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 2, 10_000)
-  const asked = Object.fromEntries(fake.simulator.backfills(connectionId).map((b) => [b.anchor.threadId, [b.anchor.messageId, b.anchor.fromMe, b.count]]))
-  assert.deepEqual(asked, { ana: ["t", true, 2], team: ["g", false, 1] })
+  const pending = sessions.loadHistory(accountId, connectionId, "ana", 4)
+  const [req] = await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 1)
+  // The newest stored message is the anchor; the other three are asked for before it.
+  assert.deepEqual([req!.anchor.threadId, req!.anchor.messageId, req!.anchor.fromMe, req!.count], ["ana", "t", true, 3])
 
-  // The phone's answer: the same message, now with its attachment and a reaction.
+  // The phone's answer: a message Parley never had, and the photo again, now with its attachment and a reaction.
   const reaction = { threadId: "ana", messageId: "p", from: "me", fromMe: true, emoji: "❤️", at: at(1) }
+  fake.simulator.deliver(connectionId, { id: "lost", threadId: "ana", from: "ana", text: "did you get this?", at: at(-3) })
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "late", thumbnail: "dGh1bWI=" }, reactions: [reaction] })
-  const filled = await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "ana" }), (m) => m.some((x) => x.id === "p" && x.media && x.reactions.length === 1))
-  const p = filled.find((x) => x.id === "p")!
+  const { answered, messages } = await pending
+  assert.equal(answered, true)
+  assert.deepEqual(messages.map((m) => m.id), ["lost", "p", "t"])
+  const p = messages.find((m) => m.id === "p")!
   assert.equal(p.media?.kind, "image")
   assert.deepEqual(p.reactions.map((r) => r.emoji), ["❤️"])
-  assert.equal(filled.filter((x) => x.id === "p").length, 1)
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
   // Seen once more without a preview: what's stored stays.
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "later" } })
   await new Promise((r) => setTimeout(r, 50))
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
+
+  const other = await store.upsertAccount(sql, { subject: "local:nosy2@parley.test", email: "nosy2@parley.test", name: "N", signedInWith: "local" })
+  await assert.rejects(sessions.loadHistory(other.id, connectionId, "ana", 5), /not your connection/)
 })

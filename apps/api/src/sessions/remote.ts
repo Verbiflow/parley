@@ -10,6 +10,8 @@ type EnqueueRequest = Parameters<Sessions["enqueue"]>[2]
 const RPC_TIMEOUT_MS = 20_000
 /** A download can wait on the sender's phone re-uploading an expired file. */
 const MEDIA_TIMEOUT_MS = 60_000
+/** load_history: the sessions service waits up to 20 s for the phone. */
+const HISTORY_TIMEOUT_MS = 40_000
 /** Sending from a URL: the sessions service downloads up to 100 MB first. */
 const DOWNLOAD_TIMEOUT_MS = 120_000
 
@@ -77,8 +79,9 @@ export class RemoteSessions implements SessionsApi {
     const about = JSON.parse(res.headers.get("x-parley-media") ?? "{}") as { mimetype?: string; kind?: string; fileName?: string | null }
     return { body: res.body, mimetype: about.mimetype ?? "application/octet-stream", kind: about.kind ?? "document", fileName: about.fileName ?? null }
   }
-  backfill(accountId: string, connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
-    return this.#call("backfill", [accountId, connectionId, since])
+  /** Waits on the phone (up to ~20 s on the sessions service), so it gets a longer timeout. */
+  loadHistory(accountId: string, connectionId: string, chatId: string, count: number): Promise<{ answered: boolean; messages: StoredMessage[] }> {
+    return this.#call("loadHistory", [accountId, connectionId, chatId, count], HISTORY_TIMEOUT_MS)
   }
   /** Fetching an attachment needs the live socket, so it runs on the sessions service. */
   media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
