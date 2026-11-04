@@ -24,7 +24,29 @@ export type Capabilities = {
  * A message seen on the connection. `threadId` is the chat it belongs to. `fromMe` marks one the account itself sent
  * (from its phone or through Parley), so a synced chat holds both sides of the conversation.
  */
-export type InboundMessage = { id: string; threadId: string; from: string; text: string; at: string; fromMe?: boolean }
+export type InboundMessage = {
+  id: string; threadId: string; from: string; text: string; at: string; fromMe?: boolean
+  /** The photo/video/voice note/document/sticker it carries. `text` is then its caption, or a placeholder like "[photo]". */
+  media?: MediaInfo | undefined
+  /** Reactions it already had when it arrived (a history sync carries them on the message). */
+  reactions?: Reaction[] | undefined
+}
+
+export type MediaKind = "image" | "video" | "audio" | "document" | "sticker"
+/**
+ * What a message's attachment is. `ref` is opaque to the host: the channel's own handle for fetching the file later
+ * through `LiveConnection.media` (files aren't downloaded until someone asks for one).
+ */
+export type MediaInfo = {
+  kind: MediaKind; mimetype: string | null; fileName?: string | null; size?: number | null
+  width?: number | null; height?: number | null; seconds?: number | null; ref: string
+}
+
+/**
+ * Someone reacted to a message (`messageId`, in chat `threadId`). `from` is who reacted (`"me"` with `fromMe`); an
+ * empty `emoji` means they took their reaction back. A person has at most one reaction per message: the latest wins.
+ */
+export type Reaction = { threadId: string; messageId: string; from: string; fromMe?: boolean; emoji: string; at: string }
 
 /**
  * A conversation on the channel: a person (`direct`) or a group. The user picks which chats Parley syncs; agents only
@@ -33,7 +55,15 @@ export type InboundMessage = { id: string; threadId: string; from: string; text:
 /** Which way the chat's most recent call went. */
 export type CallKind = "incoming" | "outgoing" | "missed"
 export type Chat = { id: string; name: string | null; kind: "direct" | "group"; lastMessageAt?: string | undefined; lastCall?: { at: string; kind: CallKind } | undefined }
-export type OutboundContent = { text: string }
+/**
+ * What to send. `text` alone is a message. With `media`, it's a photo/video/voice note/document and `text` is its
+ * caption (may be empty). With `react`, it's a reaction: `text` is the emoji, empty to take a reaction back.
+ */
+export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined }
+/** A file to send, already fetched: the bytes and what they are. */
+export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined }
+/** The message a reaction is for, as stored: its id, whether the account sent it, and (in a group) who did. */
+export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
 /** What a live connection tells the host (the session actor) as it runs. */
 export type ChannelEvent =
@@ -55,6 +85,8 @@ export type ChannelEvent =
   | { type: "messages"; messages: InboundMessage[] }
   /** A message arrived (or was sent from the account's own phone). History sync delivers these too. */
   | { type: "message"; message: InboundMessage }
+  /** Reactions added, changed or taken back on messages already seen. */
+  | { type: "reactions"; reactions: Reaction[] }
   /** The connection closed. `reason` is for logs/UI, not control flow. */
   | { type: "closed"; reason: string }
 
@@ -63,6 +95,8 @@ export type Emit = (event: ChannelEvent) => void
 /** A live connection the host holds (one per connected account, multiplexed many-per-worker). */
 export interface LiveConnection {
   send(to: string, content: OutboundContent): Promise<{ id: string }>
+  /** Fetch a message's attachment by its `MediaInfo.ref`. Channels without media leave this out. */
+  media?(ref: string): Promise<{ data: Uint8Array; mimetype: string }>
   /** Unlink the account on the channel; the saved state becomes useless afterward. */
   logout(): Promise<void>
   /** Drop the connection locally (e.g. idle eviction) without unlinking. */
@@ -117,7 +151,9 @@ export interface ChannelSimulator {
   /** Simulate the user completing the link (scanning the QR / authorizing). */
   completeLink(connectionId: string): void
   /** Simulate an inbound message. */
-  deliver(connectionId: string, message: { threadId: string; from: string; text: string; fromMe?: boolean }): void
+  deliver(connectionId: string, message: { id?: string; threadId: string; from: string; text: string; fromMe?: boolean; media?: MediaInfo; reactions?: Reaction[] }): void
+  /** Simulate reactions arriving (added, changed or taken back). */
+  react(connectionId: string, reactions: Reaction[]): void
   /** Simulate the channel reporting the account's chats (as on first link / history sync). */
   announceChats(connectionId: string, chats: Chat[]): void
   /** Make the next `open(connectionId)` fail. */

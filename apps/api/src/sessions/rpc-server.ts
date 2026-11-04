@@ -32,10 +32,13 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
     // the documented ones are dropped) — this service's clock decides pacing.
     if (op === "enqueue") {
       args.length = Math.min(args.length, 3)
-      const req = args[2] as { notBefore?: unknown } | undefined
+      const req = args[2] as { notBefore?: unknown; media?: { data?: unknown } } | undefined
       if (req && typeof req.notBefore === "string") req.notBefore = new Date(req.notBefore)
+      // A file's bytes cross the wire as base64.
+      if (req?.media) req.media.data = typeof req.media.data === "string" ? Buffer.from(req.media.data, "base64") : new Uint8Array()
     }
     if (op === "setLocale") args.length = Math.min(args.length, 3)
+    if (op === "media") args.length = Math.min(args.length, 4)
 
     try {
       const fn = sessions[op] as (...a: unknown[]) => Promise<unknown>

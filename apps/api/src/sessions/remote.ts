@@ -1,6 +1,6 @@
 import type { Sql } from "@parley/auth/db"
 import type { LinkMethod } from "@parley/channels"
-import { ConnectError, type LiveOp, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
+import { ConnectError, type LiveOp, type MediaFile, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
 import { OutboxError, type Queued } from "./outbox.ts"
 import { getConnection, listConnections, type Connection, type Locale } from "./store.ts"
 import { listChats, getChat, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
@@ -8,6 +8,15 @@ import { listChats, getChat, readMessages, inbox, inboxChats, type ChatRow, type
 const CONNECT_ERRORS = new Set(["unknown_channel", "not_found", "forbidden", "not_connected", "not_synced", "no_exit"])
 type EnqueueRequest = Parameters<Sessions["enqueue"]>[2]
 const RPC_TIMEOUT_MS = 20_000
+/** A download can wait on the sender's phone re-uploading an expired file. */
+const MEDIA_TIMEOUT_MS = 60_000
+
+/** Base64 without Node's Buffer (this runs on the edge). */
+function base64(bytes: Uint8Array): string {
+  let out = ""
+  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(out)
+}
 
 /** How the edge reaches the sessions service: a `fetch` (the Workers VPC binding's, in production) plus the shared secret. */
 export type SessionsTransport = { fetch: (input: string, init: RequestInit) => Promise<Response>; baseUrl: string; secret: string }
@@ -33,7 +42,12 @@ export class RemoteSessions implements SessionsApi {
   }
   /** `now` isn't forwarded: the sessions service's clock decides pacing. */
   enqueue(accountId: string, connectionId: string, req: EnqueueRequest): Promise<{ message: Queued; replayed: boolean }> {
-    return this.#call("enqueue", [accountId, connectionId, { ...req, notBefore: req.notBefore?.toISOString() }])
+    const media = req.media && { ...req.media, data: base64(req.media.data) }
+    return this.#call("enqueue", [accountId, connectionId, { ...req, notBefore: req.notBefore?.toISOString(), media }])
+  }
+  /** Fetching an attachment needs the live socket, so it runs on the sessions service. */
+  media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
+    return this.#call("media", [accountId, connectionId, chatId, messageId], MEDIA_TIMEOUT_MS)
   }
   setLocale(accountId: string, connectionId: string, locale: Locale): Promise<void> {
     return this.#call("setLocale", [accountId, connectionId, locale])
@@ -90,13 +104,13 @@ export class RemoteSessions implements SessionsApi {
     return conn
   }
 
-  async #call<T>(op: LiveOp, args: unknown[]): Promise<T> {
+  async #call<T>(op: LiveOp, args: unknown[], timeoutMs = RPC_TIMEOUT_MS): Promise<T> {
     const { fetch, baseUrl, secret } = this.#transport
     const res = await fetch(`${baseUrl}/rpc/${op}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
       body: JSON.stringify({ args }),
-      signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     const body = (await res.json().catch(() => undefined)) as { result?: T; error?: { type?: string; code: string; message: string } } | undefined
     if (res.ok && body && "result" in body) return body.result as T

@@ -1,10 +1,29 @@
 import type { Sql } from "@parley/auth/db"
-import type { CallKind, Chat, InboundMessage } from "@parley/channels"
+import type { CallKind, Chat, InboundMessage, MediaInfo, Reaction } from "@parley/channels"
 
 /** CRUD for `parley.chat` / `parley.message`: the chats on a connection, which are synced, and synced messages. */
 
 export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null }
-export type StoredMessage = { id: string; chatId: string; sender: string; fromMe: boolean; text: string; at: string }
+/** A message's attachment as readers see it: what it is, without the channel's fetch handle. */
+export type MediaView = Omit<MediaInfo, "ref">
+export type ReactionView = { from: string; fromMe: boolean; emoji: string; at: string }
+export type StoredMessage = {
+  id: string; chatId: string; sender: string; fromMe: boolean; text: string; at: string
+  media: MediaView | null; reactions: ReactionView[]
+}
+
+type RawMessage = { id: string; chat_id: string; sender: string; from_me: boolean; body: string; sent_at: Date; media: MediaInfo | null; reactions: Array<{ from: string; from_me: boolean; emoji: string; at: string }> | null }
+const MESSAGE_COLS = `m.id, m.chat_id, m.sender, m.from_me, m.body, m.sent_at, m.media,
+  (select jsonb_agg(jsonb_build_object('from', r.reactor, 'from_me', r.reactor = 'me', 'emoji', r.emoji, 'at', r.reacted_at) order by r.reacted_at)
+     from parley.reaction r where r.connection_id = m.connection_id and r.chat_id = m.chat_id and r.message_id = m.id and r.emoji <> '') as reactions`
+const messageView = (r: RawMessage): StoredMessage => {
+  const { ref: _ref, ...media } = r.media ?? ({} as MediaInfo)
+  return {
+    id: r.id, chatId: r.chat_id, sender: r.sender, fromMe: r.from_me, text: r.body, at: r.sent_at.toISOString(),
+    media: r.media ? media : null,
+    reactions: (r.reactions ?? []).map((x) => ({ from: x.from, fromMe: x.from_me, emoji: x.emoji, at: new Date(x.at).toISOString() })),
+  }
+}
 
 type Raw = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; last_message_at: Date | null; last_call_at: Date | null; last_call_kind: CallKind | null }
 const chatRow = (r: Raw): ChatRow => ({
@@ -190,29 +209,58 @@ export async function chatsChosen(sql: Sql, connectionId: string): Promise<boole
   return Boolean(r?.chosen)
 }
 
-/** Store messages, but only those in synced chats (the filter is in the insert, so a race with un-syncing can't leak). */
+/**
+ * Store messages, but only those in synced chats (the filter is in the insert, so a race with un-syncing can't leak).
+ * Reactions they arrived with are stored after them.
+ */
 export async function saveMessages(sql: Sql, connectionId: string, messages: InboundMessage[]): Promise<void> {
   if (!messages.length) return
   await sql(
-    `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at)
-     select $1, m.chat_id, m.id, left(m.sender, 200), m.from_me, m.body, m.at
+    `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at, media)
+     select $1, m.chat_id, m.id, left(m.sender, 200), m.from_me, m.body, m.at, m.media
        from jsonb_array_elements($2::jsonb) with ordinality as e(v, ord),
-            jsonb_to_record(e.v) as m(chat_id text, id text, sender text, from_me boolean, body text, at timestamptz)
+            jsonb_to_record(e.v) as m(chat_id text, id text, sender text, from_me boolean, body text, at timestamptz, media jsonb)
        join parley.chat c on c.connection_id = $1 and c.id = m.chat_id and c.synced
       order by e.ord
      on conflict do nothing`,
-    [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), body: m.text, at: m.at })))]
+    [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), body: m.text, at: m.at, media: m.media ?? null })))]
+  )
+  await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
+}
+
+/**
+ * Record reactions: per person per message the latest wins, and a taken-back one is kept as an empty emoji (so an older
+ * reaction arriving late doesn't revive it). Only reactions to stored messages are kept; anything else is a message
+ * agents can't see.
+ */
+export async function saveReactions(sql: Sql, connectionId: string, reactions: Reaction[]): Promise<void> {
+  if (!reactions.length) return
+  await sql(
+    `insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
+     select distinct on (r.chat_id, r.message_id, r.reactor) $1, r.chat_id, r.message_id, r.reactor, r.emoji, r.at
+       from jsonb_to_recordset($2::jsonb) as r(chat_id text, message_id text, reactor text, emoji text, at timestamptz)
+       join parley.message m on m.connection_id = $1 and m.chat_id = r.chat_id and m.id = r.message_id
+      order by r.chat_id, r.message_id, r.reactor, r.at desc
+     on conflict (connection_id, chat_id, message_id, reactor) do update set emoji = excluded.emoji, reacted_at = excluded.reacted_at
+      where excluded.reacted_at >= parley.reaction.reacted_at`,
+    [connectionId, JSON.stringify(reactions.map((r) => ({ chat_id: r.threadId, message_id: r.messageId, reactor: r.fromMe ? "me" : r.from.slice(0, 200), emoji: r.emoji.slice(0, 64), at: r.at })))]
   )
 }
 
+/** A stored message's attachment, with the channel's fetch handle. Undefined when there's no such message or no media. */
+export async function messageMedia(sql: Sql, connectionId: string, chatId: string, messageId: string): Promise<MediaInfo | undefined> {
+  const [r] = await sql<{ media: MediaInfo | null }>(`select media from parley.message where connection_id = $1 and chat_id = $2 and id = $3`, [connectionId, chatId, messageId])
+  return r?.media ?? undefined
+}
+
 export async function readMessages(sql: Sql, connectionId: string, chatId: string, opts: { limit: number; before?: string | undefined }): Promise<StoredMessage[]> {
-  const rows = await sql<{ id: string; chat_id: string; sender: string; from_me: boolean; body: string; sent_at: Date }>(
-    `select id, chat_id, sender, from_me, body, sent_at from parley.message
-      where connection_id = $1 and chat_id = $2 and ($3::timestamptz is null or sent_at < $3)
-      order by sent_at desc, seq desc limit $4`,
+  const rows = await sql<RawMessage>(
+    `select ${MESSAGE_COLS} from parley.message m
+      where m.connection_id = $1 and m.chat_id = $2 and ($3::timestamptz is null or m.sent_at < $3)
+      order by m.sent_at desc, m.seq desc limit $4`,
     [connectionId, chatId, opts.before ?? null, opts.limit]
   )
-  return rows.reverse().map((r) => ({ id: r.id, chatId: r.chat_id, sender: r.sender, fromMe: r.from_me, text: r.body, at: r.sent_at.toISOString() }))
+  return rows.reverse().map(messageView)
 }
 
 export type InboxMessage = StoredMessage & { channel: string; connectionId: string; chatName: string | null; chatKind: "direct" | "group" }
@@ -226,8 +274,8 @@ export type InboxFilter = { channel?: string | undefined; connectionId?: string 
  * channel, connection, or one chat. Only synced chats ever have stored messages, so nothing else can appear here.
  */
 export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { limit: number; before?: string | undefined }): Promise<InboxMessage[]> {
-  const rows = await sql<{ id: string; chat_id: string; sender: string; from_me: boolean; body: string; sent_at: Date; channel: string; connection_id: string; name: string | null; kind: "direct" | "group" }>(
-    `select m.id, m.chat_id, m.sender, m.from_me, m.body, m.sent_at, k.channel, k.id as connection_id, c.name, c.kind
+  const rows = await sql<RawMessage & { channel: string; connection_id: string; name: string | null; kind: "direct" | "group" }>(
+    `select ${MESSAGE_COLS}, k.channel, k.id as connection_id, c.name, c.kind
        from parley.message m
        join parley.chat c on c.connection_id = m.connection_id and c.id = m.chat_id and c.synced
        join parley.connection k on k.id = m.connection_id
@@ -239,10 +287,7 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
       order by m.sent_at desc, m.seq desc limit $6`,
     [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.chatId ?? null, opts.before ?? null, opts.limit]
   )
-  return rows.map((r) => ({
-    id: r.id, chatId: r.chat_id, sender: r.sender, fromMe: r.from_me, text: r.body, at: r.sent_at.toISOString(),
-    channel: r.channel, connectionId: r.connection_id, chatName: r.name, chatKind: r.kind,
-  }))
+  return rows.map((r) => ({ ...messageView(r), channel: r.channel, connectionId: r.connection_id, chatName: r.name, chatKind: r.kind }))
 }
 
 /** Synced chats across the account's connected connections, most recent first. `awaitingReply` keeps those whose last message was theirs. */
