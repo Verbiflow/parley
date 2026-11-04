@@ -167,8 +167,8 @@ const isActive = (a: AgentView) => Boolean(a.lastUsedAt && Date.now() - Date.par
 
 const OVERVIEW_CSS = `
 .chan td:first-child{padding-left:0}
-.chtags{display:flex;flex-wrap:wrap;gap:8px;padding-top:16px}
-.chtag{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 13px;border:1px solid var(--line-2);border-radius:999px;background:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:lowercase;color:var(--text-2);white-space:nowrap}
+.chtags{display:flex;flex-wrap:wrap;gap:6px;margin-right:6px}
+.chtag{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px;border:1px solid var(--line-2);border-radius:999px;background:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:lowercase;color:var(--text-2);white-space:nowrap}
 button.chtag{cursor:pointer;transition:border-color .15s var(--ease),background .15s var(--ease),color .15s var(--ease)}button.chtag:hover{color:var(--text);border-color:var(--line-3);background:var(--hover)}
 .chtag.soon{border-style:dashed;color:var(--faint)}.chtag.soon .cm,.chtag.soon svg{filter:grayscale(1);opacity:.5}.chtag i{font-style:normal;color:var(--faint)}
 .conns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding-top:16px}
@@ -218,8 +218,8 @@ function connectorCards(skip: Set<string>, compact = false): string {
 }
 
 /**
- * Once a channel is linked, the channels are a row of small tags instead of cards: "+ whatsapp" links another
- * number, the rest say soon.
+ * Once a channel is linked, the channels are small tags in the section's header row instead of cards:
+ * "+ whatsapp" links another number, the rest say soon.
  */
 function channelTags(): string {
   return `<div class="chtags">${Object.keys(CHANNELS).map((id) => {
@@ -323,7 +323,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your AI." })}
     ${alerts}
-    ${section("Link a channel", hasChannel ? `${table}${channelTags()}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
+    ${section("Link a channel", hasChannel ? table : connectorCards(linked), hasChannel ? `${channelTags()}${doneTag}` : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
   }
 
@@ -339,7 +339,7 @@ export function dashboardPage(opts: {
       <div><span class="label">queued</span><div class="v">${queued}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
       <div><span class="label">agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
-    ${section("Channels", `${table}${channelTags()}`)}
+    ${section("Channels", table, channelTags())}
     ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">all activity</a>`)}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: false })}`)
 }
