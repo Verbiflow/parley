@@ -63,17 +63,19 @@ export type Outbound = {
   reactTo: string | null
   /** A deletion, for everyone, of this sent message (the channel's id for it). */
   unsend: string | null
+  /** The chat shows the account typing for a moment before it goes. */
+  typing: boolean
   scheduledFor: string | null; sentAt: string | null; attempts: number; error: { code: string; message: string } | null; createdAt: string
 }
 type OutRow = {
   id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; status: OutboundStatus; scheduled_for: Date | null
   not_before: Date | null; sent_at: Date | null; attempts: number; error_code: string | null; error_message: string | null; created_at: Date
-  media: OutboundMediaInfo | null; react_to: string | null; unsend: string | null
+  media: OutboundMediaInfo | null; react_to: string | null; unsend: string | null; typing: boolean
 }
-const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at, media, react_to, unsend"
+const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at, media, react_to, unsend, typing"
 const outbound = (r: OutRow): Outbound => ({
   id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, status: r.status,
-  media: r.media ?? null, reactTo: r.react_to ?? null, unsend: r.unsend ?? null,
+  media: r.media ?? null, reactTo: r.react_to ?? null, unsend: r.unsend ?? null, typing: r.typing,
   scheduledFor: r.status === "scheduled" ? (r.scheduled_for?.toISOString() ?? null) : null,
   sentAt: r.sent_at?.toISOString() ?? null, attempts: r.attempts,
   error: r.error_code ? { code: r.error_code, message: r.error_message ?? r.error_code } : null, createdAt: r.created_at.toISOString(),
@@ -144,6 +146,8 @@ export type EnqueueRequest = {
   unsend?: string | undefined
   /** The platform stops honouring the deletion after this: refuse it if its slot would land later. */
   unsendBefore?: Date | undefined
+  /** Show the account typing (recording, for a voice note) before it goes, as a person would. Not for reactions or deletions. */
+  typing?: boolean | undefined
 }
 
 /**
@@ -182,11 +186,11 @@ export async function enqueue(
     }
 
     const [row] = await sql<OutRow>(
-      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to, unsend)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning ${OUT_COLUMNS}`,
+      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to, unsend, typing)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning ${OUT_COLUMNS}`,
       [c.id, req.to, kind, req.text, r.ok ? r.at : null, req.notBefore ?? null, req.idempotencyKey ?? null, req.agentSessionId ?? null, now,
         req.media ? JSON.stringify({ kind: req.media.kind, mimetype: req.media.mimetype, ...(req.media.fileName ? { fileName: req.media.fileName } : {}) }) : null,
-        req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null, req.unsend ?? null]
+        req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null, req.unsend ?? null, Boolean(req.typing && !req.reactTo && !req.unsend)]
     )
     return { message: { ...outbound(row!), waits: r.ok ? r.waits : ["paused"], held: !r.ok }, replayed: false }
   })
@@ -242,7 +246,7 @@ export async function availability(sql: Sql, accountId: string, connectionId: st
 
 export type Claimed = {
   id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; attempts: number
-  media?: OutboundMedia | undefined; reactTo?: string | undefined; unsend?: string | undefined
+  media?: OutboundMedia | undefined; reactTo?: string | undefined; unsend?: string | undefined; typing: boolean
 }
 
 /**
@@ -252,8 +256,8 @@ export type Claimed = {
 export async function claimDue(tx: Transactor, connectionIds: string[], now: Date): Promise<Claimed[]> {
   if (!connectionIds.length) return []
   return tx.transaction(async (sql) => {
-    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number; media: OutboundMediaInfo | null; media_data: Uint8Array | null; react_to: string | null; unsend: string | null }>(
-      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts, o.media, o.media_data, o.react_to, o.unsend from parley.outbound o
+    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number; media: OutboundMediaInfo | null; media_data: Uint8Array | null; react_to: string | null; unsend: string | null; typing: boolean }>(
+      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts, o.media, o.media_data, o.react_to, o.unsend, o.typing from parley.outbound o
         where o.status = 'scheduled' and o.id in (
           select distinct on (d.connection_id) d.id
             from parley.outbound d join parley.connection k on k.id = d.connection_id
@@ -267,7 +271,7 @@ export async function claimDue(tx: Transactor, connectionIds: string[], now: Dat
     if (!rows.length) return []
     await sql(`update parley.outbound set status = 'sending', attempts = attempts + 1, lease_expires_at = $2 where id = any($1::uuid[])`, [rows.map((r) => r.id), new Date(now.getTime() + LEASE_MS)])
     return rows.map((r) => ({
-      id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, attempts: r.attempts + 1,
+      id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, attempts: r.attempts + 1, typing: r.typing,
       ...(r.media && r.media_data ? { media: { ...r.media, data: new Uint8Array(r.media_data) } } : {}),
       ...(r.react_to ? { reactTo: r.react_to } : {}),
       ...(r.unsend ? { unsend: r.unsend } : {}),

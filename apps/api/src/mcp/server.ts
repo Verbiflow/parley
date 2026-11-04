@@ -39,6 +39,7 @@ const outboundView = (m: Outbound) => ({
   ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null } } : {}),
   ...(m.reactTo ? { reaction_to: m.reactTo } : {}),
   ...(m.unsend ? { deletes: m.unsend } : {}),
+  ...(m.typing ? { typing: true } : {}),
   scheduled_for: m.scheduledFor, sent_at: m.sentAt, error: m.error, created_at: m.createdAt,
 })
 
@@ -386,16 +387,17 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),
         idempotency_key: z.string().min(1).max(200).optional().describe("Retrying with the same key returns the original message instead of sending twice."),
+        typing: z.boolean().optional().describe("Show \"typing…\" in the chat first (\"recording…\" before a voice note), for about as long as a person would take: ~24s per 100 characters (50 words a minute), at most a minute, then send. Good for a conversational reply; leave it off (the default) when it should just go."),
       },
     },
-    async ({ connection_id, to, text, media, kind, not_before, idempotency_key }, extra) => {
+    async ({ connection_id, to, text, media, kind, not_before, idempotency_key, typing }, extra) => {
       const { userId, sessionId } = principalOf(extra)
       try {
         if (!text && !media) return fail("give `text`, `media`, or both")
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: to })
         const file = media ? resolveMedia(media) : undefined
         const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
-          to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId,
+          to, text: text ?? "", media: file, kind, notBefore: not_before ? new Date(not_before) : undefined, idempotencyKey: idempotency_key, agentSessionId: sessionId, typing,
         })
         return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
       } catch (e) {

@@ -61,6 +61,21 @@ const seconds = (t: unknown): string | undefined => {
 }
 
 /** A send in Baileys' terms: plain text, a file with its caption, a reaction to a stored message, or a deletion of one. */
+/** 50 words a minute at ~5 characters a word: 250 characters a minute, so ~24s per 100 characters. */
+const TYPING_MS_PER_CHAR = 60_000 / 250
+/** Never longer than this (well inside the outbox lease), never shorter than a beat. */
+export const TYPING_MAX_MS = 60_000
+const TYPING_MIN_MS = 1500
+
+/**
+ * How long to show the account typing before a message: its length at 50 wpm (a voice note: as long as it plays),
+ * ±15% jitter, between a beat and a minute.
+ */
+export function typingMs(content: Pick<OutboundContent, "text" | "media">, random = Math.random): number {
+  const base = content.media?.kind === "audio" ? (content.media.seconds ?? 3) * 1000 : content.text.length * TYPING_MS_PER_CHAR
+  return Math.round(Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, base * (0.85 + random() * 0.3))))
+}
+
 function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
   const { text, media, react, unsend } = content
   if (unsend) {
@@ -492,6 +507,26 @@ export const whatsappChannel: Channel = {
 
     connect()
 
+    /**
+     * "typing…" (or "recording…" before a voice note) for about as long as a person would take, then cleared. Best
+     * effort: if WhatsApp won't take the indicator, the message still goes.
+     */
+    async function showTyping(jid: string, content: OutboundContent): Promise<void> {
+      const state = content.media?.kind === "audio" ? "recording" : "composing"
+      const ms = typingMs(content)
+      try {
+        console.log(JSON.stringify({ msg: "whatsapp: typing", state, ms, chars: content.text.length }))
+        // The indicator fades after ~10s on the other phone: say it again every 8s until the message goes.
+        for (let left = ms; left > 0; left -= 8000) {
+          await sock.sendPresenceUpdate(state, jid)
+          await new Promise((r) => setTimeout(r, Math.min(left, 8000)))
+        }
+        await sock.sendPresenceUpdate("paused", jid)
+      } catch (e) {
+        console.error(JSON.stringify({ msg: "whatsapp: typing failed", state, error: e instanceof Error ? e.message : String(e) }))
+      }
+    }
+
     return {
       async send(to, content) {
         const jid = toJid(to)
@@ -501,6 +536,7 @@ export const whatsappChannel: Channel = {
           if (found && !found.exists) throw new SendFailure("recipient_unavailable", `${to} isn't on WhatsApp`)
         }
         try {
+          if (content.typing && !content.react && !content.unsend) await showTyping(jid, content)
           const res = await sock.sendMessage(jid, contentFor(jid, content))
           remember(res?.key?.id, res?.message)
           return { id: res?.key?.id ?? "" }

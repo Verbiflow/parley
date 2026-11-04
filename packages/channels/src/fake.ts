@@ -17,6 +17,7 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
   const conns = new Map<string, ConnState>()
   const failNext = new Set<string>()
   const failSend = new Map<string, SendOutcome>()
+  const holdSend = new Map<string, Promise<void>>()
   const proxies = new Map<string, string | undefined>()
 
   const channel: Channel = {
@@ -41,6 +42,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       return {
         async send(to: string, content: OutboundContent) {
           if (!conn.linked) throw new Error("not linked")
+          const hold = holdSend.get(connectionId)
+          if (hold) {
+            holdSend.delete(connectionId)
+            await hold
+          }
           const failure = failSend.get(connectionId)
           if (failure) {
             failSend.delete(connectionId)
@@ -108,6 +114,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
     },
     failNextSend(connectionId, outcome) {
       failSend.set(connectionId, outcome)
+    },
+    holdNextSend(connectionId) {
+      let release!: () => void
+      holdSend.set(connectionId, new Promise<void>((r) => (release = r)))
+      return release
     },
     proxyOf(connectionId) {
       return proxies.get(connectionId)

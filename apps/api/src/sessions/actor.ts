@@ -133,6 +133,8 @@ export class Sessions {
   #seal: SecretSeal | undefined
   #dispatcher: ReturnType<typeof setInterval> | undefined
   #dispatching: Promise<number> | undefined
+  /** Connections with a send in flight (it may be showing "typing…" for a while), and its chain. */
+  #sending = new Map<string, Promise<void>>()
   readonly tx: Transactor
   readonly exits: Exits
   private readonly ctx: SessionsContext
@@ -154,6 +156,7 @@ export class Sessions {
   async stop(): Promise<void> {
     clearInterval(this.#dispatcher)
     await this.#dispatching?.catch(() => {})
+    await Promise.all(this.#sending.values())
     for (const entry of this.#live.values()) await entry.live?.close().catch(() => {})
     this.#live.clear()
     await this.tx.close()
@@ -212,17 +215,32 @@ export class Sessions {
    */
   async dispatchDue(now?: Date): Promise<number> {
     if (this.#dispatching) return this.#dispatching
+    let started: Promise<void>[] = []
+    // Only claiming is exclusive. The sends themselves run in the background, one chain per connection, so an account
+    // showing "typing…" for up to a minute holds up nobody else: the next pass claims for every connection that
+    // isn't mid-send. The returned promise still settles once this pass's own sends are done.
     this.#dispatching = (async () => {
       const at = now ?? new Date()
       await expireLeases(this.tx, at)
-      const ids = [...this.#live].filter(([, e]) => e.live && !e.loggingOut).map(([id]) => id)
+      const ids = [...this.#live].filter(([id, e]) => e.live && !e.loggingOut && !this.#sending.has(id)).map(([id]) => id)
       const jobs = await claimDue(this.tx, ids, at)
-      for (const job of jobs) await this.#deliver(job, now)
+      const byConnection = new Map<string, Claimed[]>()
+      for (const job of jobs) byConnection.set(job.connectionId, [...(byConnection.get(job.connectionId) ?? []), job])
+      started = [...byConnection].map(([connectionId, queue]) => {
+        const run = (async () => {
+          for (const job of queue) await this.#deliver(job, now)
+        })().catch((e) => console.error(JSON.stringify({ msg: "delivery failed", connectionId, error: e instanceof Error ? e.message : String(e) })))
+          .finally(() => this.#sending.delete(connectionId))
+        this.#sending.set(connectionId, run)
+        return run
+      })
       return jobs.length
     })().finally(() => {
       this.#dispatching = undefined
     })
-    return this.#dispatching
+    const count = await this.#dispatching
+    await Promise.all(started)
+    return count
   }
 
   async #deliver(job: Claimed, now: Date | undefined): Promise<void> {
@@ -242,6 +260,7 @@ export class Sessions {
         text: job.text, media: job.media,
         react: job.reactTo ? await this.#reactTarget(job.connectionId, job.chatId, job.reactTo) : undefined,
         unsend: job.unsend ? { messageId: job.unsend, fromMe: true } : undefined,
+        typing: job.typing,
       })
       result = { outcome: "sent", externalId: sent.id }
     } catch (e) {
