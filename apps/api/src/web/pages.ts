@@ -168,7 +168,10 @@ const isActive = (a: AgentView) => Boolean(a.lastUsedAt && Date.now() - Date.par
 
 const OVERVIEW_CSS = `
 .chan td:first-child{padding-left:0}
-.more{padding-top:8px;margin-left:-11px}
+.chtags{display:flex;flex-wrap:wrap;gap:8px;padding-top:16px}
+.chtag{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 13px;border:1px solid var(--line-2);border-radius:999px;background:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:lowercase;color:var(--text-2);white-space:nowrap}
+button.chtag{cursor:pointer;transition:border-color .15s var(--ease),background .15s var(--ease),color .15s var(--ease)}button.chtag:hover{color:var(--text);border-color:var(--line-3);background:var(--hover)}
+.chtag.soon{border-style:dashed;color:var(--faint)}.chtag.soon .cm,.chtag.soon svg{filter:grayscale(1);opacity:.5}.chtag i{font-style:normal;color:var(--faint)}
 .conns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding-top:16px}
 .conn{display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1);transition:border-color .15s var(--ease)}
 .conn .ct{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:11px;background:color-mix(in srgb,var(--c) 14%,transparent)}
@@ -212,6 +215,19 @@ function connectorCards(skip: Set<string>, compact = false): string {
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
       <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">coming soon</span>`}</div>
     </div>`
+  }).join("")}</div>`
+}
+
+/**
+ * Once a channel is linked, the channels are a row of small tags instead of cards: "+ whatsapp" links another
+ * number, the rest say soon.
+ */
+function channelTags(): string {
+  return `<div class="chtags">${Object.keys(CHANNELS).map((id) => {
+    const c = CHANNELS[id]!
+    return c.live
+      ? connectForm(`${channelMark(id, 13)}${c.name.toLowerCase()}`, "chtag")
+      : `<span class="chtag soon">${channelMark(id, 13)}${c.name.toLowerCase()}<i>soon</i></span>`
   }).join("")}</div>`
 }
 
@@ -296,9 +312,7 @@ export function dashboardPage(opts: {
     </tr>`
   }).join("")
 
-  // Another number on a linked channel is a quiet line under its rows, not a second call to action.
-  const addMore = linked.has("whatsapp") ? `<div class="more">${connectForm("Add another WhatsApp number", "btn quiet sm")}</div>` : ""
-  const table = `<table class="tbl chan"><thead><tr><th>Account</th><th>Status</th><th>Today</th><th>Queued</th><th>Next send</th><th>Chats</th><th></th></tr></thead><tbody>${rows}</tbody></table>${addMore}`
+  const table = `<table class="tbl chan"><thead><tr><th>Account</th><th>Status</th><th>Today</th><th>Queued</th><th>Next send</th><th>Chats</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:12px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
@@ -310,7 +324,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your AI." })}
     ${alerts}
-    ${section("Link a channel", hasChannel ? `${table}${connectorCards(linked, true)}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
+    ${section("Link a channel", hasChannel ? `${table}${channelTags()}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
   }
 
@@ -326,7 +340,7 @@ export function dashboardPage(opts: {
       <div><span class="label">queued</span><div class="v">${queued}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
       <div><span class="label">agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
-    ${section("Channels", `${table}${connectorCards(linked, true)}`)}
+    ${section("Channels", `${table}${channelTags()}`)}
     ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">all activity</a>`)}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: false })}`)
 }
