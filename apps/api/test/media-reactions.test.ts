@@ -7,7 +7,17 @@ import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
 const textOnly = makeFakeChannel("fake-txt")
-const { ctx, sql, base } = await testServer([fake.channel, textOnly.channel])
+// Sending from a URL downloads on the sessions service; here a stand-in serves a few known files.
+const served: Record<string, { body: string; type?: string }> = {
+  "https://cdn.example.com/clip.mp4": { body: "mp4-bytes", type: "video/mp4" },
+  "https://cdn.example.com/files/report": { body: "%PDF-1.7", type: "application/pdf" },
+}
+const fetchMedia = async (url: string) => {
+  const f = served[url]
+  if (!f) throw new (await import("../src/mcp/media.ts")).MediaInputError("couldn't download the file (HTTP 404)")
+  return { data: new TextEncoder().encode(f.body), contentType: f.type, fileName: url.split("/").pop() }
+}
+const { ctx, sql, base } = await testServer([fake.channel, textOnly.channel], {}, { fetchMedia })
 const sessions = ctx.sessions
 const T0 = new Date("2026-11-03T15:00:00Z")
 
@@ -131,7 +141,7 @@ test("MCP: read_inbox shows media and reactions, get_media returns a viewable im
   })
   const content = ((await res.json()) as { result: { content: Array<{ type: string; data?: string; mimeType?: string }> } }).result.content
   const image = content.find((c) => c.type === "image")!
-  assert.equal(image.mimeType, "image/png")
+  assert.equal(image.mimeType, "image/jpeg")
   assert.equal(Buffer.from(image.data!, "base64").toString(), "mcp-photo")
 
   const sent = await callTool(base, token, "send_message", { connection_id: connectionId, to: "ana", media: { data: Buffer.from("png!").toString("base64"), mimetype: "image/png" } })
@@ -149,4 +159,78 @@ test("MCP: read_inbox shows media and reactions, get_media returns a viewable im
   assert.equal(reacted.isError, false, String(reacted.result))
   assert.equal(reacted.result.reaction_to, "m1")
   assert.equal(reacted.result.text, "👍")
+})
+
+async function mcpCall(token: string, name: string, args: Record<string, unknown>) {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  })
+  return ((await res.json()) as { result: { isError?: boolean; content: Array<{ type: string; text?: string; data?: string; mimeType?: string; resource?: { blob: string; mimeType: string } }> } }).result
+}
+
+test("files of every kind: videos give their preview and a download link, text files read inline, PDFs as documents, and links stream the real file", async () => {
+  const email = "files@parley.test"
+  const token = await agentToken(base, email, "Claude")
+  const account = await store.upsertAccount(sql, { subject: `local:${email}`, email, name: email, signedInWith: "local" })
+  const { connectionId } = await sessions.connect(account.id, "fake-wa", { timezone: "UTC" })
+  await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
+  fake.simulator.completeLink(connectionId)
+  await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }])
+  await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 1)
+  const thumb = Buffer.from("tiny-jpeg").toString("base64")
+  const deliver = (id: string, media: Record<string, unknown>) => fake.simulator.deliver(connectionId, { id, threadId: "ana", from: "ana", text: `[${media.kind}]`, media: media as never })
+  deliver("vid", { kind: "video", mimetype: "video/mp4", size: 80 * 1024 * 1024, seconds: 42, ref: "the-video", thumbnail: thumb })
+  deliver("csv", { kind: "document", mimetype: "text/csv", fileName: "people.csv", size: 20, ref: "name,age\nana,30" })
+  deliver("pdf", { kind: "document", mimetype: "application/pdf", fileName: "deck.pdf", size: 9, ref: "%PDF-deck" })
+  deliver("zip", { kind: "document", mimetype: "application/zip", fileName: "a.zip", size: 3, ref: "zip" })
+  await waitUntil(() => sessions.inbox(account.id, { limit: 10 }), (m) => m.length === 4)
+
+  // read_inbox stays lean: no preview bytes in the listing.
+  const listed = (await callTool(base, token, "read_inbox", {})).result.messages
+  assert.ok(listed.every((m: { media: Record<string, unknown> }) => !("thumbnail" in m.media) && !("ref" in m.media)))
+
+  const video = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "vid" })
+  const about = JSON.parse(video.content[0]!.text!)
+  assert.equal(about.seconds, 42)
+  assert.match(about.download_url, /\/media\//)
+  assert.deepEqual(video.content.slice(1).map((c) => [c.type, c.data]), [["image", thumb]])
+
+  const csv = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "csv" })
+  assert.equal(csv.content[1]!.text, "name,age\nana,30")
+  const pdf = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "pdf" })
+  assert.equal(pdf.content[1]!.type, "resource")
+  assert.equal(Buffer.from(pdf.content[1]!.resource!.blob, "base64").toString(), "%PDF-deck")
+  const zip = await mcpCall(token, "get_media", { connection_id: connectionId, chat_id: "ana", message_id: "zip" })
+  assert.equal(zip.content.length, 1)
+
+  // The link: the whole file, as a download that can't render as a page here; anything else is refused.
+  const res = await fetch(about.download_url)
+  assert.equal(res.status, 200)
+  assert.equal(await res.text(), "the-video")
+  assert.equal(res.headers.get("content-type"), "video/mp4")
+  assert.match(res.headers.get("content-disposition")!, /^attachment; filename="video-vid\.mp4"/)
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff")
+  assert.match(res.headers.get("content-security-policy")!, /sandbox/)
+  assert.equal((await fetch(`${about.download_url}x`)).status, 404)
+  assert.equal((await fetch(`${base}/media/not-a-token`)).status, 404)
+})
+
+test("sending from a URL: the sessions service downloads it (videos past 16 MB allowed), and a bad link fails the call", async () => {
+  const { accountId, connectionId } = await linked("url-send@parley.test")
+  const v = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "watch", media: { url: "https://cdn.example.com/clip.mp4" } }, T0)
+  assert.deepEqual(v.message.media, { kind: "video", mimetype: "video/mp4", fileName: "clip.mp4" })
+  const d = await sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { url: "https://cdn.example.com/files/report", fileName: "Q3.pdf" } }, T0)
+  assert.deepEqual(d.message.media, { kind: "document", mimetype: "application/pdf", fileName: "Q3.pdf" })
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { url: "https://cdn.example.com/missing.mp4" } }, T0), /HTTP 404/)
+  await assert.rejects(
+    sessions.enqueue(accountId, connectionId, { to: "ana", text: "", media: { kind: "image", mimetype: "image/jpeg", data: new Uint8Array(17 * 1024 * 1024) } }, T0),
+    /image can be at most 16 MB/
+  )
+  await sessions.dispatchDue(T0)
+  const [out] = fake.simulator.sent(connectionId)
+  assert.equal(out!.content.media?.kind, "video")
+  assert.equal(new TextDecoder().decode(out!.content.media!.data), "mp4-bytes")
 })

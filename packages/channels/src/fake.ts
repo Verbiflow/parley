@@ -51,7 +51,7 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
         // The fake's "file" is the ref's own bytes, so a test can tell which attachment came back.
         async media(ref: string) {
           if (!caps.media) throw new Error("no media on this channel")
-          return { data: new TextEncoder().encode(ref), mimetype: "image/png" }
+          return { body: new Blob([ref]).stream(), mimetype: "image/png" }
         },
         async logout() {
           conn.linked = false

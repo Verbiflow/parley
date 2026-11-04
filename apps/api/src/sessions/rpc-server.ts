@@ -18,9 +18,29 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
 
   app.get("/health", (c) => c.json({ ok: true }))
 
+  const authorized = (header: string | undefined) => {
+    const token = header?.match(/^Bearer (.+)$/i)?.[1]
+    return Boolean(token) && timingSafeEqual(digest(token!), expected)
+  }
+
+  // An attachment as raw bytes, streamed as it downloads (for download links: files can be far bigger than JSON
+  // should carry). What it is rides in a header. Errors are JSON like every other op.
+  app.post("/rpc-stream/media", async (c) => {
+    if (!authorized(c.req.header("authorization"))) return c.json({ error: { code: "unauthorized", message: "unauthorized" } }, 401)
+    const args = ((await c.req.json().catch(() => undefined)) as { args?: unknown[] } | undefined)?.args
+    if (!Array.isArray(args) || args.length < 4 || args.slice(0, 4).some((a) => typeof a !== "string")) return c.json({ error: { code: "bad_request", message: "expected { args: [accountId, connectionId, chatId, messageId] }" } }, 400)
+    try {
+      const file = await sessions.mediaStream(...(args.slice(0, 4) as [string, string, string, string]))
+      return new Response(file.body, { headers: { "content-type": "application/octet-stream", "x-parley-media": JSON.stringify({ mimetype: file.mimetype, kind: file.kind, fileName: file.fileName }) } })
+    } catch (e) {
+      if (e instanceof ConnectError) return c.json({ error: { type: e.name, code: e.code, message: e.message } }, 400)
+      console.error(JSON.stringify({ msg: "rpc failed", op: "mediaStream", error: e instanceof Error ? e.message : String(e) }))
+      return c.json({ error: { code: "internal", message: "internal error" } }, 500)
+    }
+  })
+
   app.post("/rpc/:op", async (c) => {
-    const token = c.req.header("authorization")?.match(/^Bearer (.+)$/i)?.[1]
-    if (!token || !timingSafeEqual(digest(token), expected)) return c.json({ error: { code: "unauthorized", message: "unauthorized" } }, 401)
+    if (!authorized(c.req.header("authorization"))) return c.json({ error: { code: "unauthorized", message: "unauthorized" } }, 401)
 
     const op = c.req.param("op") as LiveOp
     if (!LIVE_OPS.includes(op)) return c.json({ error: { code: "unknown_op", message: "unknown op" } }, 404)
@@ -34,8 +54,8 @@ export function rpcApp(sessions: Sessions, secret: string): Hono {
       args.length = Math.min(args.length, 3)
       const req = args[2] as { notBefore?: unknown; media?: { data?: unknown } } | undefined
       if (req && typeof req.notBefore === "string") req.notBefore = new Date(req.notBefore)
-      // A file's bytes cross the wire as base64.
-      if (req?.media) req.media.data = typeof req.media.data === "string" ? Buffer.from(req.media.data, "base64") : new Uint8Array()
+      // A file's bytes cross the wire as base64 (a URL to download instead has none).
+      if (req?.media && typeof req.media.data === "string") req.media.data = Buffer.from(req.media.data, "base64")
     }
     if (op === "setLocale") args.length = Math.min(args.length, 3)
     if (op === "media") args.length = Math.min(args.length, 4)

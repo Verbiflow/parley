@@ -18,7 +18,16 @@ const root = dirname(require.resolve("@whiskeysockets/baileys/package.json"))
 const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string }
 
 const MARK = "parley patch"
-const edits: Array<{ file: string; find: string; insert: "before" | "after" | "replace"; text: string }> = [
+// libsignal (Baileys' Signal protocol) prints whole session records — private keys included — to the console whenever
+// it opens or closes one. On the server that's the service log. Keep the notices, drop the key material.
+const libsignal = dirname(createRequire(join(root, "package.json")).resolve("libsignal/package.json"))
+const edits: Array<{ file: string; find: string; insert: "before" | "after" | "replace"; text: string; root?: string }> = [
+  ...([
+    ['console.warn("Session already closed", session);', 'console.warn("Session already closed"); // parley patch: no keys in logs'],
+    ['console.info("Closing session:", session);', 'console.info("Closing session"); // parley patch: no keys in logs'],
+    ['console.info("Opening session:", session);', 'console.info("Opening session"); // parley patch: no keys in logs'],
+    ['console.info("Removing old closed session:", oldestSession);', 'console.info("Removing old closed session"); // parley patch: no keys in logs'],
+  ] as const).map(([find, text]) => ({ file: "src/session_record.js", find, insert: "replace" as const, text, root: libsignal })),
   {
     file: "lib/Utils/validate-connection.js",
     find: "supportCallLogHistory: false,",
@@ -51,7 +60,7 @@ const edits: Array<{ file: string; find: string; insert: "before" | "after" | "r
 
 let changed = 0
 for (const e of edits) {
-  const path = join(root, e.file)
+  const path = join(e.root ?? root, e.file)
   const src = readFileSync(path, "utf8")
   if (src.includes(e.text.trim().split("\n")[0]!)) continue
   if (src.split(e.find).length !== 2) {

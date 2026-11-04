@@ -10,6 +10,7 @@ import { buildMcpServer } from "./mcp/server.ts"
 import { ConnectError } from "./sessions/actor.ts"
 import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
 import { LIMITS } from "./ratelimit.ts"
+import { verifyMediaLink } from "./media-link.ts"
 
 /**
  * The caller's address. Behind Cloudflare (production) that's `cf-connecting-ip`, which Cloudflare sets itself — the
@@ -27,6 +28,12 @@ function clientIp(c: Context): string {
     return "unknown"
   }
 }
+
+const EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "video/mp4": ".mp4", "video/quicktime": ".mov",
+  "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "application/pdf": ".pdf",
+}
+const extension = (mimetype: string) => EXTENSIONS[mimetype.split(";")[0]!.trim().toLowerCase()] ?? ""
 
 const SIGN_IN = /^\/(auth\/(dev|start|callback)|oauth\/(token|register|authorize))$/
 
@@ -80,6 +87,31 @@ export function makeApp(ctx: AppContext): Hono {
     return c.html(linkPage(c.req.param("id")))
   })
 
+  // A message attachment, by signed link (from get_media). Served as a download, never rendered: whatever the file
+  // claims to be, it can't run as a page on this origin.
+  app.get("/media/:token", async (c) => {
+    const claims = await verifyMediaLink(ctx.config.signInKey, c.req.param("token"))
+    if (!claims) return c.text("This link is invalid or has expired. Ask for the file again with get_media.", 404)
+    try {
+      const file = await ctx.sessions.mediaStream(claims.accountId, claims.connectionId, claims.chatId, claims.messageId)
+      const name = file.fileName || `${file.kind}-${claims.messageId}${extension(file.mimetype)}`
+      return new Response(file.body, {
+        headers: {
+          "content-type": file.mimetype || "application/octet-stream",
+          "content-disposition": `attachment; filename="${name.replace(/[^\w.\- ]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "cache-control": "private, no-store",
+          "referrer-policy": "no-referrer",
+        },
+      })
+    } catch (e) {
+      if (e instanceof ConnectError) return c.text(e.code === "not_connected" ? "The WhatsApp connection is offline; try again once it's back." : e.message, e.code === "not_connected" ? 503 : 404)
+      console.error(JSON.stringify({ msg: "media download failed", error: e instanceof Error ? e.message : String(e) }))
+      return c.text("Couldn't fetch the file from WhatsApp. Try again shortly.", 502)
+    }
+  })
+
   app.all("/mcp", async (c) => {
     const base = ctx.config.publicUrl ?? new URL(c.req.url).origin
     const challenge = `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`
@@ -109,7 +141,7 @@ export function makeApp(ctx: AppContext): Hono {
     }
 
     // Stateless: a fresh server + transport per request, so there's no cross-request state to leak.
-    const server = buildMcpServer(ctx)
+    const server = buildMcpServer(ctx, base)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     await server.connect(transport)
     return transport.handleRequest(c.req.raw, { authInfo: { token, clientId: "", scopes: ["mcp"], extra: { userId, sessionId } } })

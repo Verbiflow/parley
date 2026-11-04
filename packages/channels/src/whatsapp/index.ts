@@ -5,7 +5,8 @@ import makeWASocket, {
 import { proxyAgent } from "@parley/proxies/agent"
 import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions, type OutboundContent, type Reaction } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
-import { textOf, mediaOf, messageOfRef, reactionOf, embeddedReactions, type RawReaction } from "./parse.ts"
+import { Readable } from "node:stream"
+import { textOf, mediaOf, messageOfRef, reactionOf, embeddedReactions, mp4Seconds, type RawReaction } from "./parse.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
 // Baileys wants a pino-like logger. Keep it quiet except errors, which go to the service log as one JSON line (Baileys'
@@ -72,7 +73,9 @@ function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
   const caption = text || undefined
   switch (media.kind) {
     case "image": return { image: data, mimetype: media.mimetype, caption }
-    case "video": return { video: data, mimetype: media.mimetype, caption }
+    // The length shows on the bubble; WhatsApp doesn't work it out itself.
+    // (Baileys copies extra fields into the video message, it just doesn't type `seconds` for video.)
+    case "video": return { video: data, mimetype: media.mimetype, caption, seconds: media.seconds ?? mp4Seconds(media.data) } as AnyMessageContent
     // A voice note when it's the format WhatsApp records them in; otherwise an audio file. Audio can't carry a caption.
     case "audio": return { audio: data, mimetype: media.mimetype, ptt: /ogg|opus/i.test(media.mimetype) }
     case "document": return { document: data, mimetype: media.mimetype, fileName: media.fileName ?? "file", caption }
@@ -473,10 +476,10 @@ export const whatsappChannel: Channel = {
       async media(ref) {
         const message = messageOfRef(ref)
         // WhatsApp keeps media for a while; once its copy is gone, Baileys asks the sender's phone to upload it again.
-        const data = await downloadMediaMessage(message, "buffer", {}, { logger: SILENT, reuploadRequest: (m) => sock.updateMediaMessage(m) })
+        const stream = await downloadMediaMessage(message, "stream", {}, { logger: SILENT, reuploadRequest: (m) => sock.updateMediaMessage(m) })
         const c = message.message ?? {}
         const mimetype = (c.imageMessage ?? c.videoMessage ?? c.ptvMessage ?? c.audioMessage ?? c.documentMessage ?? c.stickerMessage)?.mimetype ?? "application/octet-stream"
-        return { data: new Uint8Array(data), mimetype }
+        return { body: Readable.toWeb(stream) as ReadableStream<Uint8Array>, mimetype }
       },
       async logout() {
         stopped = true
