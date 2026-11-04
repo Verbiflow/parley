@@ -297,6 +297,23 @@ export function webRoutes(ctx: AppContext): Hono {
     return c.redirect("/app")
   })
 
+  // Relink: sign the old link out and start a fresh one with the same locale. WhatsApp sends the recent-chats list
+  // only while a device is linking, so this is how an account linked without it gets its one-to-one chats.
+  app.post("/app/connections/:id/relink", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const old = (await ctx.sessions.list(userId)).find((x) => x.id === c.req.param("id"))
+    if (!old) return c.text("Unknown connection.", 404)
+    await ctx.sessions.logout(userId, old.id).catch(() => {})
+    try {
+      const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined })
+      return c.redirect(`/link/${started.connectionId}`)
+    } catch (e) {
+      if (e instanceof ConnectError && e.code === "no_exit") return c.redirect(`/app/network?error=${encodeURIComponent(e.message)}`)
+      throw e
+    }
+  })
+
   // Choose which chats on a connection are synced (visible to agents). Signed-in only: the link URL an agent holds
   // must not let it widen its own access.
   app.get("/app/connections/:id/chats", async (c) => {

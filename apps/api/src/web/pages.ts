@@ -681,13 +681,15 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   const name = channelName(conn.channel)
   // Like your phone: chats with recent activity first. The rest (old groups, people you only share a group with) are
   // a click or a search away, so hundreds of dead groups don't bury the people you actually talk to.
-  const recentCount = chats.filter((c) => c.lastMessageAt).length
+  // A person WhatsApp gave only a private id for, with no name yet, is "Unknown contact": not worth a top spot.
+  const isRecent = (c: ChatRow) => Boolean(c.lastMessageAt) && (c.kind === "group" || Boolean(c.name || phoneOf(c.id)))
+  const recentCount = chats.filter(isRecent).length
   const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length }
   const rows = chats.map((c) => {
     const label = c.name || phoneOf(c.id) || (c.kind === "group" ? "Unnamed group" : "Unknown contact")
     const sub = c.kind === "group" ? "group" : c.name ? phoneOf(c.id) || "contact" : "contact"
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
-    return `<label class="chat" data-kind="${c.kind}" data-recent="${c.lastMessageAt ? 1 : 0}" data-q="${esc(search)}">
+    return `<label class="chat" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-q="${esc(search)}">
       <input type="checkbox" name="chat" value="${esc(c.id)}"${c.synced ? " checked" : ""}>
       <span class="box">${icon("check", 11, 3)}</span>
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
@@ -712,13 +714,14 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
             <button type="button" class="tag" data-t="on" aria-pressed="false">Selected</button>
           </div>
         </div>
-        ${counts.direct === 0 ? `<div class="note"><div class="grow"><b>No people yet, only groups</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking. Disconnect this account and link it again (about 20 seconds) to load them.</p></div></div>` : ""}
+        ${counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : ""}
         <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div>${recentCount && recentCount < chats.length ? `<button type="button" class="older" id="older">Show ${chats.length - recentCount} older chats</button>` : ""}</div>
         <div class="save"><span class="grow" id="count"></span>
           <button class="btn quiet sm" type="button" id="all">select shown</button>
           <button class="btn quiet sm" type="button" id="clear">clear shown</button>
           <button class="btn" type="submit">Save</button></div>
       </form>
+      <form id="relink" method="post" action="/app/connections/${esc(conn.id)}/relink"></form>
       <script>
         const list=document.getElementById('list'),q=document.getElementById('q'),count=document.getElementById('count'),older=document.getElementById('older');
         const rows=[...list.querySelectorAll('.chat')];
