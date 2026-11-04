@@ -569,6 +569,25 @@ export const whatsappChannel: Channel = {
           console.log(JSON.stringify({ msg: "whatsapp: history requested", requestId, addressing: remoteJid.endsWith("@lid") ? "lid" : isJidGroup(remoteJid) ? "group" : "pn", count }))
         }
       },
+      async markRead(messages) {
+        // As opening the chat on the phone does. Baileys checks the account's own privacy setting first: with read
+        // receipts off it sends "read-self", which only marks the chat read on the account's own devices.
+        const keys: WAMessageKey[] = []
+        for (const m of messages) {
+          const jid = toJid(m.threadId)
+          // A person's messages may have come in under their private id or their number: mark under each form we
+          // know (a receipt for a message that isn't under that address is ignored).
+          const lids = isJidGroup(jid) ? [] : [...phoneOfLid].filter(([, pn]) => pn === jid).map(([lid]) => lid)
+          for (const remoteJid of [...lids, jid]) {
+            const key: WAMessageKey = { remoteJid, id: m.messageId, fromMe: false }
+            if (isJidGroup(jid) && m.sender && m.sender !== "me") key.participant = toJid(m.sender)
+            keys.push(key)
+          }
+        }
+        if (!keys.length) return
+        await sock.readMessages(keys)
+        console.log(JSON.stringify({ msg: "whatsapp: marked read", messages: messages.length }))
+      },
       async logout() {
         stopped = true
         if (saveTimer) clearTimeout(saveTimer)
