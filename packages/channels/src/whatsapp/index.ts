@@ -114,7 +114,7 @@ export const whatsappChannel: Channel = {
   id: WHATSAPP_ID,
   capabilities: WHATSAPP_CAPABILITIES,
 
-  async open({ state, proxy, emit }: OpenOptions): Promise<LiveConnection> {
+  async open({ state, proxy, emit, sentMessage }: OpenOptions): Promise<LiveConnection> {
     // One agent for the WebSocket and one for media/HTTPS fetches, so nothing leaves from the server's own IP.
     const agent = proxy ? proxyAgent(proxy) : undefined
     const fetchAgent = proxy ? proxyAgent(proxy) : undefined
@@ -137,7 +137,8 @@ export const whatsappChannel: Channel = {
     let stopped = false
     // Messages we sent, by id. When a recipient's phone can't decrypt one, it asks us to send it again; Baileys looks
     // the message up through `getMessage` and re-encrypts it. Without this the request is ignored and the recipient sees
-    // "Waiting for this message" for good. Kept across reconnects; the oldest are dropped past the cap.
+    // "Waiting for this message" for good. Recent ones are kept here (across reconnects); every one also goes to the
+    // host to store, so a request that comes after a restart (a deploy) still finds it.
     const sent = new Map<string, proto.IMessage>()
     const SENT_CAP = 1000
     const remember = (id: string | null | undefined, message: proto.IMessage | null | undefined) => {
@@ -145,6 +146,13 @@ export const whatsappChannel: Channel = {
       sent.delete(id)
       sent.set(id, message)
       if (sent.size > SENT_CAP) sent.delete(sent.keys().next().value!)
+      emit({ type: "sent", id, message: proto.Message.encode(message).finish() })
+    }
+    const lookUpSent = async (id: string): Promise<{ message?: proto.IMessage; from: "memory" | "store" | "none" }> => {
+      const recent = sent.get(id)
+      if (recent) return { message: recent, from: "memory" }
+      const stored = await sentMessage?.(id).catch(() => undefined)
+      return stored ? { message: proto.Message.decode(stored), from: "store" } : { from: "none" }
     }
     // How many times each message has been resent, so a phone that keeps failing can't make us resend forever. Shared
     // across reconnects (Baileys would otherwise start a fresh count on every socket).
@@ -414,9 +422,9 @@ export const whatsappChannel: Channel = {
         // Resend a message a recipient couldn't decrypt (see `sent` above).
         // Logged (ids only, no text) so a message stuck on "Waiting for this message" can be traced.
         getMessage: async (key) => {
-          const found = key.id ? sent.get(key.id) : undefined
-          console.log(JSON.stringify({ msg: "whatsapp: resend requested", id: key.id, found: Boolean(found) }))
-          return found
+          const found = key.id ? await lookUpSent(key.id) : { from: "none" as const }
+          console.log(JSON.stringify({ msg: "whatsapp: resend requested", id: key.id, found: Boolean(found.message), from: found.from }))
+          return found.message
         },
         msgRetryCounterCache,
         ...(agent ? { agent, fetchAgent } : {}),

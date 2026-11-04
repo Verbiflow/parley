@@ -11,6 +11,7 @@ type ConnState = {
   sent: Array<{ to: string; content: OutboundContent }>
   backfills: Array<{ anchor: HistoryAnchor; count: number }>
   receipts: ReadTarget[]
+  sentMessage?: OpenOptions["sentMessage"]
 }
 
 export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities>): ChannelFake {
@@ -24,14 +25,14 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
   const channel: Channel = {
     id,
     capabilities: caps,
-    async open({ connectionId, state, proxy, emit }: OpenOptions): Promise<LiveConnection> {
+    async open({ connectionId, state, proxy, emit, sentMessage }: OpenOptions): Promise<LiveConnection> {
       proxies.set(connectionId, proxy)
       if (failNext.has(connectionId)) {
         failNext.delete(connectionId)
         emit({ type: "closed", reason: "forced failure" })
         throw new Error("open failed")
       }
-      const conn: ConnState = { emit, linked: Boolean(state), sent: [], backfills: [], receipts: [] }
+      const conn: ConnState = { emit, linked: Boolean(state), sent: [], backfills: [], receipts: [], sentMessage }
       conns.set(connectionId, conn)
       if (state) {
         // Reconnect from saved creds: live immediately, no link step.
@@ -54,7 +55,10 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
             throw new SendFailure(failure, `simulated ${failure}`)
           }
           conn.sent.push({ to, content })
-          return { id: `msg-${conn.sent.length}` }
+          const id = `msg-${conn.sent.length}`
+          // Like WhatsApp: hand the host the sent message to keep for resend requests (the fake keeps none itself).
+          emit({ type: "sent", id, message: new TextEncoder().encode(JSON.stringify({ to, text: content.text })) })
+          return { id }
         },
         // The fake's "file" is the ref's own bytes, so a test can tell which attachment came back.
         async media(ref: string) {
@@ -113,6 +117,11 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
     },
     sent(connectionId) {
       return conns.get(connectionId)?.sent ?? []
+    },
+    async requestResend(connectionId, id) {
+      const conn = conns.get(connectionId)
+      if (!conn) throw new Error(`no open connection ${connectionId}`)
+      return conn.sentMessage?.(id)
     },
     backfills(connectionId) {
       return conns.get(connectionId)?.backfills ?? []
