@@ -4,12 +4,12 @@ import type { Outcome } from "@parley/pacing"
 import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { Transactor } from "../db/transactor.ts"
 import { Exits, ExitError } from "./exits.ts"
-import { claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
+import { UNSEND_WINDOW_MS, abandon, claimDue, enqueue, expireLeases, replanConnection, report, setLocale, OutboxError, type Claimed, type EnqueueRequest, type Queued } from "./outbox.ts"
 import { describeMedia, maxBytesFor, MediaInputError, type MediaSend } from "../mcp/media.ts"
 import type { MediaFetcher } from "./fetch-media.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -50,6 +50,7 @@ const HISTORY_SETTLE_MS = 2_000
 
 /** The largest attachment fetched whole (to hand an agent inline). Bigger ones go through a download link. */
 export const MAX_MEDIA_BYTES = 16 * 1024 * 1024
+const OUTBOUND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Read a stream whole, refusing past `max` bytes. */
 export async function readAll(body: ReadableStream<Uint8Array>, max: number): Promise<Uint8Array> {
@@ -192,6 +193,7 @@ export class Sessions {
       )
       if (!found) throw new OutboxError("not_found", "no such message in that chat (use a message id from read_inbox)")
     }
+    if (req.unsend) req = { ...req, ...(await this.#unsendTarget(accountId, connectionId, req.to, req.unsend, at)), text: "" }
     const queued = await enqueue(this.tx, { accountId, connectionId, ...req }, at)
     // Due now on a connection held here: send without waiting for the next pass. (Not for a caller-supplied clock.)
     if (!now && queued.message.scheduledFor && Date.parse(queued.message.scheduledFor) <= at.getTime() && this.#live.has(connectionId)) {
@@ -228,12 +230,26 @@ export class Sessions {
     let result: { outcome: Outcome; externalId?: string; detail?: string }
     try {
       if (!entry?.live) throw new SendFailure("transport_error", "connection went offline before the send")
-      const sent = await entry.live.send(job.chatId, { text: job.text, media: job.media, react: job.reactTo ? await this.#reactTarget(job.connectionId, job.chatId, job.reactTo) : undefined })
+      if (job.unsend) {
+        // It may have waited in the queue (a paused account) past the point the platform still honours it.
+        const sentAt = await this.#sentAt(job.connectionId, job.chatId, job.unsend)
+        if (sentAt && sentAt.getTime() + UNSEND_WINDOW_MS <= (now ?? new Date()).getTime()) {
+          await abandon(this.tx, job.id, "too_late", "it waited past the time the message could still be deleted for everyone", now ?? new Date())
+          return
+        }
+      }
+      const sent = await entry.live.send(job.chatId, {
+        text: job.text, media: job.media,
+        react: job.reactTo ? await this.#reactTarget(job.connectionId, job.chatId, job.reactTo) : undefined,
+        unsend: job.unsend ? { messageId: job.unsend, fromMe: true } : undefined,
+      })
       result = { outcome: "sent", externalId: sent.id }
     } catch (e) {
       result = { outcome: e instanceof SendFailure ? e.outcome : "transport_error", detail: e instanceof Error ? e.message : String(e) }
     }
     await report(this.tx, job.id, result, now ?? new Date())
+    // Gone for everyone, so gone here too (the platform's own notice of it may come later, or not at all).
+    if (job.unsend && result.outcome === "sent") await forgetMessages(this.ctx.sql, job.connectionId, [{ threadId: job.chatId, messageId: job.unsend }]).catch(() => {})
 
     const exitId = await this.exits.liveExitId(this.ctx.sql, job.connectionId)
     if (!exitId) return
@@ -265,6 +281,55 @@ export class Sessions {
       if (e instanceof MediaInputError) throw new OutboxError("action_unsupported", e.message)
       throw e
     }
+  }
+
+  /**
+   * The message a deletion takes back, as the channel knows it: given as the id send_message returned (a message sent
+   * through Parley) or a message id from read_inbox (one the account sent, from Parley or its phone). Only the
+   * account's own messages, within the platform's window, and not one already being deleted.
+   */
+  async #unsendTarget(accountId: string, connectionId: string, chatId: string, id: string, now: Date): Promise<{ to: string; unsend: string; unsendBefore: Date }> {
+    const conn = await getConnection(this.ctx.sql, connectionId)
+    if (!conn || conn.accountId !== accountId) throw new OutboxError(conn ? "forbidden" : "not_found", conn ? "not your connection" : "no such connection")
+    const channel = channelById(this.ctx.channels, conn.channel)
+    if (channel && !channel.capabilities.unsend) throw new OutboxError("action_unsupported", `${channel.id} can't delete sent messages`)
+    let target: { chatId: string; messageId: string; sentAt: Date }
+    if (OUTBOUND_ID.test(id)) {
+      const [o] = await this.ctx.sql<{ chat_id: string; status: string; external_id: string | null; sent_at: Date | null; react_to: string | null; unsend: string | null }>(
+        `select chat_id, status, external_id, sent_at, react_to, unsend from parley.outbound where id = $1 and connection_id = $2`, [id, connectionId]
+      )
+      if (!o) throw new OutboxError("not_found", "no such message on this account")
+      if (o.react_to || o.unsend) throw new OutboxError("action_unsupported", o.react_to ? "that's a reaction; take it back with react_to_message and an empty emoji" : "that's a deletion, not a message")
+      if (o.status === "scheduled") throw new OutboxError("not_cancelable", "it hasn't gone out yet; cancel it with cancel_message instead")
+      if (o.status !== "sent" || !o.external_id || !o.sent_at) throw new OutboxError("not_found", `the message is ${o.status}, so there's nothing to delete`)
+      target = { chatId: o.chat_id, messageId: o.external_id, sentAt: o.sent_at }
+    } else {
+      const [m] = await this.ctx.sql<{ from_me: boolean; sent_at: Date }>(
+        `select from_me, sent_at from parley.message where connection_id = $1 and chat_id = $2 and id = $3`, [connectionId, chatId, id]
+      )
+      if (!m) throw new OutboxError("not_found", "no such message in that chat (use a message id from read_inbox, or the id send_message returned)")
+      if (!m.from_me) throw new OutboxError("forbidden", "only messages the account sent can be deleted for everyone")
+      target = { chatId, messageId: id, sentAt: m.sent_at }
+    }
+    const unsendBefore = new Date(target.sentAt.getTime() + UNSEND_WINDOW_MS)
+    if (unsendBefore <= now) throw new OutboxError("too_late", `it was sent at ${target.sentAt.toISOString()}; messages can only be deleted for everyone for about two days`)
+    const [pending] = await this.ctx.sql<{ id: string }>(
+      `select id from parley.outbound where connection_id = $1 and chat_id = $2 and unsend = $3 and status in ('scheduled', 'sending', 'sent') limit 1`,
+      [connectionId, target.chatId, target.messageId]
+    )
+    if (pending) throw new OutboxError("not_cancelable", `that message is already being deleted (${pending.id})`)
+    return { to: target.chatId, unsend: target.messageId, unsendBefore }
+  }
+
+  /** When the account sent a message it's deleting, from what's stored; undefined if neither copy is left. */
+  async #sentAt(connectionId: string, chatId: string, messageId: string): Promise<Date | undefined> {
+    const [r] = await this.ctx.sql<{ at: Date | null }>(
+      `select coalesce(
+         (select sent_at from parley.message where connection_id = $1 and chat_id = $2 and id = $3),
+         (select sent_at from parley.outbound where connection_id = $1 and chat_id = $2 and external_id = $3 and status = 'sent' order by sent_at limit 1)) as at`,
+      [connectionId, chatId, messageId]
+    )
+    return r?.at ?? undefined
   }
 
   /** Who sent the message a reaction is for: the channel needs it to address the reaction. */
@@ -596,6 +661,9 @@ export class Sessions {
       }
       case "reactions":
         await saveReactions(this.ctx.sql, connectionId, event.reactions)
+        break
+      case "deleted":
+        await forgetMessages(this.ctx.sql, connectionId, event.messages)
         break
       case "closed":
         await setStatus(this.ctx.sql, connectionId, entry.loggingOut ? "logged_out" : "closed")

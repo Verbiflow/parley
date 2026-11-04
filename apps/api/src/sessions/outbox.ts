@@ -18,7 +18,7 @@ const LOOKBACK_MS = 8 * DAY
 const SLOT_STATUSES = ["scheduled", "sending", "sent"]
 
 export class OutboxError extends Error {
-  readonly code: "not_found" | "forbidden" | "action_unsupported" | "no_capacity" | "queue_full" | "not_cancelable"
+  readonly code: "not_found" | "forbidden" | "action_unsupported" | "no_capacity" | "queue_full" | "not_cancelable" | "too_late"
   constructor(code: OutboxError["code"], message: string) {
     super(message)
     this.name = "OutboxError"
@@ -46,6 +46,12 @@ const conn = (r: ConnRow): PacedConnection => ({
   dailyLimit: r.daily_limit,
 })
 
+/**
+ * How long after sending a message the account can still delete it for everyone. WhatsApp allows about two and a half
+ * days; staying under it leaves room for the deletion's own place in the queue.
+ */
+export const UNSEND_WINDOW_MS = 48 * 60 * 60 * 1000
+
 export type OutboundStatus = "scheduled" | "sending" | "sent" | "failed" | "canceled"
 /** What a queued file is. Its bytes stay in the database until it's sent; nothing that lists the outbox reads them. */
 export type OutboundMediaInfo = { kind: OutboundMedia["kind"]; mimetype: string; fileName?: string | undefined }
@@ -55,17 +61,19 @@ export type Outbound = {
   media: OutboundMediaInfo | null
   /** A reaction (`text` is the emoji; empty takes it back) to this message id. */
   reactTo: string | null
+  /** A deletion, for everyone, of this sent message (the channel's id for it). */
+  unsend: string | null
   scheduledFor: string | null; sentAt: string | null; attempts: number; error: { code: string; message: string } | null; createdAt: string
 }
 type OutRow = {
   id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; status: OutboundStatus; scheduled_for: Date | null
   not_before: Date | null; sent_at: Date | null; attempts: number; error_code: string | null; error_message: string | null; created_at: Date
-  media: OutboundMediaInfo | null; react_to: string | null
+  media: OutboundMediaInfo | null; react_to: string | null; unsend: string | null
 }
-const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at, media, react_to"
+const OUT_COLUMNS = "id, connection_id, chat_id, kind, body, status, scheduled_for, not_before, sent_at, attempts, error_code, error_message, created_at, media, react_to, unsend"
 const outbound = (r: OutRow): Outbound => ({
   id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, status: r.status,
-  media: r.media ?? null, reactTo: r.react_to ?? null,
+  media: r.media ?? null, reactTo: r.react_to ?? null, unsend: r.unsend ?? null,
   scheduledFor: r.status === "scheduled" ? (r.scheduled_for?.toISOString() ?? null) : null,
   sentAt: r.sent_at?.toISOString() ?? null, attempts: r.attempts,
   error: r.error_code ? { code: r.error_code, message: r.error_message ?? r.error_code } : null, createdAt: r.created_at.toISOString(),
@@ -132,6 +140,10 @@ export type EnqueueRequest = {
   media?: (OutboundMediaInfo & { data: Uint8Array }) | undefined
   /** React to this stored message with `text` (an emoji; empty takes the reaction back). Paced as a reply. */
   reactTo?: string | undefined
+  /** Delete this sent message (the channel's id for it) for everyone; `text` is empty. Paced as a reply. */
+  unsend?: string | undefined
+  /** The platform stops honouring the deletion after this: refuse it if its slot would land later. */
+  unsendBefore?: Date | undefined
 }
 
 /**
@@ -158,20 +170,23 @@ export async function enqueue(
            or exists (select 1 from parley.outbound where connection_id = $1 and chat_id = $2 and status = 'sent') as yes`,
       [c.id, req.to]
     )
-    // A reaction is a reply in a conversation that's already going, whatever was asked.
-    const kind = req.reactTo ? "message" : req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
+    // A reaction or a deletion is a reply in a conversation that's already going, whatever was asked.
+    const kind = req.reactTo || req.unsend ? "message" : req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
     if (!policyFor(c.channel).actions[kind]) throw new OutboxError("action_unsupported", `${c.channel} can't send a ${kind}`)
 
     const ctx = pacingContext(c, await loadSlots(sql, c.id, now))
     const r = plan(c, ctx, kind, now, req.notBefore)
     if (!r.ok && r.reason !== "paused") throw new OutboxError(r.reason, r.reason === "no_capacity" ? `no capacity left for a ${kind} on this connection` : `${c.channel} can't send a ${kind}`)
+    if (req.unsendBefore && r.ok && r.at > req.unsendBefore) {
+      throw new OutboxError("too_late", `the account's next send slot (${r.at.toISOString()}) is past ${c.channel}'s limit for deleting that message (${req.unsendBefore.toISOString()})`)
+    }
 
     const [row] = await sql<OutRow>(
-      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning ${OUT_COLUMNS}`,
+      `insert into parley.outbound (connection_id, chat_id, kind, body, scheduled_for, not_before, idempotency_key, agent_session_id, created_at, media, media_data, react_to, unsend)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning ${OUT_COLUMNS}`,
       [c.id, req.to, kind, req.text, r.ok ? r.at : null, req.notBefore ?? null, req.idempotencyKey ?? null, req.agentSessionId ?? null, now,
         req.media ? JSON.stringify({ kind: req.media.kind, mimetype: req.media.mimetype, ...(req.media.fileName ? { fileName: req.media.fileName } : {}) }) : null,
-        req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null]
+        req.media ? Buffer.from(req.media.data) : null, req.reactTo ?? null, req.unsend ?? null]
     )
     return { message: { ...outbound(row!), waits: r.ok ? r.waits : ["paused"], held: !r.ok }, replayed: false }
   })
@@ -227,7 +242,7 @@ export async function availability(sql: Sql, accountId: string, connectionId: st
 
 export type Claimed = {
   id: string; connectionId: string; chatId: string; kind: ActionKind; text: string; attempts: number
-  media?: OutboundMedia | undefined; reactTo?: string | undefined
+  media?: OutboundMedia | undefined; reactTo?: string | undefined; unsend?: string | undefined
 }
 
 /**
@@ -237,8 +252,8 @@ export type Claimed = {
 export async function claimDue(tx: Transactor, connectionIds: string[], now: Date): Promise<Claimed[]> {
   if (!connectionIds.length) return []
   return tx.transaction(async (sql) => {
-    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number; media: OutboundMediaInfo | null; media_data: Uint8Array | null; react_to: string | null }>(
-      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts, o.media, o.media_data, o.react_to from parley.outbound o
+    const rows = await sql<{ id: string; connection_id: string; chat_id: string; kind: ActionKind; body: string; attempts: number; media: OutboundMediaInfo | null; media_data: Uint8Array | null; react_to: string | null; unsend: string | null }>(
+      `select o.id, o.connection_id, o.chat_id, o.kind, o.body, o.attempts, o.media, o.media_data, o.react_to, o.unsend from parley.outbound o
         where o.status = 'scheduled' and o.id in (
           select distinct on (d.connection_id) d.id
             from parley.outbound d join parley.connection k on k.id = d.connection_id
@@ -255,6 +270,7 @@ export async function claimDue(tx: Transactor, connectionIds: string[], now: Dat
       id: r.id, connectionId: r.connection_id, chatId: r.chat_id, kind: r.kind, text: r.body, attempts: r.attempts + 1,
       ...(r.media && r.media_data ? { media: { ...r.media, data: new Uint8Array(r.media_data) } } : {}),
       ...(r.react_to ? { reactTo: r.react_to } : {}),
+      ...(r.unsend ? { unsend: r.unsend } : {}),
     }))
   })
 }
@@ -326,6 +342,23 @@ export async function expireLeases(tx: Transactor, now: Date): Promise<number> {
       [now]
     )
     return rows.length
+  })
+}
+
+/**
+ * Fail a claimed message without it reaching the platform: something it needed stopped being true while it waited
+ * (a deletion past the platform's limit). Nothing was attempted, so pacing hears nothing; the queue moves up.
+ */
+export async function abandon(tx: Transactor, id: string, code: string, message: string, now: Date): Promise<void> {
+  await tx.transaction(async (sql) => {
+    const [ref] = await sql<{ connection_id: string }>(`select connection_id from parley.outbound where id = $1`, [id])
+    if (!ref) return
+    const c = (await lockConnection(sql, ref.connection_id))!
+    await sql(
+      `update parley.outbound set status = 'failed', error_code = $2, error_message = $3, lease_expires_at = null, media_data = null where id = $1 and status = 'sending'`,
+      [id, code.slice(0, 60), message.slice(0, 500)]
+    )
+    await replan(sql, c, now)
   })
 }
 

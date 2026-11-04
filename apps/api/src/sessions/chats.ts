@@ -232,6 +232,16 @@ export async function saveMessages(sql: Sql, connectionId: string, messages: Inb
   await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
 }
 
+/** Forget messages their sender deleted for everyone (their reactions go with them). Ones never stored are skipped. */
+export async function forgetMessages(sql: Sql, connectionId: string, messages: Array<{ threadId: string; messageId: string }>): Promise<void> {
+  if (!messages.length) return
+  await sql(
+    `delete from parley.message m using jsonb_to_recordset($2::jsonb) as d(chat_id text, id text)
+      where m.connection_id = $1 and m.chat_id = d.chat_id and m.id = d.id`,
+    [connectionId, JSON.stringify(messages.map((d) => ({ chat_id: d.threadId, id: d.messageId })))]
+  )
+}
+
 /**
  * Record reactions: per person per message the latest wins, and a taken-back one is kept as an empty emoji (so an older
  * reaction arriving late doesn't revive it). Only reactions to stored messages are kept; anything else is a message

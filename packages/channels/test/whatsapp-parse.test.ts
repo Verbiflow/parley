@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { WAMessage } from "@whiskeysockets/baileys"
-import { textOf, mediaOf, messageOfRef, reactionOf, embeddedReactions, mp4Seconds } from "../src/whatsapp/parse.ts"
+import { proto } from "@whiskeysockets/baileys"
+import { textOf, mediaOf, messageOfRef, reactionOf, revokedOf, embeddedReactions, mp4Seconds } from "../src/whatsapp/parse.ts"
 
 const key = { remoteJid: "447700900123@s.whatsapp.net", id: "ABC", fromMe: false }
 
@@ -68,4 +69,12 @@ test("an MP4's length comes from its movie header (v0 and v1), and anything else
   assert.equal(mp4Seconds(cat(ftyp, box("moov", cat(box("trak", new Uint8Array(4)), box("mvhd", mvhd1))))), 90)
   assert.equal(mp4Seconds(new TextEncoder().encode("not a video at all")), undefined)
   assert.equal(mp4Seconds(ftyp), undefined)
+})
+
+test("a delete-for-everyone names the message it takes back, and isn't a message itself", () => {
+  const revoke: WAMessage = { key, message: { protocolMessage: { type: proto.Message.ProtocolMessage.Type.REVOKE, key: { remoteJid: key.remoteJid, id: "GONE", fromMe: false } } } }
+  assert.equal(revokedOf(revoke), "GONE")
+  assert.equal(textOf(revoke), undefined)
+  assert.equal(revokedOf({ key, message: { protocolMessage: { type: proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION } } }), undefined)
+  assert.equal(revokedOf({ key, message: { conversation: "hi" } }), undefined)
 })

@@ -38,6 +38,7 @@ const outboundView = (m: Outbound) => ({
   id: m.id, connection_id: m.connectionId, to: m.chatId, kind: m.kind, text: m.text, status: m.status,
   ...(m.media ? { media: { kind: m.media.kind, mimetype: m.media.mimetype, file_name: m.media.fileName ?? null } } : {}),
   ...(m.reactTo ? { reaction_to: m.reactTo } : {}),
+  ...(m.unsend ? { deletes: m.unsend } : {}),
   scheduled_for: m.scheduledFor, sent_at: m.sentAt, error: m.error, created_at: m.createdAt,
 })
 
@@ -67,7 +68,7 @@ function messageOut(m: StoredMessage) {
   }
 }
 
-/** What send_message and react_to_message answer: the queued row, and when it goes out. */
+/** What send_message, react_to_message and delete_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
   const now = !message.held && message.scheduledFor && Date.parse(message.scheduledFor) <= Date.now() + 1000
   return {
@@ -83,7 +84,7 @@ function queuedView(message: Queued, replayed: boolean) {
 
 /** What message_status answers: the row, and a plain-words reading of where it stands. */
 function statusView(m: Outbound) {
-  const what = m.reactTo ? "The reaction" : m.media ? `The ${m.media.kind}` : "The message"
+  const what = m.unsend ? "The deletion" : m.reactTo ? "The reaction" : m.media ? `The ${m.media.kind}` : "The message"
   const note = {
     scheduled: m.scheduledFor
       ? Date.parse(m.scheduledFor) <= Date.now() + 1000
@@ -345,6 +346,37 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
   )
 
   server.registerTool(
+    "delete_message",
+    {
+      title: "Delete a sent message",
+      description: "Delete a message the account sent, for everyone in the chat, as the account holder would from their phone (the chat shows \"This message was deleted\"). Works on messages sent through Parley or from the phone, for about two days after sending. Paced like a reply; follow it with message_status. Still scheduled? Use cancel_message instead.",
+      inputSchema: {
+        message_id: z.string().describe("The id send_message returned, or the message's id from read_inbox (one with from_me)."),
+        chat_id: z.string().optional().describe("The chat the message is in (chat_id from read_inbox). Not needed with an id send_message returned."),
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account the message is on.`),
+        idempotency_key: z.string().min(1).max(200).optional(),
+      },
+    },
+    async ({ message_id, chat_id, connection_id, idempotency_key }, extra) => {
+      const { userId, sessionId } = principalOf(extra)
+      try {
+        // Sent through Parley: the queued row says which account and chat. Otherwise the chat is needed to find it.
+        const sent = UUID.test(message_id) ? await getOutbound(ctx.sql, userId, message_id) : undefined
+        if (!sent && !chat_id) return fail("pass chat_id with a message id from read_inbox")
+        const conn = sent
+          ? (await findConnection(ctx, userId, sent.connectionId))!
+          : await pickConnection(ctx, userId, connection_id, { chatId: chat_id!, messageId: message_id })
+        const { message, replayed } = await ctx.sessions.enqueue(userId, conn.id, {
+          to: sent?.chatId ?? chat_id!, text: "", unsend: message_id, idempotencyKey: idempotency_key, agentSessionId: sessionId,
+        })
+        return json({ ...queuedView(message, replayed), account: accountLabel(conn) })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not delete the message")
+      }
+    }
+  )
+
+  server.registerTool(
     "get_media",
     {
       title: "Get a message's media",
@@ -449,8 +481,8 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "message_status",
     {
       title: "Message status",
-      description: "Check on one message or reaction you queued (the id send_message or react_to_message returned): scheduled (with when it goes out), sending, sent (with when), failed (with why), or canceled. Poll this after a send to know it went out.",
-      inputSchema: { message_id: z.string().describe("The id send_message or react_to_message returned.") },
+      description: "Check on one message, reaction or deletion you queued (the id send_message, react_to_message or delete_message returned): scheduled (with when it goes out), sending, sent (with when), failed (with why), or canceled. Poll this after a send to know it went out.",
+      inputSchema: { message_id: z.string().describe("The id send_message, react_to_message or delete_message returned.") },
     },
     async ({ message_id }, extra) => {
       const { userId } = principalOf(extra)
@@ -465,7 +497,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
 
   server.registerTool(
     "cancel_message",
-    { title: "Cancel a message", description: "Cancel a message that is still scheduled. Messages already sent or sending can't be canceled.", inputSchema: { message_id: z.string() } },
+    { title: "Cancel a message", description: "Cancel a message that is still scheduled. Messages already sent or sending can't be canceled; to take back one that went out, use delete_message.", inputSchema: { message_id: z.string() } },
     async ({ message_id }, extra) => {
       const { userId } = principalOf(extra)
       try {
