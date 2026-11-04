@@ -17,6 +17,7 @@ export type {
   OutboundContent,
   OutboundMedia,
   ReactTarget,
+  HistoryAnchor,
   ChannelSimulator,
   ChannelFake,
   SendOutcome,

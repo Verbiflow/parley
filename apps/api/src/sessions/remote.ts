@@ -77,6 +77,9 @@ export class RemoteSessions implements SessionsApi {
     const about = JSON.parse(res.headers.get("x-parley-media") ?? "{}") as { mimetype?: string; kind?: string; fileName?: string | null }
     return { body: res.body, mimetype: about.mimetype ?? "application/octet-stream", kind: about.kind ?? "document", fileName: about.fileName ?? null }
   }
+  backfill(accountId: string, connectionId: string, since: string): Promise<{ chats: number; messages: number }> {
+    return this.#call("backfill", [accountId, connectionId, since])
+  }
   /** Fetching an attachment needs the live socket, so it runs on the sessions service. */
   media(accountId: string, connectionId: string, chatId: string, messageId: string): Promise<MediaFile> {
     return this.#call("media", [accountId, connectionId, chatId, messageId], MEDIA_TIMEOUT_MS)

@@ -223,7 +223,10 @@ export async function saveMessages(sql: Sql, connectionId: string, messages: Inb
             jsonb_to_record(e.v) as m(chat_id text, id text, sender text, from_me boolean, body text, at timestamptz, media jsonb)
        join parley.chat c on c.connection_id = $1 and c.id = m.chat_id and c.synced
       order by e.ord
-     on conflict do nothing`,
+     on conflict (connection_id, chat_id, id) do update set media = excluded.media
+      -- The same message again (a backfill): fill in an attachment stored without one, or without its preview.
+      where excluded.media is not null
+        and (parley.message.media is null or (excluded.media ? 'thumbnail' and not parley.message.media ? 'thumbnail'))`,
     [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), body: m.text, at: m.at, media: m.media ?? null })))]
   )
   await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
@@ -246,6 +249,22 @@ export async function saveReactions(sql: Sql, connectionId: string, reactions: R
       where excluded.reacted_at >= parley.reaction.reacted_at`,
     [connectionId, JSON.stringify(reactions.map((r) => ({ chat_id: r.threadId, message_id: r.messageId, reactor: r.fromMe ? "me" : r.from.slice(0, 200), emoji: r.emoji.slice(0, 64), at: r.at })))]
   )
+}
+
+/**
+ * Where to backfill from: for each synced chat with messages since `since`, its newest message (the anchor history
+ * is fetched back from) and how many came since (how far back to ask).
+ */
+export async function backfillAnchors(sql: Sql, connectionId: string, since: Date): Promise<Array<{ chatId: string; messageId: string; fromMe: boolean; sender: string; at: string; count: number }>> {
+  const rows = await sql<{ chat_id: string; id: string; from_me: boolean; sender: string; sent_at: Date; n: number }>(
+    `select distinct on (m.chat_id) m.chat_id, m.id, m.from_me, m.sender, m.sent_at,
+            count(*) over (partition by m.chat_id)::int as n
+       from parley.message m join parley.chat c on c.connection_id = m.connection_id and c.id = m.chat_id and c.synced
+      where m.connection_id = $1 and m.sent_at >= $2
+      order by m.chat_id, m.sent_at desc, m.seq desc`,
+    [connectionId, since]
+  )
+  return rows.map((r) => ({ chatId: r.chat_id, messageId: r.id, fromMe: r.from_me, sender: r.sender, at: r.sent_at.toISOString(), count: r.n }))
 }
 
 /** A stored message's attachment, with the channel's fetch handle. Undefined when there's no such message or no media. */

@@ -1,4 +1,4 @@
-import { SendFailure, type Channel, type ChannelEvent, type Chat, type ChannelFake, type ChannelSimulator, type Capabilities, type LiveConnection, type OpenOptions, type OutboundContent, type SendOutcome } from "./contract.ts"
+import { SendFailure, type Channel, type ChannelEvent, type Chat, type ChannelFake, type ChannelSimulator, type Capabilities, type HistoryAnchor, type LiveConnection, type OpenOptions, type OutboundContent, type SendOutcome } from "./contract.ts"
 
 /**
  * An in-memory channel for tests: it fills the `Channel` contract exactly, and its simulator drives the outside
@@ -9,6 +9,7 @@ type ConnState = {
   emit: (e: ChannelEvent) => void
   linked: boolean
   sent: Array<{ to: string; content: OutboundContent }>
+  backfills: Array<{ anchor: HistoryAnchor; count: number }>
 }
 
 export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities>): ChannelFake {
@@ -28,7 +29,7 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
         emit({ type: "closed", reason: "forced failure" })
         throw new Error("open failed")
       }
-      const conn: ConnState = { emit, linked: Boolean(state), sent: [] }
+      const conn: ConnState = { emit, linked: Boolean(state), sent: [], backfills: [] }
       conns.set(connectionId, conn)
       if (state) {
         // Reconnect from saved creds: live immediately, no link step.
@@ -52,6 +53,9 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
         async media(ref: string) {
           if (!caps.media) throw new Error("no media on this channel")
           return { body: new Blob([ref]).stream(), mimetype: "image/png" }
+        },
+        async backfill(anchor, count) {
+          conn.backfills.push({ anchor, count })
         },
         async logout() {
           conn.linked = false
@@ -93,6 +97,9 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
     },
     sent(connectionId) {
       return conns.get(connectionId)?.sent ?? []
+    },
+    backfills(connectionId) {
+      return conns.get(connectionId)?.backfills ?? []
     },
     failNextSend(connectionId, outcome) {
       failSend.set(connectionId, outcome)
