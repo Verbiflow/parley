@@ -76,7 +76,7 @@ export function typingMs(content: Pick<OutboundContent, "text" | "media">, rando
   return Math.round(Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, base * (0.85 + random() * 0.3))))
 }
 
-function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
+export function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
   const { text, media, react, unsend } = content
   if (unsend) {
     const key: WAMessageKey = { remoteJid: jid, id: unsend.messageId, fromMe: unsend.fromMe }
@@ -96,7 +96,8 @@ function contentFor(jid: string, content: OutboundContent): AnyMessageContent {
     case "image": return { image: data, mimetype: media.mimetype, caption }
     // The length shows on the bubble; WhatsApp doesn't work it out itself.
     // (Baileys copies extra fields into the video message, it just doesn't type `seconds` for video.)
-    case "video": return { video: data, mimetype: media.mimetype, caption, seconds: media.seconds ?? mp4Seconds(media.data) } as AnyMessageContent
+    // A GIF is a video with gifPlayback: it loops silently in the chat, as one picked from WhatsApp's GIF tab does.
+    case "video": return { video: data, mimetype: media.mimetype, caption, seconds: media.seconds ?? mp4Seconds(media.data), ...(media.gif ? { gifPlayback: true } : {}) } as AnyMessageContent
     // A voice note when it's the format WhatsApp records them in; otherwise an audio file. Audio can't carry a caption.
     case "audio": return { audio: data, mimetype: media.mimetype, ptt: /ogg|opus/i.test(media.mimetype) }
     case "document": return { document: data, mimetype: media.mimetype, fileName: media.fileName ?? "file", caption }

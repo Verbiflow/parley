@@ -466,7 +466,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Send a message",
       description:
-        "Queue a message on a connected channel: text, or a photo, video, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
+        "Queue a message on a connected channel: text, or a photo, video, GIF, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the \`to\` chat.`),
         to: z.string().describe("Recipient on the channel: a chat_id from list_chats, or a phone number for WhatsApp."),
@@ -474,9 +474,10 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         media: z.object({
           url: z.string().url().optional().describe("A public http(s) URL to download the file from."),
           data: z.string().optional().describe("Or the file itself, base64."),
-          kind: z.enum(["image", "video", "audio", "document"]).optional().describe("How it shows in the chat. Defaults from the file type: JPEG/PNG/WebP photos and MP4 videos inline, audio as audio (OGG/Opus as a voice note), anything else as a document."),
+          kind: z.enum(["image", "video", "audio", "document"]).optional().describe("How it shows in the chat. Defaults from the file type: JPEG/PNG/WebP photos and MP4 videos inline, GIFs as looping GIFs, audio as audio (OGG/Opus as a voice note), anything else as a document."),
           mimetype: z.string().max(200).optional().describe("The file's type, e.g. \"image/jpeg\". Defaults to what the URL serves, or the file name's extension."),
           file_name: z.string().max(200).optional().describe("Shown for documents."),
+          gif: z.boolean().optional().describe("Send a video as a GIF: silent, looping, playing inline in the chat, like one picked from WhatsApp's GIF tab. A .gif file always goes this way (Parley converts it to the MP4 WhatsApp uses); set this for an MP4 GIF, e.g. a Giphy or Tenor .mp4 link."),
         }).optional().describe("A file to send: photos up to 16 MB; videos, audio and documents up to 100 MB from a url (16 MB as data). Give exactly one of url or data."),
         kind: z.enum(ACTIONS).optional().describe("What the send costs the account. Defaults to \"message\" in an existing conversation and \"first_message\" to someone new."),
         not_before: z.string().datetime().optional().describe("Don't send before this ISO time."),

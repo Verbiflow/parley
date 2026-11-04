@@ -67,8 +67,11 @@ export type Chat = { id: string; name: string | null; kind: "direct" | "group"; 
  * and deletions ignore it. A channel that can't show it just sends.
  */
 export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined; unsend?: ReactTarget | undefined; typing?: boolean | undefined }
-/** A file to send, already fetched: the bytes and what they are. */
-export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined; seconds?: number | undefined }
+/**
+ * A file to send, already fetched: the bytes and what they are. `gif` (on a video) sends it the way a person sends a
+ * GIF: silent, looping, playing inline.
+ */
+export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined; seconds?: number | undefined; gif?: boolean | undefined }
 /** The message a reaction (or a deletion) is for, as stored: its id, whether the account sent it, and (in a group) who did. */
 export type ReactTarget = { messageId: string; fromMe: boolean; sender?: string | undefined }
 
