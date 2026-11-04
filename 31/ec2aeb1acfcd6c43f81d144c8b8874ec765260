@@ -1,0 +1,44 @@
+apps/api/src/sessions/actor.ts
+  s_6053ee6434547f::t_502f053db950e8 8-9,292-295,298-309
+packages/channels/test/whatsapp-gif.test.ts
+  s_6053ee6434547f::t_9830e170eb08b0 1-13
+apps/api/src/mcp/media.ts
+  s_6053ee6434547f::t_29790e8dd210c8 10,12-15,18,60-61,63,67-69,72,76,90,94
+apps/api/src/sessions/outbox.ts
+  s_6053ee6434547f::t_9f5f4cc70e4ab7 57
+  s_6053ee6434547f::t_9baf3b5b8f1af9 192
+packages/channels/src/whatsapp/index.ts
+  s_6053ee6434547f::t_13ebd552a1058b 99-100
+  s_6053ee6434547f::t_81d0eed35347fb 79
+apps/api/test/media-reactions.test.ts
+  s_6053ee6434547f::t_bd7fc29c6be8d7 11,18,23,360-362,367-369,372,376,378-382
+  s_6053ee6434547f::t_9830e170eb08b0 14,16-17,19,358-359,363-366,370-371,373-375,377,383-393
+apps/api/src/mcp/server.ts
+  s_6053ee6434547f::t_d0cdcb420a249e 469,477,480
+apps/api/src/sessions/gif.ts
+  s_6053ee6434547f::t_f8101c98a41eff 1-36
+apps/api/package.json
+  s_6053ee6434547f::t_81f9d7a672943b 22
+packages/channels/src/contract.ts
+  s_6053ee6434547f::t_ad1178c639ea26 70-74
+apps/api/test/media-input.test.ts
+  s_6053ee6434547f::t_9830e170eb08b0 13,18,28,76-85
+package-lock.json
+  s_6053ee6434547f::t_0dc6f07df15063 33,216-230,1811-1822,2000-2005,2066-2071,2110-2124,2300-2308,2530-2545,2769-2796,3359-3363,3607-3615,3759-3772,3843-3862,4169-4177,4306-4311,4373-4378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "31ec2aeb1acfcd6c43f81d144c8b8874ec765260",
+  "prompts": {},
+  "sessions": {
+    "s_6053ee6434547f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28fcb883-c6d4-4ea9-b18b-f2a69879346e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
