@@ -197,10 +197,10 @@ export const whatsappChannel: Channel = {
     const learnContacts = (contacts: Array<Partial<Contact>>) => {
       const changed: string[] = []
       for (const ct of contacts) {
-        pair(ct.id, ct.lid); pair(ct.id, ct.jid); pair(ct.jid, ct.lid)
+        pair(ct.id, ct.lid); pair(ct.id, ct.phoneNumber); pair(ct.phoneNumber, ct.lid)
         const name = ct.name || ct.notify || ct.verifiedName
         if (!ct.id || !name) continue
-        const raw = [ct.id, ct.jid, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser)
+        const raw = [ct.id, ct.phoneNumber, ct.lid].filter((x): x is string => Boolean(x)).map(jidNormalizedUser)
         changed.push(...learnName([...new Set([...raw, ...raw.map(canon)])], name, Boolean(ct.name)))
       }
       report(changed.filter((id) => known.has(id)).map((id) => chatOf(id, names.get(id))))
@@ -211,9 +211,9 @@ export const whatsappChannel: Channel = {
       const raw = m.key.remoteJid
       if (!isChatJid(raw)) return undefined
       // The message itself often carries the sender's number next to their private id: learn it before keying the chat.
-      const k = m.key as typeof m.key & { senderPn?: string; senderLid?: string; participantPn?: string; participantLid?: string }
-      if (isJidGroup(raw)) { pair(k.participant, k.participantPn); pair(k.participant, k.participantLid) }
-      else { pair(raw, k.senderPn); pair(raw, k.senderLid) }
+      const k = m.key
+      if (isJidGroup(raw)) pair(k.participant, k.participantAlt)
+      else pair(raw, k.remoteJidAlt)
       const jid = canon(raw)
       const text = textOf(m)
       if (text === undefined) return undefined
@@ -263,11 +263,10 @@ export const whatsappChannel: Channel = {
       const lids: string[] = []
       for (let i = 0; i < todo.length && !stopped && sock === s; i += 50) {
         try {
-          for (const r of (await s.onWhatsApp(...todo.slice(i, i + 50))) ?? []) {
-            const lid = (r as { lid?: string }).lid
-            pair(r.jid, lid)
-            const name = names.get(jidNormalizedUser(r.jid))
-            if (lid && name) lids.push(...learnName([jidNormalizedUser(lid)], name, true))
+          for (const r of (await s.signalRepository.lidMapping.getLIDsForPNs(todo.slice(i, i + 50))) ?? []) {
+            pair(r.pn, r.lid)
+            const name = names.get(jidNormalizedUser(r.pn))
+            if (r.lid && name) lids.push(...learnName([jidNormalizedUser(r.lid)], name, true))
           }
         } catch { break }
         await new Promise((r) => setTimeout(r, 1500))
@@ -289,6 +288,15 @@ export const whatsappChannel: Channel = {
       return peer && isChatJid(peer) ? peer : undefined
     }
     const called = (jid: string, at: string, kind: CallKind): Chat => ({ ...chatOf(jid, null, at), lastCall: { at, kind } })
+    /**
+     * Private-id <-> phone-number pairs: how WhatsApp's own apps show a number and name for people it addresses by
+     * private id. Pair them, then give each private id the name we already have for its number.
+     */
+    const learnPairs = (mappings: Array<{ lid?: string | null; pn?: string | null }>) => {
+      if (!mappings.length) return
+      for (const m of mappings) pair(m.lid, m.pn)
+      announceNames([...phoneOfLid].filter(([, pn]) => names.has(pn)).map(([lid, pn]) => (learnName([lid], names.get(pn)!, saved.has(pn)), lid)))
+    }
 
     /**
      * The link-time history sync arrives as a run of batches of different kinds. Each kind reports its own percentage
@@ -316,17 +324,22 @@ export const whatsappChannel: Channel = {
         // With syncFullHistory off, Baileys skips *every* history batch, including the one-time recent-chats sync
         // WhatsApp sends at link time. That's where one-to-one chats come from (groups are fetched separately), so
         // without it the list is groups only. Take the recent sync; still decline the full archive.
-        shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncNotification.HistorySyncType.FULL,
+        shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncType.FULL,
         // Resend a message a recipient couldn't decrypt (see `sent` above).
-        getMessage: async (key) => (key.id ? sent.get(key.id) : undefined),
+        // Logged (ids only, no text) so a message stuck on "Waiting for this message" can be traced.
+        getMessage: async (key) => {
+          const found = key.id ? sent.get(key.id) : undefined
+          console.log(JSON.stringify({ msg: "whatsapp: resend requested", id: key.id, found: Boolean(found) }))
+          return found
+        },
         msgRetryCounterCache,
         ...(agent ? { agent, fetchAgent } : {}),
       })
 
-      // Every handler goes through guard(). Typed by Baileys' events; the two patched-in ones (call-log.set,
-      // lid-mapping.set) aren't in its map, so they get the plain overload.
+      // Every handler goes through guard(). Typed by Baileys' events; the patched-in one (call-log.set) isn't in its
+      // map, so it gets the plain overload.
       function on<K extends keyof BaileysEventMap>(event: K, fn: (arg: BaileysEventMap[K]) => void): void
-      function on(event: "call-log.set" | "lid-mapping.set", fn: (arg: any) => void): void
+      function on(event: "call-log.set", fn: (arg: any) => void): void
       function on(event: string, fn: (arg: any) => void): void {
         (sock.ev as unknown as { on(e: string, f: (a: any) => void): void }).on(event, guard(event, fn))
       }
@@ -357,16 +370,18 @@ export const whatsappChannel: Channel = {
         }
       })
 
-      on("messaging-history.set", ({ chats, contacts, messages, progress, syncType }) => {
+      on("messaging-history.set", ({ chats, contacts, messages, progress, syncType, lidPnMappings }) => {
         // Sizes only (no names or text), so a sync that stalls shows up in the service log.
         console.log(JSON.stringify({ msg: "whatsapp: history batch", syncType, progress, chats: chats?.length ?? 0, contacts: contacts?.length ?? 0, messages: messages?.length ?? 0 }))
-        for (const c of chats) pair(c.id, (c as { pnJid?: string }).pnJid ?? (c as { lidJid?: string }).lidJid)
+        // Private-id <-> phone-number pairs first, so this batch's messages land under the phone number.
+        learnPairs(lidPnMappings ?? [])
+        for (const c of chats) pair(c.id, c.pnJid ?? c.lidJid)
         learnContacts(contacts)
         // Recency comes only from real messages (below) and calls. A chat's own timestamp also moves for group notices
         // (someone joined, left, changed the icon), which floats groups you never touch to the top. So: groups are listed
         // with their names; a person becomes a chat only once a real message with them turns up, and their name from
         // the chat list is kept for then. (A 1:1 with no messages is one WhatsApp keeps for people you share a group with.)
-        const listed = chats.filter((c) => isChatJid(c.id))
+        const listed = chats.filter((c): c is typeof c & { id: string } => isChatJid(c.id))
         for (const c of listed) {
           const name = c.name || (c as { displayName?: string }).displayName
           if (name && !isJidGroup(c.id)) learnName([...new Set([jidNormalizedUser(c.id), canon(c.id)])], name, Boolean(c.name))
@@ -393,14 +408,10 @@ export const whatsappChannel: Channel = {
         const kind: CallKind = !r.isIncoming ? "outgoing" : r.callResult === 0 || r.callResult === 3 ? "incoming" : "missed"
         return [called(peer, new Date(t > 1e12 ? t : t * 1000).toISOString(), kind)]
       })))
-      // Private-id <-> phone-number pairs from the link-time history (patched in): how WhatsApp's own apps name people
-      // it addresses by private id. Arrives before that history's messages, so those land under the phone number.
-      on("lid-mapping.set", ({ mappings }: { mappings?: Array<{ lidJid?: string; pnJid?: string }> }) => {
-        for (const m of mappings ?? []) pair(m.lidJid, m.pnJid)
-        announceNames([...phoneOfLid].filter(([, pn]) => names.has(pn)).map(([lid, pn]) => (learnName([lid], names.get(pn)!, saved.has(pn)), lid)))
-      })
+      // A private-id <-> phone-number pair learned live (from a message, a receipt, a lookup).
+      on("lid-mapping.update", (m) => learnPairs([m]))
       // New chats: a group is listed now; a person when a real message arrives (messages.upsert). No timestamps (see above).
-      on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id) && isJidGroup(c.id)).map((c) => chatOf(c.id, c.name))))
+      on("chats.upsert", (chats) => report(chats.filter((c): c is typeof c & { id: string } => isChatJid(c.id) && Boolean(isJidGroup(c.id))).map((c) => chatOf(c.id, c.name))))
       on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))
       on("contacts.upsert", learnContacts)
       on("contacts.update", learnContacts)

@@ -5,14 +5,14 @@ import { proto, downloadAndProcessHistorySyncNotification } from "@whiskeysocket
 
 // WhatsApp sends the first history chunks inline, inside the notification, with no media key. Unpatched Baileys tried to
 // download them anyway ("Cannot derive from empty media key") and dropped them, and with them most one-to-one chats.
-// scripts/patch-baileys.ts makes it read the inline payload.
+// Baileys 7 reads the inline payload itself; this guards against a regression.
 test("an inline history chunk (no media key) is read, not dropped", async () => {
   const sync = proto.HistorySync.encode({
     syncType: proto.HistorySync.HistorySyncType.RECENT,
     conversations: [{ id: "6591234567@s.whatsapp.net", name: "Priya", conversationTimestamp: 1762200000 }],
   }).finish()
   const notification = proto.Message.HistorySyncNotification.fromObject({
-    syncType: proto.Message.HistorySyncNotification.HistorySyncType.RECENT,
+    syncType: proto.Message.HistorySyncType.RECENT,
     initialHistBootstrapInlinePayload: deflateSync(sync),
   })
   const data = await downloadAndProcessHistorySyncNotification(notification, {})
