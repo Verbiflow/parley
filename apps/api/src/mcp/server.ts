@@ -9,6 +9,7 @@ import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outb
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
 import { AccountError, accountLabel, findConnection, pickConnection } from "./accounts.ts"
+import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, WebhookError, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 
 /** The principal a verified bearer token carries into a tool call (set by the /mcp bearer middleware). */
 export type McpPrincipal = { userId: string; sessionId: string }
@@ -22,7 +23,7 @@ function principalOf(extra: { authInfo?: { extra?: unknown } } | undefined): Mcp
 const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] })
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError || e instanceof AccountError
+const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError || e instanceof AccountError || e instanceof WebhookError
 
 const WAIT_TEXT: Record<string, string> = {
   paused: "the connection is paused",
@@ -51,6 +52,18 @@ const INLINE_TEXT_BYTES = 512 * 1024
 const TEXTUAL = /^(text\/|application\/(json|xml|csv|x-ndjson|yaml|x-yaml|javascript)$)/
 
 const FOLLOW_UP = "Call message_status with this id to see whether it has gone out."
+
+const webhookView = (w: Webhook, account?: string | null) => ({
+  id: w.id, connection_id: w.connectionId, ...(account !== undefined ? { account } : {}), url: w.url, events: w.events, description: w.description, enabled: w.enabled, created_by: w.createdBy,
+  secret_ends_with: w.secretHint, last_success_at: w.lastSuccessAt, last_failure_at: w.lastFailureAt, last_error: w.lastError, created_at: w.createdAt,
+})
+const deliveryOut = (d: Delivery) => ({
+  id: d.id, webhook_id: d.webhookId, event: d.event, event_id: d.eventId, status: d.status, attempts: d.attempts,
+  next_attempt_at: d.nextAttemptAt, last_status: d.lastStatus, last_error: d.lastError, created_at: d.createdAt, delivered_at: d.deliveredAt,
+})
+/** How a receiver checks a request is Parley's, said once wherever a secret is handed over. */
+const VERIFY = "Each request is a JSON POST with headers Parley-Event, Parley-Event-Id, Parley-Delivery-Id, Parley-Attempt and Parley-Signature: \"t=<unix seconds>,v1=<hex>\". To verify, compute HMAC-SHA256 with the secret (the whole whsec_… string) as the key over \"<t>.<raw request body>\", compare it to v1 in constant time, and reject a t more than 5 minutes old. Answer any 2xx within 10 seconds; anything else is retried (" + MAX_ATTEMPTS + " attempts in all: at once, after 30 seconds, after 5 minutes). The same event can arrive twice: dedupe on Parley-Event-Id."
+const EVENTS_DOC = WEBHOOK_EVENTS.map((e) => `${e} (${EVENT_TEXT[e]})`).join("; ")
 
 const FILE_LABEL: Record<string, string> = { audio: "voice-note", video: "video", document: "document", image: "photo", sticker: "sticker" }
 const EXTENSIONS: Record<string, string> = {
@@ -728,6 +741,138 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json(outboundView(await cancel(ctx.tx, userId, message_id, new Date())))
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not cancel")
+      }
+    }
+  )
+
+  // ---- Webhooks ---------------------------------------------------------------------------------------------------
+
+  /** Who an agent is, as a webhook it set up shows it on the dashboard. */
+  const agentName = async (sessionId: string) => {
+    const [r] = await ctx.sql<{ client_name: string | null }>(
+      `select c.client_name from oauth.refresh_token r join oauth.client c using (client_id) where r.session_id = $1 limit 1`, [sessionId]
+    ).catch(() => [])
+    return `agent: ${r?.client_name || "an MCP client"}`
+  }
+  const eventsInput = z.array(z.enum(WEBHOOK_EVENTS)).min(1).optional()
+
+  server.registerTool(
+    "list_webhooks",
+    {
+      title: "List webhooks",
+      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's events, whether it's on, its last success and failure, and its latest deliveries.",
+      inputSchema: { connection_id: filters.connection_id, deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5).") },
+    },
+    async ({ connection_id, deliveries }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const conn = connection_id ? await findConnection(ctx, userId, connection_id) : undefined
+        const [hooks, account] = await Promise.all([ctx.webhooks.list(ctx.sql, userId, { connectionId: conn?.id }), labels(userId)])
+        const per = deliveries ?? 5
+        const recent = await Promise.all(hooks.map((w) => (per ? ctx.webhooks.deliveries(ctx.sql, userId, { webhookId: w.id, limit: per }) : Promise.resolve([]))))
+        return json({
+          webhooks: hooks.map((w, i) => ({ ...webhookView(w, account.get(w.connectionId) ?? null), recent_deliveries: recent[i]!.map(deliveryOut) })),
+          events: Object.fromEntries(WEBHOOK_EVENTS.map((e) => [e, EVENT_TEXT[e]])),
+          ...(hooks.length ? {} : { note: "No webhooks yet. create_webhook adds one." }),
+        })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not list webhooks")
+      }
+    }
+  )
+
+  server.registerTool(
+    "create_webhook",
+    {
+      title: "Create a webhook",
+      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
+      inputSchema: {
+        connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
+        url: z.string().max(2000).describe("A public https URL (not a private, local or internal address)."),
+        events: eventsInput.describe("Which events to send. Default: all of them."),
+        description: z.string().max(200).optional().describe("What it's for, shown on the dashboard."),
+      },
+    },
+    async ({ connection_id, url, events, description }, extra) => {
+      const { userId, sessionId } = principalOf(extra)
+      try {
+        const conn = await pickConnection(ctx, userId, connection_id)
+        const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, { connectionId: conn.id, url, events, description, createdBy: await agentName(sessionId) })
+        return json({ ...webhookView(webhook, accountLabel(conn)), secret, verify: VERIFY, next: "Call test_webhook with this id to send a test event and see that it arrives." })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not create the webhook")
+      }
+    }
+  )
+
+  server.registerTool(
+    "update_webhook",
+    {
+      title: "Update a webhook",
+      description: "Change a webhook's URL, events or description, turn it off or back on, or replace its signing secret (rotate_secret: the old one stops working at once and the new one is in the answer). Turning it off drops what it still had waiting.",
+      inputSchema: {
+        webhook_id: z.string(),
+        url: z.string().max(2000).optional(),
+        events: eventsInput,
+        description: z.string().max(200).optional(),
+        enabled: z.boolean().optional(),
+        rotate_secret: z.boolean().optional(),
+      },
+    },
+    async ({ webhook_id, url, events, description, enabled, rotate_secret }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        let webhook = await ctx.webhooks.update(ctx.sql, userId, webhook_id, { url, events, description, enabled })
+        if (!rotate_secret) return json(webhookView(webhook))
+        const rotated = await ctx.webhooks.rotateSecret(ctx.sql, userId, webhook_id)
+        webhook = rotated.webhook
+        return json({ ...webhookView(webhook), secret: rotated.secret, verify: VERIFY })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not update the webhook")
+      }
+    }
+  )
+
+  server.registerTool(
+    "delete_webhook",
+    { title: "Delete a webhook", description: "Remove a webhook. Nothing more is sent to it, including deliveries still waiting.", inputSchema: { webhook_id: z.string() } },
+    async ({ webhook_id }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        await ctx.webhooks.remove(ctx.sql, userId, webhook_id)
+        return json({ deleted: webhook_id })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not delete the webhook")
+      }
+    }
+  )
+
+  server.registerTool(
+    "test_webhook",
+    {
+      title: "Test a webhook",
+      description: "Send a webhook.test event to a webhook (signed like every other) and wait up to about 10 seconds to say whether it was delivered: the status the URL answered, or why it failed. A failed first attempt is retried like any delivery.",
+      inputSchema: { webhook_id: z.string() },
+    },
+    async ({ webhook_id }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const queued = await ctx.webhooks.test(ctx.sql, userId, webhook_id)
+        // The sessions service sends it within a couple of seconds; wait for the first attempt's outcome.
+        let d: Delivery | undefined = queued
+        for (let i = 0; i < 40; i++) {
+          await new Promise((r) => setTimeout(r, 250))
+          d = await ctx.webhooks.delivery(ctx.sql, userId, queued.id)
+          if (!d || d.status === "delivered" || d.status === "failed" || (d.status === "pending" && d.attempts > 0)) break
+        }
+        const out = deliveryOut(d ?? queued)
+        const note = !d ? "The webhook was deleted." : d.status === "delivered"
+          ? `Delivered: the URL answered HTTP ${d.lastStatus}.`
+          : d.attempts > 0 ? `Not delivered: ${d.lastError ?? "unknown error"}.${d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""}`
+          : "Still waiting to be sent. Check list_webhooks in a moment."
+        return json({ ...out, note })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not test the webhook")
       }
     }
   )

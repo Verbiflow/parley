@@ -8,6 +8,7 @@ import type { AppContext } from "./context.ts"
 import { Transactor } from "./db/transactor.ts"
 import { LIMITS, type RateLimiter } from "./ratelimit.ts"
 import { Exits } from "./sessions/exits.ts"
+import { Webhooks } from "./sessions/webhooks.ts"
 import { RemoteSessions } from "./sessions/remote.ts"
 
 /**
@@ -63,11 +64,13 @@ function bindingLimiter(env: Env): RateLimiter {
 
 let config: IdentityConfig | undefined
 let exits: Exits | undefined
+let webhooks: Webhooks | undefined
 
 export default {
   async fetch(request: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
     config ??= readConfig(Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === "string")) as NodeJS.ProcessEnv)
     exits ??= new Exits(config)
+    webhooks ??= new Webhooks(config)
     // Connections are per request (Workers can't share sockets across requests); Hyperdrive pools the real ones.
     const db = new RequestDatabase(env.HYPERDRIVE.connectionString)
     const tx = new Transactor(env.HYPERDRIVE.connectionString)
@@ -83,6 +86,7 @@ export default {
       channels: EDGE_CHANNELS,
       sessions: new RemoteSessions(tx.query, transport),
       exits,
+      webhooks,
       limiter: bindingLimiter(env),
       async close() {
         await Promise.all([db.close(), tx.close()])

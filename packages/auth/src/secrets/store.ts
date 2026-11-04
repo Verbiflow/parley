@@ -9,8 +9,8 @@ import type { Sql } from "../db/database.ts"
  * session credentials for one connection.
  */
 
-/** `proxy-creds` values are sealed inline on the proxy tables (the hosted pool has no owning account), never stored here. */
-export const SECRET_KINDS = ["saved-key", "channel-creds", "proxy-creds"] as const
+/** `proxy-creds` and `webhook-secret` values are sealed inline on their own tables (proxy providers, webhooks), never stored here. */
+export const SECRET_KINDS = ["saved-key", "channel-creds", "proxy-creds", "webhook-secret"] as const
 export type SecretKind = (typeof SECRET_KINDS)[number]
 
 /** How a value is sealed. `server.v1`: AES-256-GCM under the environment's key, bound to its record (`seal.ts`). */

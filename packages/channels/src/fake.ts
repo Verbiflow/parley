@@ -95,17 +95,22 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
     deliver(connectionId, message) {
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
-      conn.emit({ type: "message", message: { id: crypto.randomUUID(), at: new Date().toISOString(), ...message } })
+      conn.emit({ type: "message", message: { id: crypto.randomUUID(), at: new Date().toISOString(), ...message }, live: true })
+    },
+    history(connectionId, messages) {
+      const conn = conns.get(connectionId)
+      if (!conn) throw new Error(`no open connection ${connectionId}`)
+      conn.emit({ type: "messages", messages: messages.map((m) => ({ id: crypto.randomUUID(), at: new Date().toISOString(), ...m })), live: false })
     },
     react(connectionId, reactions) {
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
-      conn.emit({ type: "reactions", reactions })
+      conn.emit({ type: "reactions", reactions, live: true })
     },
     unsend(connectionId, messages) {
       const conn = conns.get(connectionId)
       if (!conn) throw new Error(`no open connection ${connectionId}`)
-      conn.emit({ type: "deleted", messages })
+      conn.emit({ type: "deleted", messages, live: true })
     },
     announceChats(connectionId, chats: Chat[]) {
       const conn = conns.get(connectionId)

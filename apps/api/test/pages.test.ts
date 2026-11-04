@@ -41,7 +41,7 @@ test("an account page shows its chats with the daily limit and disconnect on top
     chatsChosen: true, history: { startedAt: null, progress: null, doneAt: "2026-11-01T00:01:00Z" }, timezone: "America/Los_Angeles", country: "US", haltedReason: null, pausedUntil: null, dailyLimit: 100, readReceipts: true, typing: true,
   }
   const user = { name: "R", email: "r@parley.test", image: null, signedInWith: "local", createdAt: "2026-11-01T00:00:00Z" }
-  const html = chatsPage({ user, connection: conn, chats: [], agentCount: 1, saved: false, today: { sentToday: 7, dailyLimit: 100 }, queued: 2 })
+  const html = chatsPage({ user, connection: conn, chats: [], agentCount: 1, saved: false, today: { sentToday: 7, dailyLimit: 100 }, queued: 2, webhooks: { webhooks: [], deliveries: [] } })
   assert.match(html, /\+65 9136 3557/)
   assert.match(html, /name="daily_limit"[^>]*value="100"/)
   assert.match(html, /7<span class="faint"> \/ 100 sent today/)

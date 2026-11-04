@@ -11,19 +11,26 @@ const MAX_REDIRECTS = 5
 export type Fetched = { data: Uint8Array; contentType?: string | undefined; fileName?: string | undefined }
 export type MediaFetcher = (url: string, maxBytes: number) => Promise<Fetched>
 
+type Lookup = (host: string, options: { all?: boolean }, cb: (err: Error | null, address: string | LookupAddress[], family?: number) => void) => void
+
 /**
- * Resolve a host and refuse it if any address it resolves to is private, loopback or link-local. The socket then
- * connects to exactly the address checked, so a name can't resolve to something public here and private there.
+ * A `lookup` for http(s) requests that resolves a host and refuses it (with `refuse()`'s error) if any address it
+ * resolves to is private, loopback or link-local. The socket then connects to exactly the address checked, so a name
+ * can't resolve to something public here and private there.
  */
-function safeLookup(host: string, options: { all?: boolean }, cb: (err: Error | null, address: string | LookupAddress[], family?: number) => void): void {
-  dnsLookup(host, { all: true }, (err, addresses) => {
-    if (err) return cb(err, "")
-    const list = addresses as LookupAddress[]
-    if (!list.length || list.some((a) => isPrivateHost(a.address))) return cb(new MediaInputError("`url` must be on the public internet"), "")
-    if (options.all) cb(null, list)
-    else cb(null, list[0]!.address, list[0]!.family)
-  })
+export function publicOnlyLookup(refuse: () => Error): Lookup {
+  return (host, options, cb) => {
+    dnsLookup(host, { all: true }, (err, addresses) => {
+      if (err) return cb(err, "")
+      const list = addresses as LookupAddress[]
+      if (!list.length || list.some((a) => isPrivateHost(a.address))) return cb(refuse(), "")
+      if (options.all) cb(null, list)
+      else cb(null, list[0]!.address, list[0]!.family)
+    })
+  }
 }
+
+const safeLookup = publicOnlyLookup(() => new MediaInputError("`url` must be on the public internet"))
 
 function get(url: URL): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {

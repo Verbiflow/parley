@@ -5,12 +5,13 @@ import type { AppContext } from "../context.ts"
 import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
-import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary } from "./pages.ts"
+import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary, type WebhooksView } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
 import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { setBehaviour } from "../sessions/store.ts"
+import { WebhookError, moveWebhooks } from "../sessions/webhooks.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
 
@@ -129,11 +130,12 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [connections, agents, activity, queued] = await Promise.all([
+    const [connections, agents, activity, queued, webhookCounts] = await Promise.all([
       ctx.sessions.list(v.profile.id),
       agentSessions(ctx.sql, v.profile.id),
       listActivity(ctx.sql, v.profile.id, { limit: 8, offset: 0 }),
       queuedTotal(v.profile.id),
+      ctx.webhooks.counts(ctx.sql, v.profile.id),
     ])
     // Every live connection's figures at once (they came from the viewer's own list, so ownership is settled).
     const live = connections.filter((conn) => conn.status === "connected")
@@ -147,7 +149,7 @@ export function webRoutes(ctx: AppContext): Hono {
       if (synced[i] !== undefined) syncedCounts.set(conn.id, synced[i])
       summaries.set(conn.id, sums[i]!)
     })
-    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued, recent: activity.entries }))
+    return c.html(dashboardPage({ user: v.profile, connections, agents, mcpUrl: mcpUrl(c), syncedCounts, summaries, queued, recent: activity.entries, webhookCounts }))
   })
 
   app.post("/app/connect", async (c) => {
@@ -171,23 +173,34 @@ export function webRoutes(ctx: AppContext): Hono {
     }
   })
 
-  // A connected account: its chats, today's sending and its settings, on one page.
-  app.get("/app/connections/:id", async (c) => {
+  /** A connected account's page: its chats, today's sending, its settings and its webhooks. */
+  const accountPage = async (c: Context, id: string, hooks: Omit<WebhooksView, "webhooks" | "deliveries"> = {}, code: 200 | 400 | 404 = 200) => {
     const v = await viewer(c)
     if (!v) return rememberNext(c)
-    const id = c.req.param("id")
     const connection = (await ctx.sessions.list(v.profile.id)).find((x) => x.id === id)
     if (!connection) return c.text("Unknown connection.", 404)
-    const [chats, agents, sum] = await Promise.all([
+    const [chats, agents, sum, webhooks, deliveries] = await Promise.all([
       ctx.sessions.chats(v.profile.id, id),
       agentSessions(ctx.sql, v.profile.id),
       connection.status === "connected" ? summary(v.profile.id, id) : undefined,
+      ctx.webhooks.list(ctx.sql, v.profile.id, { connectionId: id }),
+      ctx.webhooks.deliveries(ctx.sql, v.profile.id, { connectionId: id, limit: 20 }),
     ])
+    c.header("cache-control", "no-store")
     return c.html(chatsPage({
       user: v.profile, connection, chats, agentCount: agents.length, saved: c.req.query("saved") === "1",
       today: sum ? { sentToday: sum.sentToday, dailyLimit: sum.dailyLimit } : null, queued: sum?.queued ?? 0,
-    }))
-  })
+      webhooks: { webhooks, deliveries, ...hooks },
+    }), code)
+  }
+  const NOTICES: Record<string, string> = {
+    tested: "Test event queued. It shows under Recent webhook deliveries within a few seconds (refresh to see how it went).",
+    saved: "Webhook saved.",
+    deleted: "Webhook deleted.",
+  }
+
+  // A connected account: its chats, today's sending, its settings and webhooks, on one page.
+  app.get("/app/connections/:id", (c) => accountPage(c, c.req.param("id"), { notice: NOTICES[c.req.query("webhook") ?? ""] }))
 
   // The chats used to have their own page; it's the account page now.
   app.get("/app/connections/:id/chats", (c) => c.redirect(`/app/connections/${c.req.param("id")}`))
@@ -376,6 +389,8 @@ export function webRoutes(ctx: AppContext): Hono {
       const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined })
       // The new link keeps what was ignored (by number / group id), so a rebuilt list doesn't un-ignore anything.
       await ctx.sql(`update parley.connection n set ignored_chats = o.ignored_chats from parley.connection o where n.id = $1 and o.id = $2`, [started.connectionId, old.id])
+      // And its webhooks, so the new link keeps calling the same URLs.
+      await moveWebhooks(ctx.sql, [old.id], started.connectionId)
       return c.redirect(`/link/${started.connectionId}`)
     } catch (e) {
       if (e instanceof ConnectError && e.code === "no_exit") return c.redirect(`/app/network?error=${encodeURIComponent(e.message)}`)
@@ -422,6 +437,67 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!userId) return c.redirect("/")
     await endAgentSession(ctx.sql, userId, c.req.param("id"))
     return c.redirect("/app/agents")
+  })
+
+  // ---- Webhooks: each number's, on its account page (#webhooks). ---------------------------------------------------
+
+  // The old top-level page: webhooks live on each number's page now.
+  app.get("/app/webhooks", (c) => c.redirect("/app"))
+
+  // Added from the page: answered with the page itself (not a redirect), so the new secret is shown once and never
+  // travels in a URL.
+  app.post("/app/connections/:cid/webhooks", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const cid = c.req.param("cid")
+    const f = await c.req.formData()
+    try {
+      const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, {
+        connectionId: cid, url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), createdBy: "dashboard",
+      })
+      return accountPage(c, cid, { revealed: { id: webhook.id, secret, fresh: true } })
+    } catch (e) {
+      if (e instanceof WebhookError) return e.code === "not_found" ? c.text("Unknown connection.", 404) : accountPage(c, cid, { error: e.message }, 400)
+      throw e
+    }
+  })
+
+  app.post("/app/connections/:cid/webhooks/:id/:action{update|enable|disable|delete|test|rotate|secret}", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const cid = c.req.param("cid")
+    const id = c.req.param("id")
+    const back = (done?: string) => c.redirect(`/app/connections/${encodeURIComponent(cid)}${done ? `?webhook=${done}` : ""}#webhooks`)
+    try {
+      // The webhook must be on this number (and the viewer's): anything else is someone else's, or a mistake.
+      if ((await ctx.webhooks.get(ctx.sql, userId, id)).connectionId !== cid) return c.text("Unknown webhook.", 404)
+      switch (c.req.param("action")) {
+        case "update": {
+          const f = await c.req.formData()
+          await ctx.webhooks.update(ctx.sql, userId, id, { url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? "") })
+          return back("saved")
+        }
+        case "enable":
+        case "disable":
+          await ctx.webhooks.update(ctx.sql, userId, id, { enabled: c.req.param("action") === "enable" })
+          return back()
+        case "delete":
+          await ctx.webhooks.remove(ctx.sql, userId, id)
+          return back("deleted")
+        case "test":
+          await ctx.webhooks.test(ctx.sql, userId, id)
+          return back("tested")
+        case "rotate": {
+          const { secret } = await ctx.webhooks.rotateSecret(ctx.sql, userId, id)
+          return accountPage(c, cid, { revealed: { id, secret, fresh: true } })
+        }
+        default:
+          return accountPage(c, cid, { revealed: { id, secret: await ctx.webhooks.secret(ctx.sql, userId, id), fresh: false } })
+      }
+    } catch (e) {
+      if (e instanceof WebhookError) return e.code === "not_found" ? c.text("Unknown webhook.", 404) : accountPage(c, cid, { error: e.message }, 400)
+      throw e
+    }
   })
 
   app.get("/app/settings", async (c) => {

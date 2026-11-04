@@ -3,6 +3,7 @@ import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
 import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
+import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
@@ -151,7 +152,10 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-top:18px}
 .acard{position:relative;display:flex;flex-direction:column;gap:18px;padding:18px 18px 16px;border-radius:18px;background:var(--card);box-shadow:var(--frame);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
 .acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,rgba(255,246,232,.035),transparent 62%);pointer-events:none}
-a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
+.acard .cover{position:absolute;inset:0;border-radius:inherit;z-index:1}
+.acard .awh{position:relative;z-index:2;display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted);padding-top:12px;border-top:1px solid var(--line)}
+.acard .awh .m{font-family:var(--mono);color:var(--text-2)}.acard .awh .cfg{display:inline-flex;gap:5px;align-items:center;color:var(--text)}.acard .awh:hover .cfg,.acard .awh:hover .m{text-decoration:underline;text-underline-offset:3px}
+.acard:not(.add):hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
 .acard .ah{position:relative;display:flex;align-items:center;gap:12px}
 .acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-ring)}
 .acard .grow{flex:1;min-width:0}
@@ -163,7 +167,7 @@ a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(-
 .acard .af{position:relative;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
 .acard .next{display:inline-flex;align-items:center;gap:8px;color:var(--text-2)}
 .acard .go{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);white-space:nowrap;transition:color .15s}a.acard:hover .go{color:var(--text)}
-.acard .go svg{transition:transform .15s var(--ease)}a.acard:hover .go svg{transform:translateX(2px)}
+.acard .go svg{transition:transform .15s var(--ease)}.acard:not(.add):hover .go svg{transform:translateX(2px)}
 .acard.add{background:transparent;box-shadow:inset 0 0 0 1px var(--line-2)}.acard.add::before{opacity:.6}
 .acard.add .ct{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}
 .acard .soon{display:inline-flex;align-items:center;gap:9px}.acard .soon span{display:inline-flex}
@@ -242,7 +246,7 @@ function connectorCards(): string {
 const cityOf = (tz: string) => tz.split("/").pop()!.replace(/_/g, " ")
 
 /** A linked (or linking) account: who it sends as, today against its limit, what's next, and its chats. */
-function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: number | undefined): string {
+function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: number | undefined, webhooks: number): string {
   const st = connectionState(c)
   const number = waNumber(c.handle) || channelName(c.channel)
   const live = c.status === "connected"
@@ -251,10 +255,15 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
     ? `<div class="ab"><div class="row"><span>Today</span><span class="m">${s.sentToday}<span class="faint"> / ${s.dailyLimit}</span></span></div>${bar(s.sentToday, s.dailyLimit)}</div>
        <div class="af"><span class="next">${s.nextAt ? `${s.queued} queued · next ${esc(until(s.nextAt, c.timezone))}` : `<span class="faint">Nothing queued</span>`}</span><span class="go">${chats ?? 0} chats ${icon("arrow", 13)}</span></div>`
     : `<div class="af"><span class="faint">${live ? "Loading today's numbers" : "Waiting for the QR scan"}</span><span class="go">${live ? "Open" : "Finish linking"} ${icon("arrow", 13)}</span></div>`
-  return `<a class="acard" href="${href}">
+  // The card is one link; the webhooks line is its own (above the card's link), straight to the number's webhooks.
+  const hooks = live
+    ? `<a class="awh" href="/app/connections/${esc(c.id)}#webhooks"><span>Webhooks</span>${webhooks ? `<span class="m">${webhooks}</span>` : `<span class="cfg">Configure ${icon("arrow", 12)}</span>`}</a>`
+    : ""
+  return `<div class="acard"><a class="cover" href="${href}" aria-label="${esc(number)}"></a>
     <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
     ${body}
-  </a>`
+    ${hooks}
+  </div>`
 }
 
 /** The last card in the grid: link another number now, and the channels that are on their way. */
@@ -454,14 +463,14 @@ tick();setInterval(tick,4000);document.addEventListener('visibilitychange',()=>{
 
 export function dashboardPage(opts: {
   user: Viewer; connections: Connection[]; agents: AgentView[]; mcpUrl: string; syncedCounts?: Map<string, number>
-  summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: ActivityEntry[]
+  summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: ActivityEntry[]; webhookCounts?: Map<string, number>
 }): string {
   const visible = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
   const live = visible.filter((c) => c.status === "connected")
   const sentToday = [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.sentToday, 0)
   const queued = opts.queued ?? [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.queued, 0)
   const activeAgents = opts.agents.filter(isActive).length
-  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id))).join("")}${addCard()}</div>`
+  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id), opts.webhookCounts?.get(c.id) ?? 0)).join("")}${addCard()}</div>`
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:16px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
@@ -626,6 +635,142 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
   })
 }
 
+// ---- Webhooks -----------------------------------------------------------------------------------------------------
+
+const WEBHOOKS_CSS = `
+.whtbl td:first-child{width:100%;min-width:300px}.whtbl td{vertical-align:top}.whtbl td.st-c{white-space:nowrap;padding-top:16px;min-width:240px}.whk{display:flex;flex-direction:column;gap:4px;min-width:0}.whk .nw{white-space:nowrap}.whk .u{font-family:var(--mono);font-size:12.5px;color:var(--text);word-break:break-all}
+.whk small{color:var(--faint);font-size:12px}
+.evs{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.ev{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:6px;background:var(--bg-3);color:var(--text-2);white-space:nowrap}
+.acts-row{display:flex;gap:2px;justify-content:flex-end;flex-wrap:nowrap;white-space:nowrap;padding-top:6px}.acts-row form{display:inline}
+.evpick{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 18px}
+.evpick label{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;color:var(--text-2);cursor:pointer}
+.evpick input{margin-top:3px;accent-color:var(--primary)}.evpick b{font-family:var(--mono);font-weight:400;font-size:12.5px;color:var(--text);display:block}
+.evpick span small{color:var(--faint);font-size:12px}
+.whsec .addf{display:flex;flex-direction:column;gap:16px;padding-top:18px}
+.addwh{margin-top:16px}.addwh > summary{list-style:none;display:inline-flex}.addwh > summary::-webkit-details-marker{display:none}.addwh[open] > summary{opacity:.6}
+.whnone{font-size:13.5px;margin:6px 0 0}.chats-h{margin-top:36px;margin-bottom:14px}.whsec .sec-note{margin-bottom:14px}
+.edit summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted)}.edit[open]{padding:14px 0 4px}.edit[open] summary{margin-bottom:14px}
+.note.reveal{margin-bottom:20px}.secret{display:flex;flex-direction:column;gap:10px;width:100%}.secret .term{margin:0}
+.health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
+`
+
+const shortUrl = (u: string) => {
+  try {
+    const x = new URL(u)
+    return `${x.host}${x.pathname === "/" ? "" : x.pathname}`
+  } catch {
+    return u
+  }
+}
+
+const DELIVERY_TONE: Record<Delivery["status"], Tone> = { delivered: "ok", failed: "bad", pending: "warn", sending: "warn" }
+
+function deliveryResult(d: Delivery): string {
+  if (d.status === "delivered") return `HTTP ${d.lastStatus}`
+  if (d.status === "sending") return "sending now"
+  if (d.status === "pending" && !d.attempts) return "waiting to send"
+  const why = d.lastError ?? "unknown error"
+  if (d.status !== "pending" || !d.nextAttemptAt) return why
+  const ms = Date.parse(d.nextAttemptAt) - Date.now()
+  return `${why} · retry ${ms <= 1000 ? "now" : ms < 60_000 ? `in ${Math.ceil(ms / 1000)}s` : until(d.nextAttemptAt)}`
+}
+
+/** The event checkboxes, for adding a webhook (all on) or editing one (its own). */
+const eventPicker = (on: readonly string[]) => `<div class="evpick">${WEBHOOK_EVENTS.map((e) =>
+  `<label><input type="checkbox" name="events" value="${e}"${on.includes(e) ? " checked" : ""}><span><b>${e}</b><small>${esc(EVENT_TEXT[e])}</small></span></label>`).join("")}</div>`
+
+const VERIFY_SNIPPET = `// Node: verify a Parley webhook request (raw body, before JSON.parse)
+import { createHmac, timingSafeEqual } from "node:crypto"
+function verify(rawBody, header, secret) {
+  const { t, v1 } = Object.fromEntries(header.split(",").map((kv) => kv.split("=")))
+  if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false
+  const want = createHmac("sha256", secret).update(\`\${t}.\${rawBody}\`).digest("hex")
+  return v1.length === want.length && timingSafeEqual(Buffer.from(v1), Buffer.from(want))
+}`
+
+/** What the account page's webhooks section shows besides the list: a secret to show, an error, a notice. */
+export type WebhooksView = {
+  webhooks: Webhook[]; deliveries: Delivery[]
+  error?: string | undefined; notice?: string | undefined; revealed?: { id: string; secret: string; fresh: boolean } | undefined
+}
+
+/**
+ * One number's webhooks, on its account page (`#webhooks`): each endpoint with its events, state and actions, adding
+ * one, recent deliveries, and how to receive them. Every form posts under /app/connections/<id>/webhooks.
+ */
+function webhooksSection(connId: string, name: string, opts: WebhooksView): string {
+  const at = `/app/connections/${esc(connId)}/webhooks`
+  const hooks = new Map(opts.webhooks.map((w) => [w.id, w]))
+  const rows = opts.webhooks.map((w) => {
+    const health = w.lastFailureAt && (!w.lastSuccessAt || w.lastFailureAt > w.lastSuccessAt)
+      ? `<span class="health">last failed ${ago(w.lastFailureAt)}: ${esc(w.lastError ?? "")}</span>`
+      : w.lastSuccessAt ? `<span class="health">last delivered ${ago(w.lastSuccessAt)}</span>` : `<span class="health">nothing sent yet</span>`
+    const act = (action: string, label: string, cls = "btn quiet sm", confirm = "") =>
+      `<form method="post" action="${at}/${esc(w.id)}/${action}"${confirm ? ` data-confirm="${esc(confirm)}"` : ""}><button class="${cls}" type="submit">${label}</button></form>`
+    return `<tr>
+      <td><div class="whk"><span class="u">${esc(w.url)}</span>${w.description ? `<small>${esc(w.description)}</small>` : ""}<div class="evs">${w.events.length === WEBHOOK_EVENTS.length ? `<span class="ev">all events</span>` : w.events.map((e) => `<span class="ev">${esc(e)}</span>`).join("")}</div>
+        <small>added ${day(w.createdAt)} · ${esc(w.createdBy)} · <span class="nw">secret …${esc(w.secretHint)}</span></small>
+        <details class="edit"><summary>edit</summary>
+          <form method="post" action="${at}/${esc(w.id)}/update" class="addf" style="padding-top:0">
+            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" value="${esc(w.url)}" required></label>
+              <label class="field"><span>Description</span><input class="input" name="description" value="${esc(w.description ?? "")}" maxlength="200"></label></div>
+            ${eventPicker(w.events)}
+            <div><button class="btn line sm" type="submit">Save</button></div>
+          </form>
+        </details></div></td>
+      <td class="st-c">${w.enabled ? status("ok", "On") : status("idle", "Off")}${health}</td>
+      <td class="r"><div class="acts-row">
+        ${act("test", "Send test")}
+        ${act(w.enabled ? "disable" : "enable", w.enabled ? "Turn off" : "Turn on")}
+        ${act("secret", "Secret")}
+        ${act("rotate", "Rotate", "btn quiet sm", "Make a new signing secret? The current one stops working right away.")}
+        ${act("delete", icon("trash", 13), "btn quiet sm", `Delete the webhook to ${shortUrl(w.url)}? Nothing more is sent to it.`)}
+      </div></td>
+    </tr>`
+  }).join("")
+
+  const deliveryRows = opts.deliveries.map((d) => `<tr>
+      <td class="m faint">${esc(ago(d.createdAt))}</td>
+      <td class="m">${esc(d.event)}</td>
+      <td class="clip m">${esc(shortUrl(hooks.get(d.webhookId)?.url ?? ""))}</td>
+      <td>${status(DELIVERY_TONE[d.status], d.status)}</td>
+      <td class="m">${d.attempts}<span class="faint">/${MAX_ATTEMPTS}</span></td>
+      <td class="clip" title="${esc(deliveryResult(d))}">${esc(deliveryResult(d))}</td>
+    </tr>`).join("")
+
+  const revealed = opts.revealed && hooks.get(opts.revealed.id)
+  const secretNote = revealed ? `<div class="note reveal"><div class="secret">
+      <b>${opts.revealed!.fresh ? "Your signing secret" : "Signing secret"} for ${esc(shortUrl(revealed.url))}</b>
+      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request.</p>
+      ${copyLine(opts.revealed!.secret)}
+    </div></div>` : ""
+  const none = !opts.webhooks.length
+
+  const addForm = opts.webhooks.length < MAX_WEBHOOKS ? `<details class="addwh"${none || opts.error ? " open" : ""}><summary class="btn ${none ? "" : "line "}sm">${icon("plus", 13)}${none ? "Configure a webhook" : "Add webhook"}</summary>
+      <form method="post" action="${at}" class="addf">
+        <div class="fields">
+          <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required></label>
+          <label class="field"><span>Description</span><input class="input" name="description" placeholder="CRM sync" maxlength="200"></label>
+        </div>
+        ${eventPicker(WEBHOOK_EVENTS)}
+        <div><button class="btn" type="submit">Add webhook</button></div>
+      </form></details>` : ""
+
+  return `<section class="sec whsec" id="webhooks">
+      <div class="sec-h"><span class="label">Webhooks</span><span class="aside">${opts.webhooks.length}/${MAX_WEBHOOKS}</span></div>
+      <p class="sec-note">Parley calls these URLs the moment a message, reaction or deletion happens on ${esc(name)}, so your app hears about it without polling. Only real, live changes are sent (never history or chats you ignore), and every request is signed.</p>
+      ${opts.error ? `<div class="note bad"><div class="grow"><b>Couldn't do that</b><p>${esc(opts.error)}</p></div></div>` : ""}
+      ${opts.notice ? `<div class="note"><div class="grow"><p>${esc(opts.notice)}</p></div></div>` : ""}
+      ${secretNote}
+      ${none ? `<p class="faint whnone">No webhooks on this number yet. Configure one here, or ask your agent to (create_webhook).</p>` : `<table class="tbl whtbl"><thead><tr><th>Endpoint</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`}
+      ${addForm}
+    </section>
+    ${none ? "" : foldSection("Recent webhook deliveries", opts.deliveries.length
+      ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th></tr></thead><tbody>${deliveryRows}</tbody></table>`
+      : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}
+    ${foldSection("Receiving webhooks", `<p class="sec-note">A JSON <code>POST</code> per event, with headers <code>Parley-Event</code>, <code>Parley-Event-Id</code>, <code>Parley-Delivery-Id</code>, <code>Parley-Attempt</code> and <code>Parley-Signature: t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where v1 is HMAC-SHA256 of <code>&lt;t&gt;.&lt;raw body&gt;</code> under the secret. Answer any 2xx within 10 seconds. Anything else is tried again, ${MAX_ATTEMPTS} attempts in all (at once, after 30 seconds, after 5 minutes), so dedupe on the event id. Redirects aren't followed, and URLs that resolve to private addresses are refused.</p>${copyLine(VERIFY_SNIPPET, { multiline: true })}`)}`
+}
+
 // ---- Settings -----------------------------------------------------------------------------------------------------
 
 export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[]; currentSessionId: string; agentCount?: number; queuedTotal?: number }): string {
@@ -782,7 +927,7 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
  * agents shouldn't see (people and groups, most recent first, like their phone). Each tap saves at once; filtering is
  * client-side.
  */
-export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number }): string {
+export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number; webhooks: WebhooksView }): string {
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
   // helps nobody. They still sync, and appear once they're identified (a name arrives, or they merge into a number).
@@ -825,7 +970,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ? `<div class="note warn"><div class="grow"><b>Backing off until ${esc(until(conn.pausedUntil, conn.timezone))}</b><p>${esc(name)} asked the account to slow down. Parley waits, then resumes.</p></div><form method="post" action="/app/connections/${esc(conn.id)}/resume"><button class="btn line sm" type="submit">Resume now</button></form></div>`
       : ""
   return appShell({
-    title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
+    title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS + WEBHOOKS_CSS,
     body: `${pageHead({
       title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
       sub: `${status(st.tone, st.text)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
@@ -834,6 +979,8 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     })}
       ${banner}
       ${sendingPrefs(conn, opts.today, opts.queued)}
+      ${webhooksSection(conn.id, number || name, opts.webhooks)}
+      <div class="sec-h chats-h"><span class="label">Chats</span></div>
       <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.</p>
       ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
