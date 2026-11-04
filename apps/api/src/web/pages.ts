@@ -4,7 +4,7 @@ import type { ChatRow } from "../sessions/chats.ts"
 import { UNSEND_WINDOW_MS, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import {
-  CHANNELS, LOGO, agentMark, ago, appShell, avatar, bar, brandMark, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
+  CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
@@ -130,7 +130,7 @@ const OVERVIEW_CSS = `
 .chtag{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px 0 10px;border:0;border-radius:999px;background:var(--glass);box-shadow:var(--glass-ring);font-size:12.5px;color:var(--text-2);white-space:nowrap}
 button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s var(--ease)}button.chtag:hover{color:var(--text);background:var(--glass-hi)}
 .chtag.soon{background:none;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}.chtag i{font-style:normal;font-size:11.5px;color:var(--faint);margin-left:2px}
-.conns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding-top:18px}
+.conns{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:12px;padding-top:18px}
 .conn{position:relative;display:flex;flex-direction:column;gap:16px;padding:18px;border-radius:16px;background:var(--card);box-shadow:var(--frame);transition:box-shadow .2s var(--ease),transform .2s var(--ease)}
 .conn .ct{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:13px;background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 22%,transparent)}
 .conn b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;color:var(--text)}
@@ -148,8 +148,6 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .stepn.done{background:var(--primary);box-shadow:var(--primary-shadow);color:var(--on-primary)}
 .done-tag{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 8px;border-radius:999px;background:color-mix(in srgb,var(--sand) 12%,transparent);color:var(--sand);font-size:12px;font-weight:500}
 .seg button .cm,.seg button svg{margin-right:7px}
-@media (max-width:1100px){.conns{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:700px){.conns{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .mcp{display:flex;flex-direction:column;gap:16px;padding-top:18px}
 .mcp .tabrow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .pane{display:flex;flex-direction:column;gap:12px;font-size:13.5px;color:var(--muted);line-height:22px}
@@ -159,76 +157,96 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .agent-line{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
 .agent-line b{color:var(--text);font-weight:500}.agent-line a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-3)}
 .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:ping 2s var(--ease) infinite;color:var(--ok)}
+.accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-top:18px}
+.acard{position:relative;display:flex;flex-direction:column;gap:18px;padding:18px 18px 16px;border-radius:18px;background:var(--card);box-shadow:var(--frame);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
+.acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,color-mix(in srgb,var(--c) 8%,transparent),transparent 62%);pointer-events:none}
+a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
+.acard .ah{position:relative;display:flex;align-items:center;gap:12px}
+.acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 22%,transparent)}
+.acard .grow{flex:1;min-width:0}
+.acard b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard small{display:block;font-size:12.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard .ab .row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--muted);margin-bottom:9px}
+.acard .ab .m{font-family:var(--mono);font-size:12.5px;color:var(--text-2)}
+.acard .bar{display:block;width:100%;height:5px}
+.acard .af{position:relative;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+.acard .next{display:inline-flex;align-items:center;gap:8px;color:var(--text-2)}
+.acard .go{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);white-space:nowrap;transition:color .15s}a.acard:hover .go{color:var(--text)}
+.acard .go svg{transition:transform .15s var(--ease)}a.acard:hover .go svg{transform:translateX(2px)}
+.acard.add{--c:#e3b98d;background:transparent;box-shadow:inset 0 0 0 1px var(--line-2)}.acard.add::before{opacity:.6}
+.acard.add .ct{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}
+.acard .soon{display:inline-flex;align-items:center;gap:9px}.acard .soon span{display:inline-flex}
+.logcard{margin-top:16px;padding:2px 20px;border-radius:18px;background:var(--card);box-shadow:var(--frame)}.logcard .log > div:last-child{border-bottom:0}.logcard .empty{padding:28px 0}
+.agentc{display:flex;flex-direction:column;gap:20px;padding-top:20px}
+.cgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:14px}
+.cc{display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:18px;background:var(--card);box-shadow:var(--frame)}
+.cc .cl{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:500;color:var(--text)}.cc .cl svg{color:var(--sand)}
+.cc p{font-size:13px;line-height:20px;color:var(--muted)}
+.works{margin-top:auto;padding-top:6px;display:flex;flex-direction:column;gap:10px}.works > span{font-size:12px;color:var(--faint)}
+.works .arow{gap:6px}.works .arow li{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}.works .arow li:hover{color:var(--text)}
+@media (max-width:860px){.cgrid{grid-template-columns:1fr}}
 `
 
-/** Fill the hidden timezone/country fields of Connect forms from the browser, so pacing starts in the right local hours. */
-const LOCALE_SCRIPT = `document.querySelectorAll('form[data-locale]').forEach(f=>{try{f.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';const r=(navigator.language||'').split('-')[1];if(r&&/^[A-Za-z]{2}$/.test(r))f.country.value=r.toUpperCase()}catch(e){}});`
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
-/** One card per channel: the live ones get a Connect button in the brand's color, the rest say "soon". */
-function connectorCards(skip: Set<string>, compact = false): string {
-  const ids = Object.keys(CHANNELS).filter((id) => !(CHANNELS[id]!.live && skip.has(id)))
-  if (!ids.length) return ""
-  return `<div class="conns${compact ? " compact" : ""}">${ids.map((id) => {
-    const c = CHANNELS[id]!
-    return `<div class="conn ${c.live ? "ready" : "later"}" style="--c:${c.color}">
-      <span class="ct">${channelMark(id, compact ? 20 : 26)}</span>
+/** One card per channel, for the first link: the live ones get a Connect button, the rest say "Coming soon". */
+function connectorCards(): string {
+  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => `<div class="conn ${c.live ? "ready" : "later"}" style="--c:${c.color}">
+      <span class="ct">${channelMark(id, 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
       <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">Coming soon</span>`}</div>
-    </div>`
-  }).join("")}</div>`
+    </div>`).join("")}</div>`
 }
 
-/**
- * Once a channel is linked, the channels are small tags in the section's header row instead of cards:
- * "+ whatsapp" links another number, the rest say soon.
- */
-function channelTags(): string {
-  return `<div class="chtags">${Object.keys(CHANNELS).map((id) => {
-    const c = CHANNELS[id]!
-    return c.live
-      ? connectForm(`${channelMark(id, 14)}${c.name}`, "chtag")
-      : `<span class="chtag soon">${channelMark(id, 14)}${c.name}<i>Soon</i></span>`
-  }).join("")}</div>`
+const cityOf = (tz: string) => tz.split("/").pop()!.replace(/_/g, " ")
+
+/** A linked (or linking) account: who it sends as, today against its limit, what's next, and its chats. */
+function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: number | undefined): string {
+  const st = connectionState(c)
+  const number = waNumber(c.handle) || channelName(c.channel)
+  const live = c.status === "connected"
+  const href = live ? `/app/connections/${esc(c.id)}` : `/link/${esc(c.id)}`
+  const body = live && s
+    ? `<div class="ab"><div class="row"><span>Today</span><span class="m">${s.sentToday}<span class="faint"> / ${s.dailyLimit}</span></span></div>${bar(s.sentToday, s.dailyLimit)}</div>
+       <div class="af"><span class="next">${s.nextAt ? `${orb(12)}${s.queued} queued · next ${esc(until(s.nextAt, c.timezone))}` : `<span class="faint">Nothing queued</span>`}</span><span class="go">${chats ?? 0} chats ${icon("arrow", 13)}</span></div>`
+    : `<div class="af"><span class="faint">${live ? "Loading today's numbers" : "Waiting for the QR scan"}</span><span class="go">${live ? "Open" : "Finish linking"} ${icon("arrow", 13)}</span></div>`
+  return `<a class="acard" href="${href}" style="--c:${CHANNELS[c.channel]?.color ?? "#9d968b"}">
+    <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text, st.live)}</div>
+    ${body}
+  </a>`
 }
+
+/** The last card in the grid: link another number now, and the channels that are on their way. */
+const addCard = () => `<div class="acard add">
+    <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>Link another number</small></div></div>
+    <div class="af">${connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id, c]) => `<span title="${c.name}, coming soon">${channelMark(id, 16)}</span>`).join("")}</span></div>
+  </div>`
 
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
 const doneTag = `<span class="done-tag">${icon("check", 12, 2.25)}Done</span>`
 
-/** What to paste into an agent that installs its own tools (Grok Bot, Muse, Hermes, OpenClaw…): the endpoint and how it signs in. */
+/** What to paste into any agent: the endpoint, how it signs in, and a first call to check it worked. */
 const installPrompt = (mcpUrl: string) =>
   `Add the Parley MCP server so you can read and send my messages. It's a remote MCP server (Streamable HTTP) at ${mcpUrl} and signs in with OAuth: open the sign-in link it gives you and wait for me to approve. Once it's connected, call list_connections and tell me which accounts you can use.`
 
-const promptPane = (mcpUrl: string) =>
-  `<p class="any"><span class="marks">${["Grok Bot", "Muse", "OpenClaw"].map((t) => `<span title="${t}">${brandMark(t, 15)}</span>`).join("")}</span>For Grok Bot, Muse, Hermes, OpenClaw and any agent that can add its own tools: paste this into a chat with it.</p>${copyLine(installPrompt(mcpUrl), { wrap: true })}`
-
-function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; step?: number } = { open: true }): string {
+/** How to connect an agent: every agent the site lists, the URL, and one prompt that works in all of them. */
+function agentSetup(mcpUrl: string, agents: AgentView[]): string {
   const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(mcpUrl)
-  const tabs: Array<[string, string, string, string]> = [
-    ["cc", "Claude Code", "Claude", `<p>Run this, then start <code>claude</code> and type <code>/mcp</code> to sign in.</p>${copyLine(`claude mcp add --transport http parley ${mcpUrl}`, { prompt: "$" })}`],
-    ["cx", "Codex", "OpenAI", `<p>Run this, then <code>codex mcp login parley</code>.</p>${copyLine(`codex mcp add parley --url ${mcpUrl}`, { prompt: "$" })}`],
-    ["cu", "Cursor", "Cursor", `<p>Add to <code>~/.cursor/mcp.json</code>, then enable Parley under <b>Settings → MCP</b>.</p>${copyLine(JSON.stringify({ mcpServers: { parley: { url: mcpUrl } } }, null, 2), { multiline: true })}`],
-    ["cd", "Claude app", "Claude", `<ol><li><b>Settings → Connectors → Add custom connector</b></li><li>Name it Parley and paste the endpoint</li><li><b>Connect</b> and sign in</li></ol>${local ? `<p class="faint">The Claude app connects from Anthropic's servers, so it needs a public URL. Set <code>PUBLIC_URL</code> behind a tunnel, or use Claude Code.</p>` : ""}`],
-    ["gpt", "ChatGPT", "OpenAI", `<ol><li><b>Settings → Apps &amp; Connectors → Advanced</b>, turn on <b>Developer mode</b></li><li><b>Create</b>, paste the endpoint, pick <b>OAuth</b></li><li>Sign in</li></ol>${local ? `<p class="faint">ChatGPT connects from OpenAI's servers, so it needs a public URL.</p>` : ""}`],
-    ["any", "Any agent", "*", promptPane(mcpUrl)],
-  ]
   const active = agents.filter(isActive)
   const line = agents.length
     ? `<div class="agent-line">${active.length ? `<span class="live"></span>` : agentMark(agents[0]!.clientName, 20)}<span>${active.length
         ? `<b>${esc(active[0]!.clientName || "An agent")}</b> is using Parley right now${active.length > 1 ? ` (+${active.length - 1} more)` : ""}`
-        : `${agents.length} agent${agents.length === 1 ? "" : "s"} authorized · ${agents[0]!.lastUsedAt ? `last used ${ago(agents[0]!.lastUsedAt)}` : "not used yet"}`} · <a href="/app/agents">see agents</a></span></div>`
+        : `${agents.length} agent${agents.length === 1 ? "" : "s"} authorized · ${agents[0]!.lastUsedAt ? `last used ${ago(agents[0]!.lastUsedAt)}` : "not used yet"}`} · <a href="/app/agents">See agents</a></span></div>`
     : ""
-  const body = `<div class="mcp" data-tabbox>
-      ${copyLine(mcpUrl)}
-      <div class="tabrow"><div class="seg" data-tabs>${tabs.map(([id, label, brand], i) => `<button type="button" data-tab="${id}"${i === 0 ? ' class="on"' : ""}>${brand === "*" ? icon("sparkles", 13) : brandMark(brand, 13)}${label}</button>`).join("")}</div></div>
-      ${tabs.map(([id, , , html], i) => `<div class="pane" data-pane="${id}"${i === 0 ? "" : " hidden"}>${html}</div>`).join("")}
+  return `<div class="agentc">
+      <div class="cgrid">
+        <div class="cc"><span class="cl">${icon("plug", 15)}Your MCP server</span>${copyLine(mcpUrl)}<p>A remote MCP server (Streamable HTTP). It signs in with OAuth in your browser, so there's no key to paste.</p>
+          <div class="works"><span>Works with</span>${agentRow(16)}</div></div>
+        <div class="cc"><span class="cl">${icon("sparkles", 15)}Paste this into your agent</span>${copyLine(installPrompt(mcpUrl), { wrap: true })}
+          <p>Claude, ChatGPT and Cursor connect from their settings instead: add the URL as a custom connector or MCP server, then sign in. In a terminal: <code>claude mcp add --transport http parley ${esc(mcpUrl)}</code>.${local ? " Apps that reach it from their own servers need a public URL: set <code>PUBLIC_URL</code> behind a tunnel." : ""}</p></div>
+      </div>
       ${line}
     </div>`
-  const aside = agents.length && opts.step ? doneTag : agents.length ? `${agents.length} agent${agents.length === 1 ? "" : "s"} connected` : "Streamable HTTP · OAuth"
-  return foldSection("Add Parley to your agent", body, {
-    open: opts.open, aside, lead: opts.step ? stepNo(opts.step, agents.length > 0) : "",
-    note: "Parley is an MCP server. Add the endpoint to your agent; it opens a browser to sign in. No API key to paste.",
-  })
 }
 
 const MEDIA_LABEL: Record<string, string> = { image: "Photo", video: "Video", audio: "Voice note", document: "Document" }
@@ -262,56 +280,36 @@ export function dashboardPage(opts: {
   const sentToday = [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.sentToday, 0)
   const queued = opts.queued ?? [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.queued, 0)
   const activeAgents = opts.agents.filter(isActive).length
-  const linked = new Set(visible.map((c) => c.channel))
-
-  const rows = visible.map((c) => {
-    const st = connectionState(c)
-    const s = opts.summaries?.get(c.id)
-    const number = waNumber(c.handle)
-    // A live row opens the account (its chats and sending settings); until it's linked, the QR page.
-    const detail = `/app/connections/${esc(c.id)}`
-    return `<tr class="link" data-href="${c.status === "connected" ? detail : `/link/${esc(c.id)}`}">
-      <td><div class="who">${channelMark(c.channel, 18)}<div><b>${esc(number || channelName(c.channel))}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""}</small></div></div></td>
-      <td>${status(st.tone, st.text, st.live)}</td>
-      <td class="m">${s ? `${bar(s.sentToday, s.dailyLimit)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.dailyLimit}</span>` : `<span class="faint">—</span>`}</td>
-      <td class="m">${s ? s.queued : "—"}</td>
-      <td class="m">${s?.nextAt ? `<span class="next">${orb(12)}${esc(until(s.nextAt, c.timezone))}</span>` : `<span class="faint">—</span>`}</td>
-      <td class="m">${c.status === "connected" ? `<a href="${detail}">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">Finish linking</a>`}</td>
-      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<form method="post" action="${detail}/disconnect" data-confirm="Cancel linking this ${esc(channelName(c.channel))} account?" style="display:inline"><button class="btn quiet sm" type="submit">Cancel</button></form>`}</td>
-    </tr>`
-  }).join("")
-
-  const table = `<table class="tbl chan"><thead><tr><th>Account</th><th>Status</th><th>Today</th><th>Queued</th><th>Next send</th><th>Chats</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id))).join("")}${addCard()}</div>`
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:12px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
-    title: "Overview", active: "overview", user: opts.user, counts: { agents: opts.agents.length, outbox: queued }, css: OVERVIEW_CSS, script: LOCALE_SCRIPT, body,
+    title: "Overview", active: "overview", user: opts.user, counts: { agents: opts.agents.length, outbox: queued }, accounts: opts.connections, css: OVERVIEW_CSS, body,
   })
 
-  // Setup: until a channel is linked and an AI is connected, the page is just the two steps to get there.
+  // Setup: until an account is linked and an agent is connected, the page is just the two steps to get there.
   if (!visible.length || !opts.agents.length) {
     const hasChannel = visible.length > 0
-    return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your agent." })}
+    return frame(`${pageHead({ title: "Welcome to Parley", sub: "Two steps and your agents can text people from your own account: connect an account, then connect your agent." })}
     ${alerts}
-    ${section("Link a channel", hasChannel ? table : connectorCards(linked), hasChannel ? `${channelTags()}${doneTag}` : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
-    ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
+    ${section("Connect an account", hasChannel ? cards : connectorCards(), hasChannel ? doneTag : "", hasChannel ? "" : "Parley links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
+    ${section("Connect your agent", agentSetup(opts.mcpUrl, opts.agents), opts.agents.length ? doneTag : "Streamable HTTP · OAuth", "", stepNo(2, opts.agents.length > 0))}`)
   }
 
   return frame(`${pageHead({
       title: "Overview",
-      sub: live.length ? `${live.length} channel${live.length === 1 ? "" : "s"} live. Agents queue messages; Parley sends them at the pace of the person who owns each account.` : "Agents queue messages; Parley sends them at the pace of the person who owns each account.",
-      actions: `<a class="btn line" href="/app/outbox">Outbox <span class="ar">${icon("arrow", 13)}</span></a>`,
+      sub: `${live.length} account${live.length === 1 ? "" : "s"} live. Agents queue messages; Parley sends them at the pace of the person who owns each account.`,
     })}
     ${alerts}
     <div class="strip">
-      <div><span class="label">Live channels</span><div class="v">${live.length}</div><div class="h">${visible.length > live.length ? `${visible.length - live.length} waiting to link` : "all online"}</div></div>
-      <div><span class="label">Sent today</span><div class="v">${sentToday}</div><div class="h">across every channel</div></div>
+      <div><span class="label">Live accounts</span><div class="v">${live.length}</div><div class="h">${visible.length > live.length ? `${visible.length - live.length} waiting to link` : "all online"}</div></div>
+      <div><span class="label">Sent today</span><div class="v">${sentToday}</div><div class="h">across every account</div></div>
       <div><span class="label">Queued</span><div class="v">${queued}${queued ? orb(18) : ""}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
       <div><span class="label">Agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
-    ${section("Channels", table, channelTags())}
-    ${section("Activity", activityLog(opts.recent ?? [], opts.connections), `<a href="/app/outbox?view=recent">All activity</a>`)}
-    ${mcpGuide(opts.mcpUrl, opts.agents, { open: false })}`)
+    ${section("Accounts", cards, `${live.length} live`)}
+    ${section("Activity", `<div class="logcard">${activityLog(opts.recent ?? [], opts.connections)}</div>`, `<a href="/app/outbox?view=recent">All activity</a>`)}
+    ${foldSection("Connect another agent", agentSetup(opts.mcpUrl, opts.agents), { aside: `${opts.agents.length} connected` })}`)
 }
 
 // ---- Outbox -------------------------------------------------------------------------------------------------------
@@ -340,7 +338,7 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; recent: 
     </tr>`
   }).join("")
   return appShell({
-    title: "Outbox", active: "outbox", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.scheduled.length },
+    title: "Outbox", active: "outbox", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.scheduled.length }, accounts: opts.connections,
     body: `${pageHead({ title: "Outbox", sub: "Everything your agents asked to send. Parley spaces it out so each account sends like the person who owns it.", actions: `<nav class="seg"><a href="/app/outbox" class="${scheduled ? "on" : ""}">Scheduled · ${opts.scheduled.length}</a><a href="/app/outbox?view=recent" class="${scheduled ? "" : "on"}">Recent</a></nav>` })}
       ${list.length
         ? `<table class="tbl"><thead><tr><th>To</th><th>Message</th><th>Kind</th><th>${scheduled ? "Sends" : "Result"}</th><th>${scheduled ? "Local time" : "When"}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
@@ -362,7 +360,7 @@ function activity(a: AgentView): string {
   return `${isActive(a) ? "Using Parley right now" : `Last active ${ago(a.lastUsedAt)}`}${did} · ${a.calls} tool call${a.calls === 1 ? "" : "s"}`
 }
 
-export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: string; queuedTotal?: number }): string {
+export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: string; queuedTotal?: number; connections?: Connection[] }): string {
   const rows = opts.agents.map((a) => `<tr>
       <td><div class="who">${agentMark(a.clientName, 30)}<div><b>${esc(a.clientName || "Unnamed MCP client")}${isActive(a) ? ` <span class="live" title="Active in the last 2 minutes"></span>` : ""}</b></div></div></td>
       <td style="color:var(--muted);font-size:13px">${activity(a)}</td>
@@ -370,12 +368,12 @@ export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: st
       <td class="r"><form method="post" action="/app/agents/${esc(a.sessionId)}/disconnect" data-confirm="Disconnect this agent? It will need to sign in again."><button class="btn warn sm" type="submit">Disconnect</button></form></td>
     </tr>`).join("")
   return appShell({
-    title: "Agents", active: "agents", user: opts.user, counts: { agents: opts.agents.length, outbox: opts.queuedTotal }, css: OVERVIEW_CSS,
+    title: "Agents", active: "agents", user: opts.user, counts: { agents: opts.agents.length, outbox: opts.queuedTotal }, accounts: opts.connections, css: OVERVIEW_CSS,
     body: `${pageHead({ title: "Agents", sub: "Apps you've authorized to read your synced chats and queue messages for you. Disconnecting one cuts off its tokens immediately." })}
-      ${section("MCP endpoint", `<div class="mcp"><div>${copyLine(opts.mcpUrl)}</div><div class="pane">${promptPane(opts.mcpUrl)}</div></div>`, "Streamable HTTP · OAuth")}
       ${section("Authorized", opts.agents.length
         ? `<table class="tbl"><thead><tr><th>Agent</th><th>Activity</th><th>Since</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-        : empty("No agents yet", "Add the endpoint above to an MCP client. It opens a browser to sign in with this account."), `${opts.agents.length} authorized`)}`,
+        : empty("No agents yet", "Connect one below. It opens a browser to sign in with this account."), `${opts.agents.length} authorized`)}
+      ${section(opts.agents.length ? "Connect another agent" : "Connect your agent", agentSetup(opts.mcpUrl, []), "Streamable HTTP · OAuth")}`,
   })
 }
 
@@ -399,7 +397,7 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
       <td>${c ? `<a class="who" href="/app/connections/${esc(c.id)}">${channelMark(c.channel, 15)}<span class="m" style="color:var(--text)">${esc(waNumber(c.handle) || channelName(c.channel))}</span></a>` : `<span class="faint mono">unassigned</span>`}</td></tr>`
   }).join("")
   return appShell({
-    title: "Network", active: "network", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.queuedTotal },
+    title: "Network", active: "network", user: opts.user, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, accounts: opts.connections,
     css: `.addf{display:flex;flex-direction:column;gap:16px;padding-top:18px}.addf details summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.04em}.addf details[open] summary{margin-bottom:14px}.ph-list code{color:var(--text-2)}`,
     body: `${pageHead({ title: "Network", sub: "Each account sends from one stable IP in its own country, and an IP never fronts two accounts on the same platform. Bring residential, mobile, ISP or datacenter proxies; your providers are used before Parley's hosted pool." })}
       ${opts.error ? `<div class="note bad"><div class="grow"><b>Couldn't do that</b><p>${esc(opts.error)}</p></div></div>` : ""}
@@ -453,7 +451,7 @@ export function networkPage(opts: { user: Viewer; providers: Provider[]; exits: 
 
 // ---- Settings -----------------------------------------------------------------------------------------------------
 
-export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[]; currentSessionId: string; agentCount?: number; queuedTotal?: number }): string {
+export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[]; currentSessionId: string; agentCount?: number; queuedTotal?: number; connections?: Connection[] }): string {
   const u = opts.user
   const rows = opts.sessions.map((s) => {
     const here = s.id === opts.currentSessionId
@@ -467,7 +465,7 @@ export function settingsPage(opts: { user: Viewer; sessions: BrowserSessionView[
   }).join("")
   const others = opts.sessions.length > 1 ? `<form method="post" action="/app/settings/sessions/end-others"><button class="btn quiet sm" type="submit">Sign out other sessions</button></form>` : ""
   return appShell({
-    title: "Settings", active: "settings", user: u, counts: { agents: opts.agentCount, outbox: opts.queuedTotal },
+    title: "Settings", active: "settings", user: u, counts: { agents: opts.agentCount, outbox: opts.queuedTotal }, accounts: opts.connections,
     body: `${pageHead({ title: "Settings", sub: "Your Parley account and where you're signed in.", lead: avatar(u, 40) })}
       ${section("Profile", `<div class="kv">
           <div class="k">Name</div><div>${esc(u.name)}</div>
@@ -607,7 +605,7 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
  * agents shouldn't see (people and groups, most recent first, like their phone). Each tap saves at once; filtering is
  * client-side.
  */
-export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number }): string {
+export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number; connections?: Connection[] }): string {
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
   // helps nobody. They still sync, and appear once they're identified (a name arrives, or they merge into a number).
@@ -650,9 +648,9 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ? `<div class="note warn"><div class="grow"><b>Backing off until ${esc(until(conn.pausedUntil, conn.timezone))}</b><p>${esc(name)} asked the account to slow down. Parley waits, then resumes.</p></div><form method="post" action="/app/connections/${esc(conn.id)}/resume"><button class="btn line sm" type="submit">Resume now</button></form></div>`
       : ""
   return appShell({
-    title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
+    title: number || name, active: null, user: opts.user, counts: { agents: opts.agentCount }, accounts: opts.connections ?? [conn], account: conn.id, css: CHATS_CSS,
     body: `${pageHead({
-      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
+      title: number || name, lead: channelMark(conn.channel, 28),
       sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
       actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
         <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,

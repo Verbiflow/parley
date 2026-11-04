@@ -3,6 +3,7 @@
  * light), Switzer at regular weight, cream gradient buttons with a band of light, glass for secondary controls, cards
  * with a lit top edge, monospace only for what's machine-shaped (ids, numbers, times). Pages (`pages.ts`) compose these.
  */
+import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { AGENT_BRANDS } from "./agent-brands.ts"
 import { LOBEHUB_MARKS } from "./agent-marks.ts"
 
@@ -27,6 +28,12 @@ const ICON = {
   external: `<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>`,
   settings: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
   github: `<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>`,
+  home: `<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`,
+  send: `<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>`,
+  bot: `<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>`,
+  menu: `<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>`,
+  x: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
+  updown: `<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>`,
   sparkles: `<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>`,
 }
 export type IconName = keyof typeof ICON
@@ -82,7 +89,7 @@ const lobehub = (m: (typeof LOBEHUB_MARKS)[number], size: number, cls = "") =>
 
 export function agentMark(clientName: string | null, size = 24): string {
   const name = clientName || "MCP client"
-  const extra = LOBEHUB_MARKS.find((m) => m.match.test(name))
+  const extra = LOBEHUB_MARKS.find((m) => m.match?.test(name))
   if (extra) return `<span class="glyph brand" style="width:${size}px;height:${size}px" title="${esc(extra.title)}">${lobehub(extra, Math.round(size * 0.58))}</span>`
   const brand = AGENT_BRANDS.find((b) => b.match.test(name))
   if (!brand) return glyph(name, size)
@@ -99,6 +106,13 @@ export function brandMark(title: string, size = 14): string {
   const mono = ["#000000", "#191919", "#18181B", "#0B100F"].includes(brand.hex)
   return `<svg class="cm" viewBox="0 0 24 24" width="${size}" height="${size}" fill="${mono ? "currentColor" : brand.hex}" aria-hidden="true"><path d="${brand.path}"/></svg>`
 }
+
+/** Instinct publishes no vector mark; the site draws its figure after the favicon. */
+const INSTINCT = (size: number) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11.6" cy="3.6" r="2"/><path d="M11.4 6.2 11 13.6M11.3 7.6 8.6 11.6M11.4 7.4l2.9 4.4M11 13.6 9.6 21.4M11 13.6l3 7.2"/></svg>`
+
+/** Every agent the site lists, as the landing page shows them: single-color marks, names kept for screen readers. */
+export const agentRow = (size = 22) =>
+  `<ul class="arow">${LOBEHUB_MARKS.map((m) => `<li title="${esc(m.title)}">${lobehub(m, size)}<span class="sr">${esc(m.title)}</span></li>`).join("")}<li title="Instinct">${INSTINCT(size)}<span class="sr">Instinct</span></li></ul>`
 
 /** Parley's mark: a chat bubble whose tail forms the stem of a "P". */
 export const MARK_PATH = "M16 26A20 20 0 1 1 28 44.33C26 50.5 21.5 55.5 16 58ZM36 18a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"
@@ -256,41 +270,60 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .field > small{font-size:12px;color:var(--faint)}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
 
-/* frame: the top bar sits clear over the page's glow, and turns to frosted glass once the page scrolls under it */
-.top{position:sticky;top:0;z-index:30;transition:background .25s var(--ease),box-shadow .25s var(--ease)}
-.top.scrolled{background:color-mix(in srgb,var(--bg) 74%,transparent);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px);box-shadow:0 1px 0 var(--line),0 16px 40px -30px rgba(0,0,0,.7)}
-.top-in{position:relative;max-width:1200px;margin:0 auto;height:64px;padding:0 28px;display:flex;align-items:center;gap:16px}
-.top .home{display:inline-flex;align-items:center;height:34px;padding:0 6px;margin-left:-6px;border-radius:10px}
-.tabs{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line),inset 0 1px 2px rgba(0,0,0,.22)}
-.tab{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:30px;padding:0 15px;border-radius:999px;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color .15s var(--ease),background .15s var(--ease),box-shadow .15s var(--ease)}
-.tab:hover{color:var(--text)}
-.tab.on{color:var(--text);background:var(--glass-hi);box-shadow:var(--glass-ring),0 4px 12px -4px rgba(0,0,0,.45)}
-.tab .n{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--hover);box-shadow:inset 0 0 0 1px var(--line);font-size:11px;font-weight:500;line-height:1;color:var(--text-2);font-variant-numeric:tabular-nums}
-.tab .n.q{background:color-mix(in srgb,var(--sand) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 28%,transparent);color:var(--sand)}
-.top .right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.icon-btn{display:grid;place-items:center;width:34px;height:34px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;transition:color .15s,background .15s}
-.icon-btn:hover{color:var(--text);background:var(--glass-hi)}
-.th-d,[data-theme=light] .th-l{display:none!important}[data-theme=light] .th-d{display:inline!important}
-.me{position:relative}
-.me summary{list-style:none;cursor:pointer;border-radius:999px;display:block}
+/* frame: a sidebar (sections, then your accounts, then you) beside the page; a drawer under a slim bar on phones */
+.app{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:16px 12px 12px;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(255,246,232,.022),rgba(255,246,232,0) 46%);overflow-y:auto;scrollbar-width:none;z-index:40}
+.side::-webkit-scrollbar{display:none}
+.side .home{display:flex;align-items:center;justify-content:space-between;height:40px;padding:0 10px;margin-bottom:18px}
+.side .home .x{display:none}
+.nav{display:flex;flex-direction:column;gap:2px}
+.ni{position:relative;display:flex;align-items:center;gap:11px;height:36px;padding:0 10px;border-radius:11px;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color .15s var(--ease),background .15s var(--ease),box-shadow .15s var(--ease)}
+.ni > svg{flex:none;color:var(--faint);transition:color .15s var(--ease)}
+.ni:hover{color:var(--text);background:var(--hover)}.ni:hover > svg{color:var(--text-2)}
+.ni.on{color:var(--text);background:var(--glass);box-shadow:var(--glass-ring)}.ni.on > svg{color:var(--sand)}
+.ni .n{margin-left:auto;display:inline-grid;place-items:center;min-width:20px;height:19px;padding:0 6px;border-radius:999px;background:var(--hover);box-shadow:inset 0 0 0 1px var(--line);font-size:11px;font-weight:500;line-height:1;color:var(--text-2);font-variant-numeric:tabular-nums}
+.ni .n.q{background:color-mix(in srgb,var(--sand) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 28%,transparent);color:var(--sand)}
+.grp{display:flex;align-items:center;justify-content:space-between;height:30px;margin-top:22px;padding:0 6px 0 10px;font-size:12px;color:var(--faint)}
+.grp button{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:8px;background:none;color:var(--faint);cursor:pointer;transition:color .15s,background .15s}.grp button:hover{color:var(--text);background:var(--hover)}
+.acc .an{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.acc .dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.acc .dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 16%,transparent)}.acc .dot.warn{background:var(--warn)}.acc .dot.bad{background:var(--bad)}.acc .dot.info{background:var(--sand)}
+.side .none{padding:4px 10px;font-size:12.5px;line-height:19px;color:var(--faint)}
+.side-foot{margin-top:auto;padding-top:14px;display:flex;align-items:center;gap:6px}
+.me{position:relative;flex:1;min-width:0}
+.me summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;height:46px;padding:0 8px;border-radius:12px;transition:background .15s var(--ease)}
 .me summary::-webkit-details-marker{display:none}
-.acct{display:flex!important;align-items:center;gap:8px;height:34px;padding:0 11px 0 5px;background:var(--glass);box-shadow:var(--glass-ring);font-size:13.5px;color:var(--text-2);transition:color .15s,background .15s}
-.acct:hover,.me[open] .acct{color:var(--text);background:var(--glass-hi)}
-.acct .an{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.acct .chev{display:inline-flex;color:var(--faint);transition:transform .2s var(--ease)}.me[open] .acct .chev{transform:rotate(180deg)}
-.menu{position:absolute;right:0;top:calc(100% + 10px);width:260px;padding:6px;border-radius:16px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--frame),var(--shadow);z-index:40;transform-origin:top right;animation:pop .16s var(--ease)}
-@keyframes pop{from{opacity:0;transform:translateY(-4px) scale(.98)}}
-.menu .mh{display:flex;align-items:center;gap:11px;padding:10px 10px 12px;border-bottom:1px solid var(--line);margin-bottom:5px}
-.menu .mh div{min-width:0}.menu .mh b{display:block;font-weight:500;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.menu .mh div span{display:block;font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.me summary:hover,.me[open] summary{background:var(--hover)}
+.me .who-me{min-width:0;flex:1;line-height:17px}.me .who-me b{display:block;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.me .who-me span{display:block;font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.me summary > svg{flex:none;color:var(--faint)}
+.icon-btn{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:11px;border:0;background:none;color:var(--muted);cursor:pointer;transition:color .15s,background .15s}
+.icon-btn:hover{color:var(--text);background:var(--hover)}
+.th-d,[data-theme=light] .th-l{display:none!important}[data-theme=light] .th-d{display:inline!important}
+.menu{position:absolute;left:0;right:-40px;bottom:calc(100% + 8px);padding:6px;border-radius:16px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--frame),var(--shadow);z-index:50;transform-origin:bottom left;animation:pop .16s var(--ease)}
+@keyframes pop{from{opacity:0;transform:translateY(4px) scale(.98)}}
 .menu a,.menu button{display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 10px;border:0;background:none;border-radius:10px;font-size:13.5px;color:var(--text-2);cursor:pointer;text-align:left}
 .menu a svg,.menu button svg{color:var(--muted)}
 .menu a:hover,.menu button:hover{background:var(--hover);color:var(--text)}.menu a:hover svg,.menu button:hover svg{color:var(--text)}
 .menu .ext{margin-left:auto;color:var(--faint)}
 .menu .sep{height:1px;background:var(--line);margin:5px 4px}
 .menu .out:hover{color:var(--bad)}.menu .out:hover svg{color:var(--bad)}
+.mtop,.scrim{display:none}
+.main{min-width:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.arow{display:flex;flex-wrap:wrap;align-items:center;gap:22px;margin:0;padding:0;list-style:none;color:var(--muted)}
+.arow li{display:inline-flex;transition:color .2s var(--ease)}.arow li:hover{color:var(--text)}
+@media (max-width:1000px){
+  .app{display:block}
+  .mtop{position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 10px 0 16px;background:color-mix(in srgb,var(--bg) 80%,transparent);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px);border-bottom:1px solid var(--line)}
+  .side{position:fixed;inset:0 auto 0 0;width:min(300px,86vw);height:100%;background:var(--bg-1);box-shadow:var(--shadow);transform:translateX(-104%);transition:transform .32s var(--ease)}
+  .side .home .x{display:grid}
+  .nav-open .side{transform:none}
+  .scrim{display:block;position:fixed;inset:0;z-index:35;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .3s var(--ease)}
+  .nav-open .scrim{opacity:1;pointer-events:auto}
+}
 .av{border-radius:50%;object-fit:cover;flex:none;display:block;box-shadow:0 0 0 1px var(--line-2)}
 
-.wrap{position:relative;max-width:1200px;margin:0 auto;padding:52px 28px 120px}
+.wrap{position:relative;max-width:1100px;margin:0 auto;padding:56px 48px 120px}
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding-bottom:32px}
 .head .crumb{display:inline-flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px}
 .head .crumb:hover{color:var(--text)}
@@ -371,12 +404,9 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .seg .on{background:var(--glass-hi);box-shadow:var(--glass-ring);color:var(--text)}
 
 .split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:56px;align-items:start}
-@media (max-width:980px){.split{grid-template-columns:1fr;gap:28px}.tabs{position:static;transform:none;margin-left:8px}}
+@media (max-width:980px){.split{grid-template-columns:1fr;gap:28px}}
 @media (max-width:760px){
-  .top-in{height:auto;flex-wrap:wrap;padding:12px 16px;row-gap:12px}
-  .tabs{position:static;transform:none;order:3;flex:1 0 100%;overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.tab{flex:1 1 auto;padding:0 10px;font-size:13px;gap:6px}
-  .acct .an,.acct .chev{display:none}.acct{padding:0 5px}
-  .wrap{padding:32px 16px 80px}.head{flex-direction:column;align-items:flex-start}.head h1{font-size:30px;line-height:36px}
+  .wrap{padding:28px 16px 80px}.head{flex-direction:column;align-items:flex-start}.head h1{font-size:30px;line-height:36px}
   .kv{grid-template-columns:1fr}.kv .k{padding-bottom:0;border-bottom:0}
   .log > div,.log.multi > div{grid-template-columns:64px 1fr;row-gap:4px}.log .fr,.log .to,.log .b{grid-column:2}
   .strip > div{min-width:50%;border-bottom:1px solid var(--line)}
@@ -392,10 +422,11 @@ const BOOT = `try{var t=localStorage.getItem("parley-theme");document.documentEl
 const SCRIPT = `
 document.querySelectorAll('[data-theme-toggle]').forEach(b=>b.addEventListener('click',()=>{const r=document.documentElement;const t=r.dataset.theme==='light'?'dark':'light';r.dataset.theme=t;try{localStorage.setItem('parley-theme',t)}catch(e){}}));
 document.addEventListener('click',e=>{const m=document.querySelector('.me');if(m&&m.open&&!m.contains(e.target))m.open=false});
-document.addEventListener('keydown',e=>{const m=document.querySelector('.me');if(e.key==='Escape'&&m&&m.open){m.open=false;m.querySelector('summary').focus()}});
-(()=>{const t=document.querySelector('.top');if(!t)return;const f=()=>t.classList.toggle('scrolled',scrollY>4);f();addEventListener('scroll',f,{passive:true})})();
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;const m=document.querySelector('.me');if(m&&m.open){m.open=false;m.querySelector('summary').focus()}document.body.classList.remove('nav-open')});
 document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);const s=b.querySelector('span');if(s){const t=s.textContent;s.textContent='Copied';setTimeout(()=>s.textContent=t,1400)}}catch(e){}}));
 document.querySelectorAll('[data-tabs]').forEach(t=>t.addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(!b)return;const box=t.closest('[data-tabbox]')||document;t.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('on',x===b));box.querySelectorAll('[data-pane]').forEach(p=>p.hidden=p.dataset.pane!==b.dataset.tab)}));
+document.querySelectorAll('form[data-locale]').forEach(f=>{try{f.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';const r=(navigator.language||'').split('-')[1];if(r&&/^[A-Za-z]{2}$/.test(r))f.country.value=r.toUpperCase()}catch(e){}});
+document.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>document.body.classList.toggle('nav-open')));
 document.querySelectorAll('form[data-confirm]').forEach(f=>f.addEventListener('submit',e=>{if(!confirm(f.dataset.confirm))e.preventDefault()}));
 document.querySelectorAll('tr[data-href]').forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a,button,form'))location.href=r.dataset.href}));
 `
@@ -423,31 +454,62 @@ export const SHOW_NETWORK = false
 export type Section = "overview" | "outbox" | "agents" | "network" | "settings"
 
 /** The signed-in frame: a top bar (mark, workspace, tabs, theme, account) over the page. */
-export function appShell(opts: { title: string; active: Section; user: Viewer; counts?: Partial<Record<Section, number>>; css?: string; script?: string; body: string }): string {
-  const { user } = opts
-  const tab = (id: Section, href: string, label: string) => {
-    const n = opts.counts?.[id]
-    return `<a class="tab${opts.active === id ? " on" : ""}" href="${href}"${opts.active === id ? ' aria-current="page"' : ""}>${label}${n ? `<span class="n${id === "outbox" ? " q" : ""}" aria-label="${n} ${id === "outbox" ? "queued" : "connected"}">${n}</span>` : ""}</a>`
-  }
-  const first = (user.name || user.email).split(/[\s@]/)[0]!
-  return shell(`${opts.title} · Parley`, `
-    <header class="top"><div class="top-in">
-      <a class="home" href="/app" aria-label="Parley overview">${LOGO}</a>
-      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
-      <div class="right">
-        <button class="icon-btn" type="button" data-theme-toggle title="Toggle theme" aria-label="Toggle theme"><span class="th-l">${icon("sun", 15)}</span><span class="th-d">${icon("moon", 15)}</span></button>
-        <details class="me"><summary class="acct" aria-label="Account">${avatar(user, 24)}<span class="an">${esc(first)}</span><span class="chev">${icon("chevronDown", 13)}</span></summary>
-          <div class="menu"><div class="mh">${avatar(user, 34)}<div><b>${esc(user.name)}</b><span>${esc(user.email)}</span></div></div>
-            <a href="/app/settings">${icon("settings", 15)}Settings</a>
-            <a href="https://itsparley.com" target="_blank" rel="noopener">${mark(15)}itsparley.com<span class="ext">${icon("external", 12)}</span></a>
-            <a href="https://github.com/Verbiflow/parley" target="_blank" rel="noopener">${icon("github", 15)}GitHub<span class="ext">${icon("external", 12)}</span></a>
-            <div class="sep"></div>
-            <form method="post" action="/auth/signout"><button class="out" type="submit">${icon("logout", 15)}Sign out</button></form></div>
-        </details>
-      </div>
-    </div></header>
-    <main class="wrap">${opts.body}</main>`, { css: opts.css, script: opts.script })
+/** What the sidebar needs to list an account: its row in `parley.connection`, as pages already have it. */
+export type ShellAccount = { id: string; channel: string; status: string; handle: string | null; haltedReason: string | null; pausedUntil: string | null }
+
+const accountLabel = (a: ShellAccount) => {
+  const d = (a.handle ?? "").split("@")[0]!.split(":")[0]!.replace(/\D/g, "")
+  return d ? `+${d}` : channelName(a.channel)
 }
+const accountTone = (a: ShellAccount): Tone =>
+  a.status === "connected" ? (a.haltedReason ? "bad" : a.pausedUntil ? "warn" : "ok") : a.status === "linking" || a.status === "closed" ? "info" : "idle"
+
+/** The signed-in frame: the sidebar (sections, your accounts, you) beside the page. */
+export function appShell(opts: {
+  title: string; active: Section | null; user: Viewer; counts?: Partial<Record<Section, number>>; accounts?: ShellAccount[]; account?: string
+  css?: string; script?: string; body: string
+}): string {
+  const { user } = opts
+  const item = (id: Section, href: string, label: string, ic: IconName) => {
+    const n = opts.counts?.[id]
+    const on = opts.active === id
+    return `<a class="ni${on ? " on" : ""}" href="${href}"${on ? ' aria-current="page"' : ""}>${icon(ic, 16)}${label}${n ? `<span class="n${id === "outbox" ? " q" : ""}" aria-label="${n} ${id === "outbox" ? "queued" : "connected"}">${n}</span>` : ""}</a>`
+  }
+  const accounts = (opts.accounts ?? []).filter((a) => a.status !== "logged_out" && a.status !== "error")
+  const accountItems = accounts.map((a) => {
+    const on = opts.account === a.id
+    const href = a.status === "connected" ? `/app/connections/${esc(a.id)}` : `/link/${esc(a.id)}`
+    return `<a class="ni acc${on ? " on" : ""}" href="${href}"${on ? ' aria-current="page"' : ""}>${channelMark(a.channel, 16)}<span class="an">${esc(prettyNumber(accountLabel(a)))}</span><i class="dot ${accountTone(a)}" title="${esc(a.status)}"></i></a>`
+  }).join("")
+  const connect = `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button type="submit" title="Connect an account" aria-label="Connect an account">${icon("plus", 14)}</button></form>`
+  return shell(`${opts.title} · Parley`, `
+    <div class="app">
+      <header class="mtop"><a href="/app">${LOGO}</a><button class="icon-btn" type="button" data-nav aria-label="Menu">${icon("menu", 18)}</button></header>
+      <div class="scrim" data-nav></div>
+      <aside class="side">
+        <div class="home"><a href="/app" aria-label="Parley overview">${LOGO}</a><button class="icon-btn x" type="button" data-nav aria-label="Close menu">${icon("x", 16)}</button></div>
+        <nav class="nav" aria-label="Sections">${item("overview", "/app", "Overview", "home")}${item("outbox", "/app/outbox", "Outbox", "send")}${item("agents", "/app/agents", "Agents", "bot")}${SHOW_NETWORK ? item("network", "/app/network", "Network", "plug") : ""}${item("settings", "/app/settings", "Settings", "settings")}</nav>
+        <div class="grp"><span>Accounts</span>${connect}</div>
+        <nav class="nav" aria-label="Accounts">${accountItems || `<p class="none">Connect an account to see it here.</p>`}</nav>
+        <div class="side-foot">
+          <details class="me"><summary aria-label="Account">${avatar(user, 28)}<span class="who-me"><b>${esc(user.name)}</b><span>${esc(user.email)}</span></span>${icon("updown", 14)}</summary>
+            <div class="menu">
+              <a href="/app/settings">${icon("settings", 15)}Settings</a>
+              <a href="https://itsparley.com" target="_blank" rel="noopener">${mark(15)}itsparley.com<span class="ext">${icon("external", 12)}</span></a>
+              <a href="https://github.com/Verbiflow/parley" target="_blank" rel="noopener">${icon("github", 15)}GitHub<span class="ext">${icon("external", 12)}</span></a>
+              <div class="sep"></div>
+              <form method="post" action="/auth/signout"><button class="out" type="submit">${icon("logout", 15)}Sign out</button></form>
+            </div>
+          </details>
+          <button class="icon-btn" type="button" data-theme-toggle title="Toggle theme" aria-label="Toggle theme"><span class="th-l">${icon("sun", 15)}</span><span class="th-d">${icon("moon", 15)}</span></button>
+        </div>
+      </aside>
+      <div class="main"><main class="wrap">${opts.body}</main></div>
+    </div>`, { css: opts.css, script: opts.script })
+}
+
+/** "+44 7700 900123", the way people write their own number. */
+const prettyNumber = (n: string) => (n.startsWith("+") ? parsePhoneNumberFromString(n)?.formatInternational() ?? n : n)
 
 export function pageHead(opts: { title: string; sub?: string; crumb?: { href: string; label: string }; actions?: string; lead?: string }): string {
   return `<header class="head"><div>${opts.crumb ? `<a class="crumb label" href="${opts.crumb.href}">${icon("back", 12)}${esc(opts.crumb.label)}</a>` : ""}
