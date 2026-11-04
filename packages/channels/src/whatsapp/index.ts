@@ -3,7 +3,7 @@ import makeWASocket, {
   type WAMessage, type Contact,
 } from "@whiskeysockets/baileys"
 import { proxyAgent } from "@parley/proxies/agent"
-import { SendFailure, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
+import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
@@ -102,8 +102,9 @@ export const whatsappChannel: Channel = {
           kind: chat.kind,
           name: chat.name ?? names.get(chat.id) ?? prev?.name ?? null,
           lastMessageAt: [chat.lastMessageAt, prev?.lastMessageAt].filter(Boolean).sort().pop(),
+          lastCall: !prev?.lastCall || (chat.lastCall && chat.lastCall.at >= prev.lastCall.at) ? chat.lastCall ?? prev?.lastCall : prev.lastCall,
         }
-        if (prev && prev.name === next.name && prev.lastMessageAt === next.lastMessageAt) continue
+        if (prev && prev.name === next.name && prev.lastMessageAt === next.lastMessageAt && prev.lastCall === next.lastCall) continue
         known.set(chat.id, next)
         out.push(next)
       }
@@ -213,6 +214,21 @@ export const whatsappChannel: Channel = {
       announceNames(lids)
     }
 
+    type CallRecord = { startTime?: number | { toNumber(): number } | null; isIncoming?: boolean | null; callResult?: number | null; callCreatorJid?: string | null; groupJid?: string | null; participants?: Array<{ userJid?: string | null }> | null }
+    const mine = (jid?: string | null) => {
+      const me = sock?.user, user = (j?: string | null) => j?.split(/[:@]/)[0]
+      return Boolean(jid) && [me?.id, (me as { lid?: string } | undefined)?.lid].some((m) => m && user(m) === user(jid))
+    }
+    /** Who a call-log entry was with: the group, or the other person (the caller if it came in, else who was called). */
+    const callPeer = (r: CallRecord): string | undefined => {
+      if (r.groupJid) return r.groupJid
+      const others = (r.participants ?? []).map((p) => p.userJid).filter((j): j is string => Boolean(j) && !mine(j))
+      const creator = r.callCreatorJid && !mine(r.callCreatorJid) ? r.callCreatorJid : undefined
+      const peer = r.isIncoming ? creator ?? others[0] : others[0] ?? creator
+      return peer && isChatJid(peer) ? peer : undefined
+    }
+    const called = (jid: string, at: string, kind: CallKind): Chat => ({ ...chatOf(jid, null, at), lastCall: { at, kind } })
+
     const connect = () => {
       sock = makeWASocket({
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
@@ -270,11 +286,30 @@ export const whatsappChannel: Channel = {
         report(listed.filter((c) => isJidGroup(c.id)).map((c) => chatOf(c.id, c.name)))
         handleMessages(messages)
       })
-      // A call (either way) is as recent as a message. Only who and when; nothing is stored about the call itself.
-      sock.ev.on("call", (calls) => report(calls
-        .map((c) => ({ jid: c.groupJid || c.chatId || c.from, at: c.date ? new Date(c.date).toISOString() : new Date().toISOString() }))
-        .filter((c) => isChatJid(c.jid))
-        .map((c) => chatOf(c.jid, null, c.at))))
+      // Calls: someone you're talking to by phone is as recent as a message. Only who, when and which way; nothing about
+      // the call itself. A call ringing this account now:
+      sock.ev.on("call", (calls) => report(calls.flatMap((c) => {
+        const jid = c.groupJid || c.chatId || c.from
+        if (!isChatJid(jid)) return []
+        const kind: CallKind = c.status === "timeout" || c.status === "reject" ? "missed" : "incoming"
+        return [called(jid, c.date ? new Date(c.date).toISOString() : new Date().toISOString(), kind)]
+      })))
+      // The call log (both directions, patched in by scripts/patch-baileys.ts): the past log arrives with the
+      // link-time history, then each call made or taken on any of the account's devices.
+      const ev = sock.ev as unknown as { on(event: string, fn: (arg: any) => void): void }
+      ev.on("call-log.set", ({ records }: { records?: CallRecord[] }) => report((records ?? []).flatMap((r) => {
+        const peer = callPeer(r)
+        const t = typeof r.startTime === "object" && r.startTime ? r.startTime.toNumber() : Number(r.startTime ?? 0)
+        if (!peer || !(t > 0)) return []
+        const kind: CallKind = !r.isIncoming ? "outgoing" : r.callResult === 0 || r.callResult === 3 ? "incoming" : "missed"
+        return [called(peer, new Date(t > 1e12 ? t : t * 1000).toISOString(), kind)]
+      })))
+      // Private-id <-> phone-number pairs from the link-time history (patched in): how WhatsApp's own apps name people
+      // it addresses by private id. Arrives before that history's messages, so those land under the phone number.
+      ev.on("lid-mapping.set", ({ mappings }: { mappings?: Array<{ lidJid?: string; pnJid?: string }> }) => {
+        for (const m of mappings ?? []) pair(m.lidJid, m.pnJid)
+        announceNames([...phoneOfLid].filter(([, pn]) => names.has(pn)).map(([lid, pn]) => (learnName([lid], names.get(pn)!, saved.has(pn)), lid)))
+      })
       // New chats: a group is listed now; a person when a real message arrives (messages.upsert). No timestamps (see above).
       sock.ev.on("chats.upsert", (chats) => report(chats.filter((c) => isChatJid(c.id) && isJidGroup(c.id)).map((c) => chatOf(c.id, c.name))))
       sock.ev.on("chats.update", (updates) => report(updates.filter((c) => isChatJid(c.id) && c.name).map((c) => chatOf(c.id!, c.name))))

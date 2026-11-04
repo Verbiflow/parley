@@ -655,6 +655,7 @@ const CHATS_CSS = `
 .chat .s{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 .chat .when{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
 .chat.off .t,.chat.off .glyph{opacity:.45}
+.chat .s.miss{color:var(--bad)}
 .ign{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;white-space:nowrap;transition:all .12s var(--ease)}
 .ign:hover{border-color:var(--line-3);color:var(--text)}
 .chat.off .ign{background:var(--text);border-color:var(--text);color:var(--bg)}
@@ -689,11 +690,16 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length, ignored: chats.filter((c) => !c.synced).length }
   const rows = chats.map((c) => {
     const label = c.name || phoneOf(c.id) || (c.kind === "group" ? "Unnamed group" : "Unknown contact")
-    const sub = c.kind === "group" ? "group" : c.name ? phoneOf(c.id) || "contact" : "contact"
+    const base = c.kind === "group" ? "group" : c.name ? phoneOf(c.id) || "contact" : "contact"
+    // A call is activity too: say so when it was the last thing that happened, else mention when you last spoke.
+    const callWord = c.lastCallKind === "missed" ? "Missed call" : c.lastCallKind === "outgoing" ? "Outgoing call" : "Incoming call"
+    const callLast = Boolean(c.lastCallAt && (!c.lastMessageAt || c.lastCallAt >= c.lastMessageAt))
+    const sub = callLast ? `${c.kind === "group" ? "Group call" : callWord}${c.kind === "direct" && phoneOf(c.id) && c.name ? ` · ${phoneOf(c.id)}` : ""}`
+      : c.lastCallAt ? `${base} · called ${ago(c.lastCallAt)}` : base
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
     return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-sub="${esc(sub)}" data-q="${esc(search)}">
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
-      <div class="grow"><p class="t">${esc(label)}</p><p class="s">${c.synced ? esc(sub) : "ignored · agents never see it"}</p></div>
+      <div class="grow"><p class="t">${esc(label)}</p><p class="s${callLast && c.lastCallKind === "missed" ? " miss" : ""}">${c.synced ? esc(sub) : "ignored · agents never see it"}</p></div>
       ${c.lastMessageAt ? `<span class="when">${ago(c.lastMessageAt)}</span>` : ""}
       <button type="button" class="ign">${c.synced ? "Ignore" : "Ignored"}</button>
     </div>`

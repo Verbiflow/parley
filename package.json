@@ -3,9 +3,15 @@
   "private": true,
   "type": "module",
   "description": "Parley — an open messaging gateway for AI agents. Sign up, link a channel (WhatsApp first), use it over MCP.",
-  "engines": { "node": ">=24" },
-  "workspaces": ["packages/*", "apps/*"],
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
+    "postinstall": "node scripts/patch-baileys.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm test --workspaces --if-present",
     "check": "npm run typecheck && npm test",
