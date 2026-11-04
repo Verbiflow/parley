@@ -51,6 +51,29 @@ const edits: Array<{ file: string; find: string; insert: "before" | "after" | "r
   },
 ]
 
+// History chunks sent inline: Baileys tells WhatsApp it accepts them (`inlineInitialPayloadInE2EeMsg: true`) but only
+// ever downloads by media key, which inline chunks don't have ("Cannot derive from empty media key"), so they were
+// dropped, and with them most one-to-one chats. Read the inline payload when there is one (newer Baileys does this).
+edits.push({
+  file: "lib/Utils/history.js",
+  find: "    const stream = await downloadContentFromMessage(msg, 'md-msg-hist', { options });\n    const bufferArray = [];\n    for await (const chunk of stream) {\n        bufferArray.push(chunk);\n    }\n    let buffer = Buffer.concat(bufferArray);\n",
+  insert: "replace",
+  text:
+    `    // ${MARK}: a chunk sent inline carries no media key; read it instead of downloading\n` +
+    `    let buffer;\n` +
+    `    if (msg.initialHistBootstrapInlinePayload?.length) {\n` +
+    `        buffer = Buffer.from(msg.initialHistBootstrapInlinePayload);\n` +
+    `    }\n` +
+    `    else {\n` +
+    `        const stream = await downloadContentFromMessage(msg, 'md-msg-hist', { options });\n` +
+    `        const bufferArray = [];\n` +
+    `        for await (const chunk of stream) {\n` +
+    `            bufferArray.push(chunk);\n` +
+    `        }\n` +
+    `        buffer = Buffer.concat(bufferArray);\n` +
+    `    }\n`,
+})
+
 let changed = 0
 for (const e of edits) {
   const path = join(root, e.file)
