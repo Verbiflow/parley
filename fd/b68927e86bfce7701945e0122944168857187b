@@ -1,0 +1,30 @@
+packages/channels/package.json
+  s_95c322ab435c72::t_3e3662c63c45ce 18-19
+packages/channels/src/whatsapp/index.ts
+  s_95c322ab435c72::t_200a5262894a92 414
+  s_95c322ab435c72::t_adbf11cb5a9f40 200,203,214-216,266-269,291-299,327,339-340,342,373,376-378,384,411-412
+  s_95c322ab435c72::t_9f6091ad1f1e22 329-334
+packages/channels/test/inline-history.test.ts
+  s_95c322ab435c72::t_200a5262894a92 15
+  s_95c322ab435c72::t_9c0ade750b91ab 8
+scripts/patch-baileys.ts
+  s_95c322ab435c72::t_9c0ade750b91ab 2-4,6-7,10,32,36,39-40
+package-lock.json
+  s_95c322ab435c72::t_86b7671c526bcb 8,1752-1754,1761-1764,1766-1767,1775,2390-2395,2980-2988,3262-3289,4272-4277,4532
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "fdb68927e86bfce7701945e0122944168857187b",
+  "prompts": {},
+  "sessions": {
+    "s_95c322ab435c72": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "578aa834-a925-48d4-8406-49c406a3f7ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
