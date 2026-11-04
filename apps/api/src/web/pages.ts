@@ -753,9 +753,13 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
             const match=(!kinds||tag[r.dataset.kind])&&(!tag.off||off)&&(!t||r.dataset.q.includes(t));
             const old=!t&&!all&&!tag.off&&r.dataset.recent!=='1';const ok=match&&!old;if(match&&old)hid++;
             r.classList.toggle('none',!ok);if(ok)n++}
-          // Nothing recent at all (an old link): show everything rather than an empty list.
-          if(!n&&hid&&!all){all=true;return apply()}
-          document.getElementById('nomatch').classList.toggle('none',n>0||hid>0);
+          // Nothing recent at all: on an old link show everything rather than an empty list; while a fresh link is still
+          // syncing, say the recent chats are coming instead of listing every group A to Z.
+          const waiting=!!document.querySelector('#status .sync');
+          if(!n&&hid&&!all&&!t&&!waiting){all=true;return apply()}
+          const nm=document.getElementById('nomatch');
+          nm.textContent=waiting&&!t?'Your recent chats are on their way. They appear here as WhatsApp sends them.':'No chats match.';
+          nm.classList.toggle('none',n>0||(hid>0&&!waiting));
           older.classList.toggle('none',!hid);older.textContent='Show '+hid+' older chat'+(hid===1?'':'s');tally()}
         function tally(){const off=rows.filter(r=>r.classList.contains('off')).length;document.getElementById('nign').textContent=off;
           tallyEl.textContent=(rows.length-off)+' of '+rows.length+' chats sync to your agents'+(off?' · '+off+' ignored':'')}
