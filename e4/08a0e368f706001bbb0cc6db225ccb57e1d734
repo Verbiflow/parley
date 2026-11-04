@@ -1,0 +1,24 @@
+apps/api/src/web/pages.ts
+  s_1b4019b5bee296::t_29fb0c86f0ff28 672-674
+  s_1b4019b5bee296::t_5b01c808a7c011 720
+packages/channels/src/whatsapp/index.ts
+  s_1b4019b5bee296::t_51b11259cceca4 278-279
+  s_1b4019b5bee296::t_e7f70ec58cbb7d 261-270
+  s_1b4019b5bee296::t_e84816ba7b6ef5 20-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e408a0e368f706001bbb0cc6db225ccb57e1d734",
+  "prompts": {},
+  "sessions": {
+    "s_1b4019b5bee296": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0c0add4-c9e1-4fb8-9486-0b9fb8fdab5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
