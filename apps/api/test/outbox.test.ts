@@ -141,3 +141,34 @@ test("the daily limit counts every kind together; lowering it moves the overflow
   await sessions.setLocale(accountId, connectionId, { dailyLimit: 0 }, T0)
   assert.equal((await availability(sql, accountId, connectionId, T0)).today.dailyLimit, 3)
 })
+
+test("typing is per message: off unless asked, and handed to the channel with the send", async () => {
+  const { accountId, connectionId } = await linked("typing@parley.test")
+  const plain = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "no typing" }, T0)
+  assert.equal(plain.message.typing, false)
+  await sessions.dispatchDue(T0)
+  const typed = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "with typing", typing: true }, at(1))
+  assert.equal(typed.message.typing, true)
+  await sessions.dispatchDue(new Date(Date.parse(typed.message.scheduledFor!) + 1000))
+  const sent = fake.simulator.sent(connectionId)
+  assert.deepEqual(sent.map((s) => [s.content.text, s.content.typing]), [["no typing", false], ["with typing", true]])
+})
+
+test("one account mid-send (a long typing…) doesn't hold up another's", async () => {
+  const slow = await linked("slow@parley.test")
+  const quick = await linked("quick@parley.test")
+  await sessions.enqueue(slow.accountId, slow.connectionId, { to: "+15551101", text: "a long one" }, T0)
+  const release = fake.simulator.holdNextSend(slow.connectionId)
+  const first = sessions.dispatchDue(T0)
+  await waitUntil(async () => (await listOutbound(sql, slow.accountId, { connectionId: slow.connectionId, limit: 1 }))[0]!.status, (s) => s === "sending")
+
+  // The next pass claims for everyone else while the slow one is still going, and doesn't wait for it.
+  await sessions.enqueue(quick.accountId, quick.connectionId, { to: "+15551102", text: "quick" }, T0)
+  await sessions.dispatchDue(T0)
+  assert.deepEqual(fake.simulator.sent(quick.connectionId).map((s) => s.content.text), ["quick"])
+  assert.equal(fake.simulator.sent(slow.connectionId).length, 0)
+
+  release()
+  await first
+  assert.deepEqual(fake.simulator.sent(slow.connectionId).map((s) => s.content.text), ["a long one"])
+})

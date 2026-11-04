@@ -62,9 +62,11 @@ export type Chat = { id: string; name: string | null; kind: "direct" | "group"; 
 /**
  * What to send. `text` alone is a message. With `media`, it's a photo/video/voice note/document and `text` is its
  * caption (may be empty). With `react`, it's a reaction: `text` is the emoji, empty to take a reaction back. With
- * `unsend`, it deletes that message (one the account sent) for everyone in the chat; `text` is ignored.
+ * `unsend`, it deletes that message (one the account sent) for everyone in the chat; `text` is ignored. With `typing`,
+ * the chat first shows the account typing (or recording, for a voice note) for a moment, as a person would; reactions
+ * and deletions ignore it. A channel that can't show it just sends.
  */
-export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined; unsend?: ReactTarget | undefined }
+export type OutboundContent = { text: string; media?: OutboundMedia | undefined; react?: ReactTarget | undefined; unsend?: ReactTarget | undefined; typing?: boolean | undefined }
 /** A file to send, already fetched: the bytes and what they are. */
 export type OutboundMedia = { kind: Exclude<MediaKind, "sticker">; data: Uint8Array; mimetype: string; fileName?: string | undefined; seconds?: number | undefined }
 /** The message a reaction (or a deletion) is for, as stored: its id, whether the account sent it, and (in a group) who did. */
@@ -182,6 +184,8 @@ export interface ChannelSimulator {
   backfills(connectionId: string): Array<{ anchor: HistoryAnchor; count: number }>
   /** Make the next send on a connection fail the way the platform would. */
   failNextSend(connectionId: string, outcome: SendOutcome): void
+  /** Hold the next send on a connection open (as a long "typing…" would) until the returned function is called. */
+  holdNextSend(connectionId: string): () => void
   /** The proxy the connection was last opened through. */
   proxyOf(connectionId: string): string | undefined
 }

@@ -36,6 +36,10 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   assert.equal(avail.result.daily_limit, 100)
 
   const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: "2099-01-01T12:00:00Z" })
+  assert.equal(second.result.typing, undefined)
+  const typed = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900789", text: "typed", typing: true, not_before: "2099-01-01T12:00:00Z" })
+  assert.equal(typed.result.typing, true)
+  await callTool(base, token, "cancel_message", { message_id: typed.result.id })
   const queued = (await callTool(base, token, "list_outbox", { status: "scheduled" })).result.messages
   assert.deepEqual(queued.map((m: { id: string }) => m.id).sort(), [sent.result.id, second.result.id].sort())
   assert.match(second.result.next, /message_status/)
