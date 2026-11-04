@@ -26,7 +26,6 @@ test("the overview with two WhatsApp numbers lists both, offers another, and say
   assert.match(html, /class="acard add"/)
   assert.match(html, /title="iMessage, coming soon"/)
   assert.match(html, /action="\/app\/connect"/)
-  assert.match(html, /class="ni acc" href="\/app\/connections\/work"/)
   assert.match(html, /class="fr">\+44 7700 900111<\/span><span class="to">→/)
   const solo = dashboardPage({ user, connections: [conn("work", "6591363557:7@s.whatsapp.net")], agents: [agent], mcpUrl: "https://x/mcp", recent: [{ ...sent, connectionId: "work" }] })
   assert.doesNotMatch(solo, /class="fr"/)

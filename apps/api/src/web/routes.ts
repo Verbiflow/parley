@@ -163,8 +163,7 @@ export function webRoutes(ctx: AppContext): Hono {
     const v = await viewer(c)
     if (!v) return rememberNext(c)
     const id = c.req.param("id")
-    const connections = await ctx.sessions.list(v.profile.id)
-    const connection = connections.find((x) => x.id === id)
+    const connection = (await ctx.sessions.list(v.profile.id)).find((x) => x.id === id)
     if (!connection) return c.text("Unknown connection.", 404)
     const [chats, agents, sum] = await Promise.all([
       ctx.sessions.chats(v.profile.id, id),
@@ -173,7 +172,7 @@ export function webRoutes(ctx: AppContext): Hono {
     ])
     return c.html(chatsPage({
       user: v.profile, connection, chats, agentCount: agents.length, saved: c.req.query("saved") === "1",
-      today: sum ? { sentToday: sum.sentToday, dailyLimit: sum.dailyLimit } : null, queued: sum?.queued ?? 0, connections,
+      today: sum ? { sentToday: sum.sentToday, dailyLimit: sum.dailyLimit } : null, queued: sum?.queued ?? 0,
     }))
   })
 
@@ -377,8 +376,8 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/agents", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [agents, queued, connections] = await Promise.all([agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id), ctx.sessions.list(v.profile.id)])
-    return c.html(agentsPage({ user: v.profile, agents, mcpUrl: mcpUrl(c), queuedTotal: queued, connections }))
+    const [agents, queued] = await Promise.all([agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id)])
+    return c.html(agentsPage({ user: v.profile, agents, mcpUrl: mcpUrl(c), queuedTotal: queued }))
   })
 
   app.post("/app/agents/:id/disconnect", async (c) => {
@@ -391,8 +390,8 @@ export function webRoutes(ctx: AppContext): Hono {
   app.get("/app/settings", async (c) => {
     const v = await viewer(c)
     if (!v) return c.redirect("/")
-    const [sessions, agents, queued, connections] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id), ctx.sessions.list(v.profile.id)])
-    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: queued, connections }))
+    const [sessions, agents, queued] = await Promise.all([store.browserSessions(ctx.sql, v.profile.id), agentSessions(ctx.sql, v.profile.id), queuedTotal(v.profile.id)])
+    return c.html(settingsPage({ user: v.profile, sessions, currentSessionId: v.sessionId, agentCount: agents.length, queuedTotal: queued }))
   })
 
   app.post("/app/settings/sessions/:id/end", async (c) => {

@@ -43,7 +43,7 @@ test("dashboard pages show the signed-in account and escape it", async () => {
   for (const path of ["/app", "/app/agents", "/app/settings"]) {
     const html = await (await fetch(`${base}${path}`, { headers: { cookie } })).text()
     assert.match(html, /dana@parley\.test/, path)
-    assert.match(html, /class="side"/, path)
+    assert.match(html, /class="top"/, path)
   }
   const settings = await (await fetch(`${base}/app/settings`, { headers: { cookie } })).text()
   assert.match(settings, /This browser/)
