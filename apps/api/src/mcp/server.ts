@@ -119,7 +119,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     "read_inbox",
     {
       title: "Read inbox",
-      description: "Read recent messages across all your connected channels, newest first — only from the chats the account holder chose to sync. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`.",
+      description: "Read recent messages across all your connected channels, newest first — from every chat except ones the account holder ignored. Filter by channel, connection, or one chat (chat_id from list_chats). Page back with `before`.",
       inputSchema: {
         ...filters,
         chat_id: z.string().optional().describe("Only this chat (a chat_id from list_chats or from an earlier message)."),
@@ -141,7 +141,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
           const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id })
           out.note = chats.length
             ? "No messages yet in the synced chats (matching your filters)."
-            : `No chats are synced${channel ? ` on ${channel}` : ""}. Ask the account holder to connect a channel and choose chats at ${pickUrl}`
+            : `No chats are synced${channel ? ` on ${channel}` : ""}. Ask the account holder to connect a channel (their chats are at ${pickUrl})`
         }
         return json(out)
       } catch (e) {
@@ -154,7 +154,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
     "list_chats",
     {
       title: "List chats",
-      description: "List the chats (people and groups) the account holder chose to sync, across all connected channels, most recent first. `awaiting` says who owes the next message: \"you\" when the last word was theirs. Set awaiting_reply to get just the conversations waiting on you.",
+      description: "List the chats (people and groups) agents can see (everything except what the account holder ignored), across all connected channels, most recent first. `awaiting` says who owes the next message: \"you\" when the last word was theirs. Set awaiting_reply to get just the conversations waiting on you.",
       inputSchema: { ...filters, awaiting_reply: z.boolean().optional().describe("Only chats whose last message came from the other side.") },
     },
     async ({ channel, connection_id, awaiting_reply }, extra) => {
@@ -163,7 +163,7 @@ export function buildMcpServer(ctx: AppContext): McpServer {
         const chats = await ctx.sessions.inboxChats(userId, { channel, connectionId: connection_id, awaitingReply: awaiting_reply })
         return json({
           chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt, awaiting: c.awaiting })),
-          ...(chats.length ? {} : { note: awaiting_reply ? "Nothing is waiting on you." : `No chats are synced. Ask the account holder to choose chats at ${pickUrl}` }),
+          ...(chats.length ? {} : { note: awaiting_reply ? "Nothing is waiting on you." : `No chats are visible. The account holder may have ignored them all; their chats are at ${pickUrl}` }),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list chats")

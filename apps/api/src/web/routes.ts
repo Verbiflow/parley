@@ -7,6 +7,7 @@ import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
 import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, connectionPage, outboxPage, networkPage, type ConnectionSummary } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
+import { setIgnored } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, listOutbound, resume } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
@@ -123,7 +124,7 @@ export function webRoutes(ctx: AppContext): Hono {
     // Every live connection's figures at once (they came from the viewer's own list, so ownership is settled).
     const live = connections.filter((conn) => conn.status === "connected")
     const [synced, sums] = await Promise.all([
-      Promise.all(live.map((conn) => (conn.chatsChosen ? syncedCount(conn.id) : undefined))),
+      Promise.all(live.map((conn) => syncedCount(conn.id))),
       Promise.all(live.map((conn) => summary(v.profile.id, conn.id))),
     ])
     const syncedCounts = new Map<string, number>()
@@ -324,6 +325,19 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!connection) return c.text("Unknown connection.", 404)
     const [chats, agents] = await Promise.all([ctx.sessions.chats(v.profile.id, id), agentSessions(ctx.sql, v.profile.id)])
     return c.html(chatsPage({ user: v.profile, connection, chats, agentCount: agents.length, saved: c.req.query("saved") === "1" }))
+  })
+
+  // Ignore or un-ignore chats in place (the picker calls this per tap). Only the named chats change, so chats that
+  // arrived after the page loaded keep syncing.
+  app.post("/app/connections/:id/chats/ignore", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.json({ error: "signed out" }, 401)
+    const id = c.req.param("id")
+    if (!(await ctx.sessions.list(userId)).some((x) => x.id === id)) return c.json({ error: "unknown connection" }, 404)
+    const body = await c.req.json().catch(() => ({})) as { chats?: unknown; ignored?: unknown }
+    const chats = Array.isArray(body.chats) ? body.chats.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 200).slice(0, 1000) : []
+    await setIgnored(ctx.sql, id, chats, body.ignored !== false)
+    return c.json({ ok: true })
   })
 
   app.post("/app/connections/:id/chats", async (c) => {

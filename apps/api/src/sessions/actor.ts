@@ -270,7 +270,7 @@ export class Sessions {
   async messages(accountId: string, connectionId: string, chatId: string, opts: { limit: number; before?: string | undefined }): Promise<{ chat: ChatRow; messages: StoredMessage[] }> {
     await this.#owned(accountId, connectionId)
     const chat = await getChat(this.ctx.sql, connectionId, chatId)
-    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — the account holder chooses which chats are synced")
+    if (!chat?.synced) throw new ConnectError("not_synced", "no such synced chat — it doesn't exist, or the account holder ignored it")
     return { chat, messages: await readMessages(this.ctx.sql, connectionId, chatId, opts) }
   }
 

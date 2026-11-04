@@ -85,6 +85,22 @@ export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: st
   return on.map((r) => r.id)
 }
 
+/**
+ * Ignore (or stop ignoring) a few chats; every other chat is left as it is. Chats sync by default, so this is the
+ * person's control: an ignored chat's stored messages are deleted, and new ones are never stored or shown to agents.
+ */
+export async function setIgnored(sql: Sql, connectionId: string, chatIds: string[], ignored: boolean): Promise<void> {
+  if (!chatIds.length) return
+  const ids = JSON.stringify(chatIds)
+  await sql(
+    `update parley.chat set synced = $3, updated_at = now()
+      where connection_id = $1 and synced is distinct from $3 and id in (select jsonb_array_elements_text($2::jsonb))`,
+    [connectionId, ids, !ignored]
+  )
+  if (ignored) await sql(`delete from parley.message where connection_id = $1 and chat_id in (select jsonb_array_elements_text($2::jsonb))`, [connectionId, ids])
+  await sql(`update parley.connection set chats_chosen_at = coalesce(chats_chosen_at, now()), updated_at = now() where id = $1`, [connectionId])
+}
+
 export async function chatsChosen(sql: Sql, connectionId: string): Promise<boolean> {
   const [r] = await sql<{ chosen: boolean }>(`select chats_chosen_at is not null as chosen from parley.connection where id = $1`, [connectionId])
   return Boolean(r?.chosen)

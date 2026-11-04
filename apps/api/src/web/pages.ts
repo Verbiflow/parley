@@ -136,7 +136,7 @@ ${j("note", s("Queued for 09:24 London: outside the account's active hours."))}
         </div>
         <ul class="facts">
           <li><span class="label">pacing</span>Active hours, gaps, breaks and warm-up limits on every send.</li>
-          <li><span class="label">privacy</span>Agents see only the chats you sync. Credentials sealed at rest.</li>
+          <li><span class="label">privacy</span>Ignore any chat and agents never see it. Credentials sealed at rest.</li>
           <li><span class="label">network</span>Each account sends from one stable IP in its own country.</li>
         </ul>
       </section>
@@ -283,7 +283,7 @@ export function dashboardPage(opts: {
       <td class="m">${s ? `${bar(s.sentToday, s.allowanceToday)}&nbsp;&nbsp;${s.sentToday}<span class="faint">/${s.allowanceToday}</span>` : `<span class="faint">—</span>`}</td>
       <td class="m">${s ? s.queued : "—"}</td>
       <td class="m">${s?.nextAt ? esc(until(s.nextAt, c.timezone)) : `<span class="faint">—</span>`}</td>
-      <td class="m">${c.status === "connected" ? `<a href="/app/connections/${esc(c.id)}/chats">${c.chatsChosen ? `${opts.syncedCounts?.get(c.id) ?? 0} chats` : "choose chats"}</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
+      <td class="m">${c.status === "connected" ? `<a href="/app/connections/${esc(c.id)}/chats">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
       <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<a href="${detail}" title="Connection settings">${icon("arrow", 14)}</a>`}</td>
     </tr>`
   }).join("")
@@ -300,7 +300,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Overview", sub: "Two steps and your agents can message from your own account: link a channel, then add Parley to your AI." })}
     ${alerts}
-    ${section("Link a channel", hasChannel ? `${table}${connectorCards(linked, true)}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Nothing syncs until you choose chats.", stepNo(1, hasChannel))}
+    ${section("Link a channel", hasChannel ? `${table}${connectorCards(linked, true)}` : connectorCards(linked), hasChannel ? doneTag : "", hasChannel ? "" : "Links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${mcpGuide(opts.mcpUrl, opts.agents, { open: true, step: 2 })}`)
   }
 
@@ -629,7 +629,7 @@ export function linkPage(id: string): string {
     <script>
       const id=${JSON.stringify(id)};const card=document.getElementById('card'),title=document.getElementById('title'),sub=document.getElementById('sub');
       function render(d){
-        if(d.status==='connected'){title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Nothing syncs until you choose chats.';card.innerHTML='<span class="st ok"><i></i>live</span><a class="btn lg block" href="'+d.chats_url+'">Choose chats</a>';return true}
+        if(d.status==='connected'){title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Your chats sync now; ignore any you want kept from agents.';card.innerHTML='<span class="st ok"><i></i>live</span><a class="btn lg block" href="'+d.chats_url+'">See your chats</a>';return true}
         if(d.qr_svg){title.textContent='Scan to link';sub.textContent='The code refreshes on its own.';card.innerHTML='<div class="qr">'+d.qr_svg+'</div><ol class="ol"><li>Open WhatsApp on your phone</li><li>Settings → Linked devices</li><li>Link a device, then scan</li></ol>';return false}
         card.innerHTML='<div class="spin"></div>';return false
       }
@@ -650,17 +650,15 @@ const CHATS_CSS = `
 .search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:11px;top:10px;color:var(--faint)}
 .search .input{padding-left:34px}
 .chats{border-top:1px solid var(--line);margin-top:12px}
-.chat{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
-.chat:hover{background:var(--hover)}
-.chat input{position:absolute;opacity:0;pointer-events:none}
-.box{width:16px;height:16px;border-radius:4px;border:1px solid var(--line-3);display:grid;place-items:center;flex:none;color:transparent;transition:all .12s var(--ease)}
-.chat:has(input:checked) .box{background:var(--text);border-color:var(--text);color:var(--bg)}
-.chat:has(input:focus-visible) .box{box-shadow:var(--ring)}
+.chat{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
 .chat .grow{flex:1;min-width:0}.chat .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat .s{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 .chat .when{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
-.save{position:sticky;bottom:20px;display:flex;align-items:center;gap:8px;margin-top:20px;padding:10px 10px 10px 18px;border:1px solid var(--line-2);border-radius:999px;background:var(--bg-1);box-shadow:var(--shadow)}
-.save .grow{flex:1;font-family:var(--mono);font-size:12px;color:var(--text-2)}
+.chat.off .t,.chat.off .glyph{opacity:.45}
+.ign{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;white-space:nowrap;transition:all .12s var(--ease)}
+.ign:hover{border-color:var(--line-3);color:var(--text)}
+.chat.off .ign{background:var(--text);border-color:var(--text);color:var(--bg)}
+.ign:disabled{opacity:.5;cursor:default}
 .none{display:none!important}
 .tags{display:flex;gap:6px;flex-wrap:wrap}
 .tag{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:999px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);cursor:pointer;transition:all .12s var(--ease)}
@@ -672,12 +670,13 @@ const CHATS_CSS = `
 .stale{margin:10px 0 0;font-size:12.5px;color:var(--faint)}
 .stale button{font:inherit;color:var(--text-2);background:none;border:0;padding:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .stale button:hover{color:var(--text)}
+.tally{font-family:var(--mono);font-size:12px;color:var(--text-2);margin:14px 0 0}
 .spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text);animation:sp .8s linear infinite;margin-bottom:14px}@keyframes sp{to{transform:rotate(360deg)}}
 `
 
 /**
- * Choose which chats sync. Every chat the channel reported is listed (people and groups, most recent first); the
- * person ticks the ones agents may read. Searching/filtering is client-side; the form posts every checked id.
+ * The chats on a connection. Everything syncs by default; the person taps Ignore on the few agents shouldn't see
+ * (people and groups, most recent first, like their phone). Each tap saves at once; filtering is client-side.
  */
 export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean }): string {
   const { connection: conn, chats } = opts
@@ -687,65 +686,64 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   // A person WhatsApp gave only a private id for, with no name yet, is "Unknown contact": not worth a top spot.
   const isRecent = (c: ChatRow) => Boolean(c.lastMessageAt) && (c.kind === "group" || Boolean(c.name || phoneOf(c.id)))
   const recentCount = chats.filter(isRecent).length
-  const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length }
+  const counts = { direct: chats.filter((c) => c.kind === "direct").length, group: chats.filter((c) => c.kind === "group").length, ignored: chats.filter((c) => !c.synced).length }
   const rows = chats.map((c) => {
     const label = c.name || phoneOf(c.id) || (c.kind === "group" ? "Unnamed group" : "Unknown contact")
     const sub = c.kind === "group" ? "group" : c.name ? phoneOf(c.id) || "contact" : "contact"
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
-    return `<label class="chat" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-q="${esc(search)}">
-      <input type="checkbox" name="chat" value="${esc(c.id)}"${c.synced ? " checked" : ""}>
-      <span class="box">${icon("check", 11, 3)}</span>
+    return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-sub="${esc(sub)}" data-q="${esc(search)}">
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
-      <div class="grow"><p class="t">${esc(label)}</p><p class="s">${esc(sub)}</p></div>
+      <div class="grow"><p class="t">${esc(label)}</p><p class="s">${c.synced ? esc(sub) : "ignored · agents never see it"}</p></div>
       ${c.lastMessageAt ? `<span class="when">${ago(c.lastMessageAt)}</span>` : ""}
-    </label>`
+      <button type="button" class="ign">${c.synced ? "Ignore" : "Ignored"}</button>
+    </div>`
   }).join("")
   const loading = `<div class="empty"><div class="spin"></div><b>Loading your chats</b>Fetching them from ${esc(name)}… this can take a minute after linking.</div>`
   return appShell({
-    title: "Choose chats", active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
+    title: "Chats", active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
     body: `${pageHead({
-      title: "Choose what to sync", crumb: { href: `/app/connections/${esc(conn.id)}`, label: waNumber(conn.handle) || name },
-      sub: `Your agents can only read the chats you pick on ${esc(name)}${conn.handle ? ` (${esc(waNumber(conn.handle))})` : ""}. Unticking a chat deletes what Parley stored from it.`,
+      title: "Your chats", crumb: { href: `/app/connections/${esc(conn.id)}`, label: waNumber(conn.handle) || name },
+      sub: `Everything on ${esc(name)}${conn.handle ? ` (${esc(waNumber(conn.handle))})` : ""} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.`,
     })}
-      ${opts.saved ? `<div class="note ok"><div class="grow"><b>Saved</b><p>Your agents now see only the chats ticked below.</p></div></div>` : ""}
-      ${chats.length ? `<form method="post" id="f">
-        <div class="tools">
+      ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
           <div class="tags" id="tags">
             <button type="button" class="tag" data-t="direct" aria-pressed="true">People<span class="n">${counts.direct}</span></button>
             <button type="button" class="tag" data-t="group" aria-pressed="true">Groups<span class="n">${counts.group}</span></button>
-            <button type="button" class="tag" data-t="on" aria-pressed="false">Selected</button>
+            <button type="button" class="tag" data-t="off" aria-pressed="false">Ignored<span class="n" id="nign">${counts.ignored}</span></button>
           </div>
         </div>
         ${counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}
+        <p class="tally" id="tally"></p>
         <div class="chats" id="list">${rows}<div class="empty none" id="nomatch">No chats match.</div>${recentCount && recentCount < chats.length ? `<button type="button" class="older" id="older">Show ${chats.length - recentCount} older chats</button>` : ""}</div>
-        <div class="save"><span class="grow" id="count"></span>
-          <button class="btn quiet sm" type="button" id="all">select shown</button>
-          <button class="btn quiet sm" type="button" id="clear">clear shown</button>
-          <button class="btn" type="submit">Save</button></div>
-      </form>
       <form id="relink" method="post" action="/app/connections/${esc(conn.id)}/relink"></form>
       <script>
-        const list=document.getElementById('list'),q=document.getElementById('q'),count=document.getElementById('count'),older=document.getElementById('older');
+        const list=document.getElementById('list'),q=document.getElementById('q'),older=document.getElementById('older'),tallyEl=document.getElementById('tally');
         const rows=[...list.querySelectorAll('.chat')];
-        // Tags switch on and off independently. People/Groups say which kinds show (both off = both); Selected narrows to ticked chats.
-        const tag={direct:true,group:true,on:false};let all=!older;
-        const shown=()=>rows.filter(r=>!r.classList.contains('none'));
+        // Tags switch on and off independently. People/Groups say which kinds show (both off = both); Ignored narrows to ignored chats.
+        const tag={direct:true,group:true,off:false};let all=!older;
         function apply(){const t=q.value.trim().toLowerCase();const kinds=tag.direct||tag.group;let n=0,hid=0;
-          for(const r of rows){const on=r.querySelector('input').checked;
-            const match=(!kinds||tag[r.dataset.kind])&&(!tag.on||on)&&(!t||r.dataset.q.includes(t));
-            const old=!t&&!all&&!on&&r.dataset.recent!=='1';const ok=match&&!old;if(match&&old)hid++;
+          for(const r of rows){const off=r.classList.contains('off');
+            const match=(!kinds||tag[r.dataset.kind])&&(!tag.off||off)&&(!t||r.dataset.q.includes(t));
+            const old=!t&&!all&&!tag.off&&r.dataset.recent!=='1';const ok=match&&!old;if(match&&old)hid++;
             r.classList.toggle('none',!ok);if(ok)n++}
           document.getElementById('nomatch').classList.toggle('none',n>0||hid>0);
           if(older){older.classList.toggle('none',!hid);older.textContent='Show '+hid+' older chat'+(hid===1?'':'s')}tally()}
-        function tally(){const n=rows.filter(r=>r.querySelector('input').checked).length;count.textContent=n?n+' of '+rows.length+' selected':'nothing selected — agents see no chats'}
-        q.addEventListener('input',apply);list.addEventListener('change',tally);
+        function tally(){const off=rows.filter(r=>r.classList.contains('off')).length;document.getElementById('nign').textContent=off;
+          tallyEl.textContent=(rows.length-off)+' of '+rows.length+' chats sync to your agents'+(off?' · '+off+' ignored':'')}
+        q.addEventListener('input',apply);
         if(older)older.onclick=()=>{all=true;apply()};
         document.getElementById('tags').addEventListener('click',e=>{const b=e.target.closest('.tag');if(!b)return;tag[b.dataset.t]=!tag[b.dataset.t];b.setAttribute('aria-pressed',String(tag[b.dataset.t]));apply()});
+        // Ignore / un-ignore saves at once; only this chat changes on the server.
+        list.addEventListener('click',async e=>{const b=e.target.closest('.ign');if(!b)return;const r=b.closest('.chat');const ignored=!r.classList.contains('off');
+          b.disabled=true;
+          try{const res=await fetch(location.pathname+'/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
+            if(!res.ok)throw new Error(res.status);
+            r.classList.toggle('off',ignored);b.textContent=ignored?'Ignored':'Ignore';
+            r.querySelector('.s').textContent=ignored?'ignored · agents never see it':r.dataset.sub;tally()}
+          catch(x){alert("Couldn't save that. Check your connection and try again.")}
+          b.disabled=false});
         apply();
-        document.getElementById('all').onclick=()=>{shown().forEach(r=>r.querySelector('input').checked=true);tally()};
-        document.getElementById('clear').onclick=()=>{shown().forEach(r=>r.querySelector('input').checked=false);tally()};
-        tally();
       </script>` : `${loading}<script>setTimeout(()=>location.reload(),3000)</script>`}`,
   })
 }
@@ -769,7 +767,7 @@ export function consentPage(opts: { clientName: string | null; redirectUri: stri
           <h1>Allow ${esc(name)} to use Parley?</h1><p>Signed in as <span class="mono" style="color:var(--text)">${esc(opts.email)}</span></p></div>
         <div class="fc-b">
           <ul class="can">
-            ${can("read", "Messages in the chats you chose to sync")}
+            ${can("read", "Messages in your chats, except ones you ignore")}
             ${can("send", "Queue messages from your connected accounts, at a human pace")}
             ${can("link", "Start linking a new account (you still scan the QR)")}
           </ul>
