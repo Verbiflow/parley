@@ -1,0 +1,28 @@
+apps/api/src/sessions/chats.ts
+  s_642876815369e5::t_8ff8e4602a6d83 383-384,386-388,390-392,395-399,401
+apps/api/src/mcp/server.ts
+  s_642876815369e5::t_998e9ad7d66e6d 386-407
+  s_642876815369e5::t_a507d13fbccb7f 75-89
+  s_642876815369e5::t_33e1665af3332c 6
+  s_642876815369e5::t_6ad38d025f4717 137-138,140-141,146-152,160-164
+  s_642876815369e5::t_9728b94aa98d6e 384-385
+apps/api/test/read-markers.test.ts
+  s_642876815369e5::t_28e24af14ccd97 142-143,147-149
+  s_642876815369e5::t_51097d98aaeae1 116,126-127,130-141,144-146,150-158,161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "61a4cdc94dba6a03a3a25de8546df7983be84e2b",
+  "prompts": {},
+  "sessions": {
+    "s_642876815369e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3c64fef3-13ac-402c-af15-cfa6b6141417",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
