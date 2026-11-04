@@ -499,14 +499,12 @@ const CHATS_CSS = `
 .pf{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
 .pf .field{flex:1;min-width:180px}.pf .lim{flex:0 0 120px;min-width:0}.pf .cc{flex:0 0 90px;min-width:0}
 .prefs .hint{margin:10px 0 0;font-size:12px;color:var(--faint)}
-.behave{margin-top:16px;padding-top:4px;border-top:1px solid var(--line)}
-.sw{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer}
-.sw input{appearance:none;flex:0 0 34px;height:20px;margin:1px 0 0;border-radius:10px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
-.sw input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
-.sw input:checked{background:var(--ok)}.sw input:checked::after{transform:translateX(14px)}
+.behave{display:flex;gap:28px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px}
+.sw input{appearance:none;flex:0 0 30px;width:30px;height:18px;margin:0;border-radius:9px;background:var(--line-2);position:relative;cursor:pointer;transition:background .15s}
+.sw input::after{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:var(--bg-1);transition:transform .15s}
+.sw input:checked{background:var(--ok)}.sw input:checked::after{transform:translateX(12px)}
 .sw input:focus-visible{outline:2px solid var(--info);outline-offset:2px}
-.sw b{display:block;font-weight:500;font-size:13.5px}.sw small{display:block;margin-top:3px;font-size:12.5px;color:var(--muted);max-width:70ch}
-.behave .btn{margin-top:12px}
 .lede{font-size:13px;color:var(--text-2);margin:0}
 .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 0 4px}
 .search{position:relative;flex:1;min-width:240px}.search svg{position:absolute;left:11px;top:10px;color:var(--faint)}
@@ -545,8 +543,9 @@ const CHATS_CSS = `
 `
 
 /** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
-const toggle = (name: string, on: boolean, label: string, help: string) =>
-  `<label class="sw"><input type="checkbox" name="${name}" value="on"${on ? " checked" : ""}><span><b>${label}</b><small>${help}</small></span></label>`
+/** A switch that saves its form as soon as it's flipped. */
+const toggle = (name: string, on: boolean, label: string) =>
+  `<label class="sw"><input type="checkbox" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
 
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
@@ -558,9 +557,9 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
     </form>
     <p class="hint">Messages a day across every chat: replies, new conversations and reactions all count.</p>
     <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" class="behave">
-      ${toggle("read_receipts", conn.readReceipts, "Send read receipts", "When an agent reads a chat, mark it read on WhatsApp too, as opening it on this phone would. People see blue ticks only if this number's WhatsApp has read receipts on. Off: agents read without anyone knowing.")}
-      ${toggle("typing", conn.typing, "Show typing", "Before a message goes, the chat shows \u201ctyping\u2026\u201d (\u201crecording\u2026\u201d before a voice note) for about as long as you'd take to write it. Off: messages just send.")}
-      <button class="btn line sm" type="submit">Save</button>
+      ${toggle("read_receipts", conn.readReceipts, "Read receipts")}
+      ${toggle("typing", conn.typing, "Typing")}
+      <noscript><button class="btn line sm" type="submit">Save</button></noscript>
     </form>
   </div>`
 }
