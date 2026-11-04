@@ -24,7 +24,14 @@ export type StoredMessage = {
  */
 const NEW_MESSAGE = `(not m.from_me and m.seq > coalesce(cr.message_seq, 0) and m.sent_at >= coalesce(cr.seen_until, k.created_at))`
 const NEW_REACTION = `(r.reactor <> 'me' and r.emoji <> '' and r.seq > coalesce(cr.reaction_seq, 0) and r.reacted_at >= k.created_at)`
-/** Joins `k` and `cr` onto a query over messages `m`. */
+/**
+ * Per chat `c` (on connection `k`): its marker `cr`, and `nm.n` / `nr.n`, how many messages and reactions are new.
+ * Both counts are index range scans from the marker (sent_at for messages, seq for reactions).
+ */
+const NEW_COUNTS = `left join parley.chat_read cr on cr.connection_id = c.connection_id and cr.chat_id = c.id
+       cross join lateral (select count(*) n from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id and ${NEW_MESSAGE}) nm
+       cross join lateral (select count(*) n from parley.reaction r where r.connection_id = c.connection_id and r.chat_id = c.id and ${NEW_REACTION}) nr`
+/** Joins `cr` onto a query over messages `m` (which joins its connection as `k`). */
 const READ_JOIN = `left join parley.chat_read cr on cr.connection_id = m.connection_id and cr.chat_id = m.chat_id`
 
 type RawMessage = {
@@ -357,10 +364,8 @@ export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter)
     `select c.id, c.kind, c.name, c.synced, c.last_message_at, c.last_call_at, c.last_call_kind, k.channel, k.id as connection_id, lm.from_me as last_from_me,
             nm.n as new_messages, nr.n as new_reactions
        from parley.chat c join parley.connection k on k.id = c.connection_id
-       left join parley.chat_read cr on cr.connection_id = c.connection_id and cr.chat_id = c.id
        left join lateral (select m.from_me from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id order by m.sent_at desc, m.seq desc limit 1) lm on true
-       cross join lateral (select count(*) n from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id and ${NEW_MESSAGE}) nm
-       cross join lateral (select count(*) n from parley.reaction r where r.connection_id = c.connection_id and r.chat_id = c.id and ${NEW_REACTION}) nr
+       ${NEW_COUNTS}
       where k.account_id = $1 and k.status = 'connected' and c.synced
         and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3)
         and ($4::boolean is not true or lm.from_me = false)
@@ -373,6 +378,21 @@ export async function inboxChats(sql: Sql, accountId: string, opts: InboxFilter)
     ...chatRow(r), channel: r.channel, connectionId: r.connection_id, awaiting: r.last_from_me === null ? null : r.last_from_me ? "them" : "you",
     newMessages: Number(r.new_messages), newReactions: Number(r.new_reactions),
   }))
+}
+
+/**
+ * How much is new across the account's synced chats on connected connections: messages, reactions, and how many chats
+ * have either. Cheap enough to answer on every tool call; never marks anything read.
+ */
+export async function newTotals(sql: Sql, accountId: string): Promise<{ messages: number; reactions: number; chats: number }> {
+  const [r] = await sql<{ messages: string; reactions: string; chats: string }>(
+    `select coalesce(sum(nm.n), 0) as messages, coalesce(sum(nr.n), 0) as reactions, count(*) filter (where nm.n + nr.n > 0) as chats
+       from parley.chat c join parley.connection k on k.id = c.connection_id
+       ${NEW_COUNTS}
+      where k.account_id = $1 and k.status = 'connected' and c.synced`,
+    [accountId]
+  )
+  return { messages: Number(r?.messages ?? 0), reactions: Number(r?.reactions ?? 0), chats: Number(r?.chats ?? 0) }
 }
 
 /** A reaction from the other side that came in since its chat was last read, with the message it's on. */
