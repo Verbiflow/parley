@@ -25,7 +25,6 @@ const ICON = {
   external: `<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>`,
   settings: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
   github: `<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>`,
-  sparkles: `<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>`,
 }
 export type IconName = keyof typeof ICON
 export const icon = (name: IconName, size = 14, stroke = 1.75) =>
@@ -115,8 +114,8 @@ export const pmark = (size = 40) => `<span class="pmark" style="width:${size}px;
 export const orb = (size = 16) => `<span class="orb" style="width:${size}px;height:${size}px" aria-hidden="true"><i></i></span>`
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "idle"
-/** A status: a tinted pill with a dot, in sentence case. */
-export const status = (tone: Tone, text: string, live = false) => `<span class="st ${tone}"><i class="${live ? "pulse" : ""}"></i>${esc(text.replace(/^./, (c) => c.toUpperCase()))}</span>`
+/** A status: a quiet pill whose word, in sentence case, says the state; no dots. */
+export const status = (tone: Tone, text: string) => `<span class="st ${tone}">${esc(text.replace(/^./, (c) => c.toUpperCase()))}</span>`
 
 /** A thin usage bar with its numbers beside it. */
 export function bar(used: number, of: number): string {
@@ -207,20 +206,15 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .btn.line,.btn.warn,.btn.quiet{filter:none}.btn.line::after,.btn.warn::after,.btn.quiet::after{display:none}
 .btn.line{background:var(--glass);color:var(--text-2);box-shadow:var(--glass-ring)}.btn.line:hover{background:var(--glass-hi);color:var(--text)}
 .btn.quiet{background:transparent;box-shadow:none;color:var(--muted)}.btn.quiet:hover{color:var(--text);background:var(--hover)}
-.btn.warn{background:var(--glass);box-shadow:var(--glass-ring);color:var(--bad)}.btn.warn:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px color-mix(in srgb,var(--bad) 55%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.btn.warn{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2)}.btn.warn:hover{color:var(--bad)}.btn.warn:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px color-mix(in srgb,var(--bad) 55%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
 .btn.sm{height:28px;padding:0 12px;font-size:12.5px;gap:6px}
 .btn.lg{height:40px;padding:0 20px;font-size:14px}
 .btn.block{width:100%}
 .btn .ar{transition:transform .15s var(--ease)}.btn:hover .ar{transform:translateX(2px)}
 
-/* status: a quiet glass pill; only its dot carries the color */
-.st{--d:var(--faint);display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px 0 8px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap;line-height:1}
-.st i{width:6px;height:6px;border-radius:50%;background:var(--d);flex:none}
-.st.ok{--d:var(--ok)}.st.warn{--d:var(--warn)}.st.bad{--d:var(--bad);color:color-mix(in srgb,var(--bad) 45%,var(--text-2))}.st.info{--d:var(--sand)}.st.idle{color:var(--muted)}
-.st i.pulse{animation:ping 2s var(--ease) infinite}
-.st .orb{margin-left:-1px}
-@keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--d) 55%,transparent)}70%,100%{box-shadow:0 0 0 5px transparent}}
-.pulse{animation:pulse 2.2s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
+/* status: a quiet glass pill; the word says the state, tinted only when something needs a look. Never dots. */
+.st{display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap;line-height:1}
+.st.warn{color:color-mix(in srgb,var(--warn) 60%,var(--text-2))}.st.bad{color:color-mix(in srgb,var(--bad) 60%,var(--text-2))}.st.info{color:color-mix(in srgb,var(--sand) 70%,var(--text-2))}.st.idle{color:var(--muted)}
 .kind{font-size:12.5px;color:var(--muted)}
 .kind.open{color:var(--sand)}
 
@@ -333,12 +327,11 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .cp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:999px;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);font-size:12.5px;font-weight:500;cursor:pointer;flex:none;transition:background .15s,color .15s}
 .cp:hover{color:var(--text);background:var(--glass-hi)}
 
-/* note: a card whose state is a dot beside its title, the way status pills say it; never a colored edge */
-.note{--d:var(--faint);display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:16px;background:var(--card);box-shadow:var(--frame)}
-.note.bad{--d:var(--bad)}.note.warn{--d:var(--warn)}.note.ok{--d:var(--ok)}
+/* note: a plain card; the title says what's wrong, tinted when it's a problem. Never a colored edge, never a dot. */
+.note{display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:16px;background:var(--card);box-shadow:var(--frame)}
+.note.bad b{color:color-mix(in srgb,var(--bad) 55%,var(--text))}.note.warn b{color:color-mix(in srgb,var(--warn) 55%,var(--text))}
 .note .grow{flex:1;min-width:0}.note p{font-size:13px;line-height:20px;color:var(--muted);margin-top:3px}
-.note b{display:flex;align-items:center;gap:9px;font-weight:500}.note b::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--d);box-shadow:0 0 0 3px color-mix(in srgb,var(--d) 16%,transparent)}
-.note p{padding-left:15px}
+.note b{display:block;font-weight:500}
 
 .empty{padding:44px 0;color:var(--muted);font-size:13.5px}
 .empty b{display:block;color:var(--text);font-weight:500;margin-bottom:4px;font-size:14.5px}

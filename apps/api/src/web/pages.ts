@@ -43,10 +43,10 @@ function browserName(ua: string | null): string {
   return os ? `${b} on ${os}` : b
 }
 
-function connectionState(c: Connection): { tone: Tone; text: string; live?: boolean } {
+function connectionState(c: Connection): { tone: Tone; text: string } {
   if (c.status === "connected" && c.haltedReason) return { tone: "bad", text: "halted" }
   if (c.status === "connected" && c.pausedUntil) return { tone: "warn", text: "backing off" }
-  if (c.status === "connected") return { tone: "ok", text: "live", live: true }
+  if (c.status === "connected") return { tone: "ok", text: "live" }
   if (c.status === "linking" || c.status === "closed") return { tone: "info", text: "waiting for scan" }
   if (c.status === "logged_out") return { tone: "idle", text: "disconnected" }
   return { tone: "bad", text: "error" }
@@ -130,7 +130,7 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .conn b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;color:var(--text)}
 .conn small{display:block;font-size:12.5px;line-height:18px;color:var(--muted);margin-top:3px}
 .conn .cf{margin-top:auto}
-.conn.ready{box-shadow:var(--frame),0 0 0 1px rgba(227,185,141,.2),0 24px 60px -30px rgba(227,185,141,.28)}
+.conn.ready{box-shadow:var(--frame),0 0 0 1px rgba(227,185,141,.22)}
 .conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,rgba(255,236,210,.05),transparent 70%);pointer-events:none}
 .conn.ready .btn{width:100%}
 .conn.later{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
@@ -148,9 +148,6 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .pane ol{margin:0;padding-left:20px}.pane b{color:var(--text);font-weight:500}.pane code{color:var(--text-2)}
 .any{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.marks{display:inline-flex;align-items:center}
 .marks span{display:inline-grid;place-items:center;width:28px;height:28px;margin-left:-6px;border-radius:50%;background:var(--card);box-shadow:var(--glass-ring),0 0 0 2px var(--bg);color:var(--text)}.marks span:first-child{margin-left:0}
-.agent-line{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
-.agent-line b{color:var(--text);font-weight:500}.agent-line a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-3)}
-.live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:ping 2s var(--ease) infinite;color:var(--ok)}
 .accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-top:18px}
 .acard{position:relative;display:flex;flex-direction:column;gap:18px;padding:18px 18px 16px;border-radius:18px;background:var(--card);box-shadow:var(--frame);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
 .acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,rgba(255,246,232,.035),transparent 62%);pointer-events:none}
@@ -205,9 +202,7 @@ a.acard:hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(-
 .atbl tr.fresh{animation:fresh 2.6s var(--ease)}.atbl tr.fresh td{animation:fresh-in .5s var(--ease)}
 @keyframes fresh{from{background:color-mix(in srgb,var(--sand) 10%,transparent)}to{background:transparent}}
 @keyframes fresh-in{from{opacity:0}}
-.livei{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px 0 10px;border-radius:999px;font-size:12px;font-weight:500;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line)}
-.livei i{--d:var(--sand);width:6px;height:6px;border-radius:50%;background:var(--sand);animation:ping 2s var(--ease) infinite}
-.livei .off-t,.livei.off .on-t{display:none}.livei.off .off-t{display:inline}.livei.off{color:var(--muted)}.livei.off i{background:var(--faint);animation:none}
+.livei{display:none;font-size:12.5px;color:var(--muted)}.livei.off{display:inline}
 .sec-h .aside .all{display:inline-flex;align-items:center;gap:5px}
 .atools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .atools .seg a{gap:7px}.atools .seg .c{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}.atools .seg .on .c{color:var(--text-2)}
@@ -254,10 +249,10 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
   const href = live ? `/app/connections/${esc(c.id)}` : `/link/${esc(c.id)}`
   const body = live && s
     ? `<div class="ab"><div class="row"><span>Today</span><span class="m">${s.sentToday}<span class="faint"> / ${s.dailyLimit}</span></span></div>${bar(s.sentToday, s.dailyLimit)}</div>
-       <div class="af"><span class="next">${s.nextAt ? `${orb(12)}${s.queued} queued · next ${esc(until(s.nextAt, c.timezone))}` : `<span class="faint">Nothing queued</span>`}</span><span class="go">${chats ?? 0} chats ${icon("arrow", 13)}</span></div>`
+       <div class="af"><span class="next">${s.nextAt ? `${s.queued} queued · next ${esc(until(s.nextAt, c.timezone))}` : `<span class="faint">Nothing queued</span>`}</span><span class="go">${chats ?? 0} chats ${icon("arrow", 13)}</span></div>`
     : `<div class="af"><span class="faint">${live ? "Loading today's numbers" : "Waiting for the QR scan"}</span><span class="go">${live ? "Open" : "Finish linking"} ${icon("arrow", 13)}</span></div>`
   return `<a class="acard" href="${href}">
-    <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text, st.live)}</div>
+    <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
     ${body}
   </a>`
 }
@@ -278,20 +273,13 @@ const installPrompt = (mcpUrl: string) =>
 /** How to connect an agent: every agent the site lists, the URL, and one prompt that works in all of them. */
 function agentSetup(mcpUrl: string, agents: AgentView[]): string {
   const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(mcpUrl)
-  const active = agents.filter(isActive)
-  const line = agents.length
-    ? `<div class="agent-line">${active.length ? `<span class="live"></span>` : agentMark(agents[0]!.clientName, 20)}<span>${active.length
-        ? `<b>${esc(active[0]!.clientName || "An agent")}</b> is using Parley right now${active.length > 1 ? ` (+${active.length - 1} more)` : ""}`
-        : `${agents.length} agent${agents.length === 1 ? "" : "s"} authorized · ${agents[0]!.lastUsedAt ? `last used ${ago(agents[0]!.lastUsedAt)}` : "not used yet"}`} · <a href="/app/agents">See agents</a></span></div>`
-    : ""
   return `<div class="agentc">
       <div class="cgrid">
-        <div class="cc"><span class="cl">${icon("plug", 15)}Your MCP server</span>${copyLine(mcpUrl)}<p>A remote MCP server (Streamable HTTP). It signs in with OAuth in your browser, so there's no key to paste.</p>
+        <div class="cc"><span class="cl">Your MCP server</span>${copyLine(mcpUrl)}<p>A remote MCP server (Streamable HTTP). It signs in with OAuth in your browser, so there's no key to paste.</p>
           <div class="works"><span>Works with</span>${agentRow(16)}</div></div>
-        <div class="cc"><span class="cl">${icon("sparkles", 15)}Paste this into your agent</span>${copyLine(installPrompt(mcpUrl), { wrap: true })}
+        <div class="cc"><span class="cl">Paste this into your agent</span>${copyLine(installPrompt(mcpUrl), { wrap: true })}
           <p>Claude, ChatGPT and Cursor connect from their settings instead: add the URL as a custom connector or MCP server, then sign in. In a terminal: <code>claude mcp add --transport http parley ${esc(mcpUrl)}</code>.${local ? " Apps that reach it from their own servers need a public URL: set <code>PUBLIC_URL</code> behind a tunnel." : ""}</p></div>
       </div>
-      ${line}
     </div>`
 }
 
@@ -340,8 +328,8 @@ function entryState(m: Outbound, tz: string): string {
     return status("bad", m.error?.code === "recipient_unavailable" ? "Not on WhatsApp" : "Failed")
   }
   if (m.status === "canceled") return status("idle", "Canceled")
-  if (m.status === "sending") return status("info", "Sending", true)
-  return `<span class="st info">${orb(10)}Queued</span><span class="sw">${m.scheduledFor ? esc(until(m.scheduledFor, tz)) : "held"}</span>`
+  if (m.status === "sending") return status("info", "Sending")
+  return `${status("info", "Queued")}<span class="sw">${m.scheduledFor ? esc(until(m.scheduledFor, tz)) : "held"}</span>`
 }
 
 const ERROR_TEXT: Record<string, string> = {
@@ -401,7 +389,7 @@ function activityTable(entries: ActivityEntry[], c: ActivityCtx, opts: { live?: 
     <tbody>${activityBody(entries, c, opts.emptyText)}</tbody></table></div>`
 }
 
-const liveTag = `<span class="livei" data-live-ind><i></i><span class="on-t">Live</span><span class="off-t">Reconnecting</span></span>`
+const liveTag = `<span class="livei" data-live-ind>Can't reach Parley, retrying</span>`
 const DASH_EMPTY = "Nothing yet. Every message your agents queue shows up here the moment they ask, then again when it goes out."
 
 /** What the live view fetches: the same rows, rendered the same way, plus the tab counts. */
@@ -454,11 +442,12 @@ export function activityPage(opts: {
 /**
  * Keeps an activity table current: every few seconds while the tab is visible it fetches the same rows and swaps them
  * in, so new sends appear and queued ones turn to sent in place. Lines that are new, or whose state changed, light up.
+ * Scrolled into the table, the line at the top of the view stays put while lines arrive above it.
  */
 const LIVE_SCRIPT = `(()=>{const box=document.querySelector('[data-live]');if(!box)return;const tb=box.querySelector('tbody'),ind=document.querySelector('[data-live-ind]');let busy=false,last='';
 const seen=()=>new Set([...tb.querySelectorAll('tr[data-id]')].map(r=>r.dataset.id+':'+r.dataset.s));
 async function tick(){if(busy||document.hidden)return;busy=true;try{const r=await fetch(box.dataset.live,{headers:{accept:'application/json'},credentials:'same-origin'});if(!r.ok)throw 0;const j=await r.json();
-if(j.body!==last){const before=seen(),first=!last;last=j.body;tb.innerHTML=j.body;if(!first)tb.querySelectorAll('tr[data-id]').forEach(r=>{if(!before.has(r.dataset.id+':'+r.dataset.s))r.classList.add('fresh')})}
+if(j.body!==last){const before=seen(),first=!last;last=j.body;const fold=document.querySelector('.top')?.getBoundingClientRect().bottom||0;const anchor=box.getBoundingClientRect().top<fold?[...tb.querySelectorAll('tr[data-id]')].find(r=>r.getBoundingClientRect().bottom>fold):null;const was=anchor&&anchor.getBoundingClientRect().top;tb.innerHTML=j.body;const now=anchor&&tb.querySelector('tr[data-id="'+CSS.escape(anchor.dataset.id)+'"]');if(now)scrollBy(0,now.getBoundingClientRect().top-was);if(!first)tb.querySelectorAll('tr[data-id]').forEach(r=>{if(!before.has(r.dataset.id+':'+r.dataset.s))r.classList.add('fresh')})}
 for(const[k,v]of Object.entries(Object.assign({},j.counts,{total:j.total})))document.querySelectorAll('[data-count="'+k+'"]').forEach(e=>e.textContent=Number(v).toLocaleString('en-US'));
 ind&&ind.classList.remove('off')}catch(e){ind&&ind.classList.add('off')}busy=false}
 tick();setInterval(tick,4000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()})})();`
@@ -496,7 +485,7 @@ export function dashboardPage(opts: {
     <div class="strip">
       <div><span class="label">Live accounts</span><div class="v">${live.length}</div><div class="h">${visible.length > live.length ? `${visible.length - live.length} waiting to link` : "all online"}</div></div>
       <div><span class="label">Sent today</span><div class="v">${sentToday}</div><div class="h">across every account</div></div>
-      <div><span class="label">Queued</span><div class="v">${queued}${queued ? orb(18) : ""}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
+      <div><span class="label">Queued</span><div class="v">${queued}</div><div class="h">${queued ? "going out at a human pace" : "nothing waiting"}</div></div>
       <div><span class="label">Agents</span><div class="v">${opts.agents.length}</div><div class="h">${activeAgents ? `${activeAgents} active now` : "none active now"}</div></div>
     </div>
     ${section("Accounts", cards, `${live.length} live`)}
@@ -517,10 +506,10 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; connecti
     const c = byId.get(m.connectionId)
     const tz = c?.timezone ?? "UTC"
     return `<tr>
-      <td><div class="who">${glyph(recipient(m.chatId), 24, true)}<div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel)} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
+      <td><div class="who"><div><b class="mono" style="color:var(--text)">${esc(recipient(m.chatId))}</b><small>${c ? `${channelName(c.channel)} · ${esc(waNumber(c.handle))}` : ""}</small></div></div></td>
       <td class="clip">${esc(outText(m))}</td>
       <td><span class="kind${m.kind === "first_message" ? " open" : ""}">${KIND_LABEL[m.kind] ?? m.kind}</span></td>
-      <td class="m">${m.status === "sending" ? status("info", "Sending", true) : m.scheduledFor ? `<span class="next">${orb(12)}${esc(until(m.scheduledFor, tz))}</span>` : `<span class="faint">Held while the channel is paused</span>`}</td>
+      <td class="m">${m.status === "sending" ? status("info", "Sending") : m.scheduledFor ? `<span class="next">${esc(until(m.scheduledFor, tz))}</span>` : `<span class="faint">Held while the channel is paused</span>`}</td>
       <td class="m faint">${m.scheduledFor ? `${clock(m.scheduledFor, tz)} <span class="faint">${esc(cityOf(tz))}</span>` : ""}</td>
       <td class="r"><form method="post" action="/app/outbox/${esc(m.id)}/cancel"><button class="btn quiet sm" type="submit">Cancel</button></form></td>
     </tr>`
@@ -545,12 +534,12 @@ const TOOL_LABEL: Record<string, string> = {
 function activity(a: AgentView): string {
   if (!a.lastUsedAt) return `Authorized ${ago(a.connectedAt)} · hasn't used Parley yet`
   const did = a.lastTool ? ` · last ${esc(TOOL_LABEL[a.lastTool] ?? a.lastTool)}${a.lastToolAt ? ` ${ago(a.lastToolAt)}` : ""}` : ""
-  return `${isActive(a) ? "Using Parley right now" : `Last active ${ago(a.lastUsedAt)}`}${did} · ${a.calls} tool call${a.calls === 1 ? "" : "s"}`
+  return `${isActive(a) ? "Active now" : `Last active ${ago(a.lastUsedAt)}`}${did} · ${a.calls} tool call${a.calls === 1 ? "" : "s"}`
 }
 
 export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: string; queuedTotal?: number }): string {
   const rows = opts.agents.map((a) => `<tr>
-      <td><div class="who">${agentMark(a.clientName, 30)}<div><b>${esc(a.clientName || "Unnamed MCP client")}${isActive(a) ? ` <span class="live" title="Active in the last 2 minutes"></span>` : ""}</b></div></div></td>
+      <td><div class="who">${agentMark(a.clientName, 30)}<div><b>${esc(a.clientName || "Unnamed MCP client")}</b></div></div></td>
       <td style="color:var(--muted);font-size:13px">${activity(a)}</td>
       <td class="m faint">${day(a.connectedAt)}</td>
       <td class="r"><form method="post" action="/app/agents/${esc(a.sessionId)}/disconnect" data-confirm="Disconnect this agent? It will need to sign in again."><button class="btn warn sm" type="submit">Disconnect</button></form></td>
@@ -724,7 +713,7 @@ const CHATS_CSS = `
 .sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px;color:var(--text-2)}
 .sw input{appearance:none;flex:0 0 32px;width:32px;height:18px;margin:0;border-radius:9px;background:var(--bg-3);box-shadow:inset 0 0 0 1px var(--line-2);position:relative;cursor:pointer;transition:background .2s var(--ease)}
 .sw input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .25s var(--ease)}
-.sw input:checked{background:color-mix(in srgb,#5fd38d 80%,transparent);box-shadow:none}.sw input:checked::after{transform:translateX(14px)}
+.sw input:checked{background:var(--primary);box-shadow:var(--primary-shadow)}.sw input:checked::after{transform:translateX(14px);background:var(--on-primary)}
 .sw input:focus-visible{box-shadow:var(--ring)}
 .lede{font-size:13.5px;line-height:21px;color:var(--muted);margin:0;max-width:80ch}
 .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:18px 0 4px}
@@ -839,7 +828,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS,
     body: `${pageHead({
       title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
-      sub: `${status(st.tone, st.text, st.live)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
+      sub: `${status(st.tone, st.text)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
       actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
         <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,
     })}
@@ -855,7 +844,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
           </div>
         </div>
         <div id="status">${syncing ? `<div class="sync">
-            <div class="row"><b>${orb(16)}Syncing your chats from ${esc(name)}${pct !== null ? ` · ${pct}%` : "…"}</b><span>${counts.direct} people · ${counts.group} groups so far</span></div>
+            <div class="row"><b>Syncing your chats from ${esc(name)}${pct !== null ? ` · ${pct}%` : "…"}</b><span>${counts.direct} people · ${counts.group} groups so far</span></div>
             <div class="bar${pct === null ? " busy" : ""}"><i style="width:${pct ?? 30}%"></i></div>
             <p>Just linked: recent chats, names and calls are still arriving. The list fills in on its own.</p>
           </div>` : counts.direct < 3 ? `<div class="note"><div class="grow"><b>Load your recent chats</b><p>WhatsApp sends your recent one-to-one chats only while a device is linking, and this link was made before Parley could read them. Relink once (scan a new QR, about 20 seconds) and this list matches your phone.</p></div><button class="btn" type="submit" form="relink">Relink</button></div>` : `<p class="stale">List doesn't match your phone? <button type="submit" form="relink">Relink WhatsApp</button> to rebuild it (scan a new QR, about 20 seconds).</p>`}</div>
