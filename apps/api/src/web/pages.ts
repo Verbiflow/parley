@@ -154,6 +154,8 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .mcp .tabrow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .pane{display:flex;flex-direction:column;gap:12px;font-size:13.5px;color:var(--muted);line-height:22px}
 .pane ol{margin:0;padding-left:20px}.pane b{color:var(--text);font-weight:500}.pane code{color:var(--text-2)}
+.any{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.marks{display:inline-flex;align-items:center}
+.marks span{display:inline-grid;place-items:center;width:28px;height:28px;margin-left:-6px;border-radius:50%;background:var(--card);box-shadow:var(--glass-ring),0 0 0 2px var(--bg);color:var(--text)}.marks span:first-child{margin-left:0}
 .agent-line{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
 .agent-line b{color:var(--text);font-weight:500}.agent-line a{color:var(--text-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-3)}
 .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 2px;vertical-align:middle;animation:ping 2s var(--ease) infinite;color:var(--ok)}
@@ -193,6 +195,13 @@ function channelTags(): string {
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
 const doneTag = `<span class="done-tag">${icon("check", 12, 2.25)}Done</span>`
 
+/** What to paste into an agent that installs its own tools (Grok Bot, Muse, Hermes, OpenClaw…): the endpoint and how it signs in. */
+const installPrompt = (mcpUrl: string) =>
+  `Add the Parley MCP server so you can read and send my messages. It's a remote MCP server (Streamable HTTP) at ${mcpUrl} and signs in with OAuth: open the sign-in link it gives you and wait for me to approve. Once it's connected, call list_connections and tell me which accounts you can use.`
+
+const promptPane = (mcpUrl: string) =>
+  `<p class="any"><span class="marks">${["Grok Bot", "Muse", "OpenClaw"].map((t) => `<span title="${t}">${brandMark(t, 15)}</span>`).join("")}</span>For Grok Bot, Muse, Hermes, OpenClaw and any agent that can add its own tools: paste this into a chat with it.</p>${copyLine(installPrompt(mcpUrl), { wrap: true })}`
+
 function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; step?: number } = { open: true }): string {
   const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(mcpUrl)
   const tabs: Array<[string, string, string, string]> = [
@@ -201,7 +210,7 @@ function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; st
     ["cu", "Cursor", "Cursor", `<p>Add to <code>~/.cursor/mcp.json</code>, then enable Parley under <b>Settings → MCP</b>.</p>${copyLine(JSON.stringify({ mcpServers: { parley: { url: mcpUrl } } }, null, 2), { multiline: true })}`],
     ["cd", "Claude app", "Claude", `<ol><li><b>Settings → Connectors → Add custom connector</b></li><li>Name it Parley and paste the endpoint</li><li><b>Connect</b> and sign in</li></ol>${local ? `<p class="faint">The Claude app connects from Anthropic's servers, so it needs a public URL. Set <code>PUBLIC_URL</code> behind a tunnel, or use Claude Code.</p>` : ""}`],
     ["gpt", "ChatGPT", "OpenAI", `<ol><li><b>Settings → Apps &amp; Connectors → Advanced</b>, turn on <b>Developer mode</b></li><li><b>Create</b>, paste the endpoint, pick <b>OAuth</b></li><li>Sign in</li></ol>${local ? `<p class="faint">ChatGPT connects from OpenAI's servers, so it needs a public URL.</p>` : ""}`],
-    ["ot", "Other", "", `<p>Any MCP client with remote servers (Streamable HTTP + OAuth) works. Add the endpoint; it finds the sign-in on its own.</p>`],
+    ["any", "Any agent", "*", promptPane(mcpUrl)],
   ]
   const active = agents.filter(isActive)
   const line = agents.length
@@ -211,7 +220,7 @@ function mcpGuide(mcpUrl: string, agents: AgentView[], opts: { open: boolean; st
     : ""
   const body = `<div class="mcp" data-tabbox>
       ${copyLine(mcpUrl)}
-      <div class="tabrow"><div class="seg" data-tabs>${tabs.map(([id, label, brand], i) => `<button type="button" data-tab="${id}"${i === 0 ? ' class="on"' : ""}>${brandMark(brand, 13)}${label}</button>`).join("")}</div></div>
+      <div class="tabrow"><div class="seg" data-tabs>${tabs.map(([id, label, brand], i) => `<button type="button" data-tab="${id}"${i === 0 ? ' class="on"' : ""}>${brand === "*" ? icon("sparkles", 13) : brandMark(brand, 13)}${label}</button>`).join("")}</div></div>
       ${tabs.map(([id, , , html], i) => `<div class="pane" data-pane="${id}"${i === 0 ? "" : " hidden"}>${html}</div>`).join("")}
       ${line}
     </div>`
@@ -363,7 +372,7 @@ export function agentsPage(opts: { user: Viewer; agents: AgentView[]; mcpUrl: st
   return appShell({
     title: "Agents", active: "agents", user: opts.user, counts: { agents: opts.agents.length, outbox: opts.queuedTotal }, css: OVERVIEW_CSS,
     body: `${pageHead({ title: "Agents", sub: "Apps you've authorized to read your synced chats and queue messages for you. Disconnecting one cuts off its tokens immediately." })}
-      ${section("MCP endpoint", `<div style="padding-top:18px">${copyLine(opts.mcpUrl)}</div>`, "Streamable HTTP · OAuth")}
+      ${section("MCP endpoint", `<div class="mcp"><div>${copyLine(opts.mcpUrl)}</div><div class="pane">${promptPane(opts.mcpUrl)}</div></div>`, "Streamable HTTP · OAuth")}
       ${section("Authorized", opts.agents.length
         ? `<table class="tbl"><thead><tr><th>Agent</th><th>Activity</th><th>Since</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
         : empty("No agents yet", "Add the endpoint above to an MCP client. It opens a browser to sign in with this account."), `${opts.agents.length} authorized`)}`,

@@ -4,6 +4,7 @@
  * with a lit top edge, monospace only for what's machine-shaped (ids, numbers, times). Pages (`pages.ts`) compose these.
  */
 import { AGENT_BRANDS } from "./agent-brands.ts"
+import { LOBEHUB_MARKS } from "./agent-marks.ts"
 
 /** Escape text for HTML bodies and attribute values. Every user- or agent-supplied string goes through this. */
 export const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!)
@@ -24,6 +25,9 @@ const ICON = {
   chevronDown: `<path d="m6 9 6 6 6-6"/>`,
   plug: `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
   external: `<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>`,
+  settings: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
+  github: `<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>`,
+  sparkles: `<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>`,
 }
 export type IconName = keyof typeof ICON
 export const icon = (name: IconName, size = 14, stroke = 1.75) =>
@@ -73,8 +77,13 @@ export function glyph(name: string, size = 24, round = false): string {
 }
 
 /** The agent app's own mark when we know it (Claude, Cursor, …), else its initials. */
+const lobehub = (m: (typeof LOBEHUB_MARKS)[number], size: number, cls = "") =>
+  `<svg${cls ? ` class="${cls}"` : ""} viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor"${m.evenodd ? ' fill-rule="evenodd"' : ""} aria-hidden="true">${m.d.map((d) => `<path d="${d}"/>`).join("")}</svg>`
+
 export function agentMark(clientName: string | null, size = 24): string {
   const name = clientName || "MCP client"
+  const extra = LOBEHUB_MARKS.find((m) => m.match.test(name))
+  if (extra) return `<span class="glyph brand" style="width:${size}px;height:${size}px" title="${esc(extra.title)}">${lobehub(extra, Math.round(size * 0.58))}</span>`
   const brand = AGENT_BRANDS.find((b) => b.match.test(name))
   if (!brand) return glyph(name, size)
   const mono = ["#000000", "#191919", "#18181B", "#0B100F"].includes(brand.hex)
@@ -83,6 +92,8 @@ export function agentMark(clientName: string | null, size = 24): string {
 
 /** A bare agent-app mark (no tile) for inline use, e.g. in tabs. Monochrome brands take the text color. */
 export function brandMark(title: string, size = 14): string {
+  const extra = LOBEHUB_MARKS.find((m) => m.title === title)
+  if (extra) return lobehub(extra, size, "cm")
   const brand = AGENT_BRANDS.find((b) => b.title === title)
   if (!brand) return icon("plug", size)
   const mono = ["#000000", "#191919", "#18181B", "#0B100F"].includes(brand.hex)
@@ -108,8 +119,8 @@ export function bar(used: number, of: number): string {
   return `<span class="bar${pct >= 100 ? " full" : pct >= 80 ? " high" : ""}"><span style="width:${pct}%"></span></span>`
 }
 
-export function copyLine(text: string, opts: { prompt?: string; multiline?: boolean } = {}): string {
-  return `<div class="term${opts.multiline ? " ml" : ""}"><code>${opts.prompt ? `<span class="pr">${esc(opts.prompt)}</span>` : ""}${esc(text)}</code><button class="cp" type="button" data-copy="${esc(text)}" aria-label="Copy">${icon("copy", 13)}<span>Copy</span></button></div>`
+export function copyLine(text: string, opts: { prompt?: string; multiline?: boolean; wrap?: boolean } = {}): string {
+  return `<div class="term${opts.multiline ? " ml" : ""}${opts.wrap ? " ml wrap" : ""}"><code>${opts.prompt ? `<span class="pr">${esc(opts.prompt)}</span>` : ""}${esc(text)}</code><button class="cp" type="button" data-copy="${esc(text)}" aria-label="Copy">${icon("copy", 13)}<span>Copy</span></button></div>`
 }
 
 export function ago(iso: string): string {
@@ -245,29 +256,38 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .field > small{font-size:12px;color:var(--faint)}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
 
-/* frame */
-.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--line)}
-.top-in{max-width:1200px;margin:0 auto;height:60px;padding:0 28px;display:flex;align-items:center;gap:20px}
-.top .ws{display:flex;align-items:center;gap:10px;min-width:0}
-.top .ws .sl{color:var(--line-3);font-size:18px;font-weight:300}
-.top .ws .wn{font-size:13.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
-.tabs{display:flex;align-items:center;gap:2px;margin-left:8px}
-.tab{position:relative;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;font-size:13.5px;color:var(--muted);transition:color .15s var(--ease),background .15s var(--ease)}
+/* frame: the top bar sits clear over the page's glow, and turns to frosted glass once the page scrolls under it */
+.top{position:sticky;top:0;z-index:30;transition:background .25s var(--ease),box-shadow .25s var(--ease)}
+.top.scrolled{background:color-mix(in srgb,var(--bg) 74%,transparent);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px);box-shadow:0 1px 0 var(--line),0 16px 40px -30px rgba(0,0,0,.7)}
+.top-in{position:relative;max-width:1200px;margin:0 auto;height:64px;padding:0 28px;display:flex;align-items:center;gap:16px}
+.top .home{display:inline-flex;align-items:center;height:34px;padding:0 6px;margin-left:-6px;border-radius:10px}
+.tabs{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line),inset 0 1px 2px rgba(0,0,0,.22)}
+.tab{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:30px;padding:0 15px;border-radius:999px;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color .15s var(--ease),background .15s var(--ease),box-shadow .15s var(--ease)}
 .tab:hover{color:var(--text)}
-.tab.on{color:var(--text);background:var(--glass);box-shadow:var(--glass-ring)}
-.tab .n{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:0}
+.tab.on{color:var(--text);background:var(--glass-hi);box-shadow:var(--glass-ring),0 4px 12px -4px rgba(0,0,0,.45)}
+.tab .n{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--hover);box-shadow:inset 0 0 0 1px var(--line);font-size:11px;font-weight:500;line-height:1;color:var(--text-2);font-variant-numeric:tabular-nums}
+.tab .n.q{background:color-mix(in srgb,var(--sand) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 28%,transparent);color:var(--sand)}
 .top .right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.icon-btn{display:grid;place-items:center;width:32px;height:32px;border-radius:999px;border:0;background:none;color:var(--muted);cursor:pointer;transition:color .15s,background .15s}
-.icon-btn:hover{color:var(--text);background:var(--hover)}
+.icon-btn{display:grid;place-items:center;width:34px;height:34px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;transition:color .15s,background .15s}
+.icon-btn:hover{color:var(--text);background:var(--glass-hi)}
 .th-d,[data-theme=light] .th-l{display:none!important}[data-theme=light] .th-d{display:inline!important}
 .me{position:relative}
 .me summary{list-style:none;cursor:pointer;border-radius:999px;display:block}
 .me summary::-webkit-details-marker{display:none}
-.menu{position:absolute;right:0;top:calc(100% + 10px);width:248px;padding:6px;border-radius:14px;background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--frame),var(--shadow);z-index:40}
-.menu .mh{padding:9px 10px 11px;border-bottom:1px solid var(--line);margin-bottom:4px}
-.menu .mh b{display:block;font-weight:500;font-size:13.5px}.menu .mh span{font-size:12.5px;color:var(--muted);word-break:break-all}
-.menu a,.menu button{display:flex;align-items:center;gap:9px;width:100%;height:34px;padding:0 10px;border:0;background:none;border-radius:9px;font-size:13.5px;color:var(--text-2);cursor:pointer;text-align:left}
-.menu a:hover,.menu button:hover{background:var(--hover);color:var(--text)}
+.acct{display:flex!important;align-items:center;gap:8px;height:34px;padding:0 11px 0 5px;background:var(--glass);box-shadow:var(--glass-ring);font-size:13.5px;color:var(--text-2);transition:color .15s,background .15s}
+.acct:hover,.me[open] .acct{color:var(--text);background:var(--glass-hi)}
+.acct .an{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct .chev{display:inline-flex;color:var(--faint);transition:transform .2s var(--ease)}.me[open] .acct .chev{transform:rotate(180deg)}
+.menu{position:absolute;right:0;top:calc(100% + 10px);width:260px;padding:6px;border-radius:16px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--frame),var(--shadow);z-index:40;transform-origin:top right;animation:pop .16s var(--ease)}
+@keyframes pop{from{opacity:0;transform:translateY(-4px) scale(.98)}}
+.menu .mh{display:flex;align-items:center;gap:11px;padding:10px 10px 12px;border-bottom:1px solid var(--line);margin-bottom:5px}
+.menu .mh div{min-width:0}.menu .mh b{display:block;font-weight:500;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.menu .mh div span{display:block;font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu a,.menu button{display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 10px;border:0;background:none;border-radius:10px;font-size:13.5px;color:var(--text-2);cursor:pointer;text-align:left}
+.menu a svg,.menu button svg{color:var(--muted)}
+.menu a:hover,.menu button:hover{background:var(--hover);color:var(--text)}.menu a:hover svg,.menu button:hover svg{color:var(--text)}
+.menu .ext{margin-left:auto;color:var(--faint)}
+.menu .sep{height:1px;background:var(--line);margin:5px 4px}
+.menu .out:hover{color:var(--bad)}.menu .out:hover svg{color:var(--bad)}
 .av{border-radius:50%;object-fit:cover;flex:none;display:block;box-shadow:0 0 0 1px var(--line-2)}
 
 .wrap{position:relative;max-width:1200px;margin:0 auto;padding:52px 28px 120px}
@@ -320,6 +340,7 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .term code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12.5px}
 .term .pr{color:var(--faint);margin-right:8px;user-select:none}
 .term.ml{align-items:flex-start;padding:14px 6px 14px 16px}.term.ml code{white-space:pre;overflow:auto;line-height:19px}
+.term.wrap code{white-space:pre-wrap;font-family:var(--sans);font-size:13.5px;line-height:22px;color:var(--text-2);padding-right:8px}
 .cp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:999px;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);font-size:12.5px;font-weight:500;cursor:pointer;flex:none;transition:background .15s,color .15s}
 .cp:hover{color:var(--text);background:var(--glass-hi)}
 
@@ -350,9 +371,11 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .seg .on{background:var(--glass-hi);box-shadow:var(--glass-ring);color:var(--text)}
 
 .split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:56px;align-items:start}
-@media (max-width:980px){.split{grid-template-columns:1fr;gap:28px}}
+@media (max-width:980px){.split{grid-template-columns:1fr;gap:28px}.tabs{position:static;transform:none;margin-left:8px}}
 @media (max-width:760px){
-  .top-in{padding:0 16px;gap:10px}.tabs{overflow-x:auto;margin-left:0;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.top .ws .wn,.top .ws .sl,.top .ws .logo span{display:none}
+  .top-in{height:auto;flex-wrap:wrap;padding:12px 16px;row-gap:12px}
+  .tabs{position:static;transform:none;order:3;flex:1 0 100%;overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.tab{flex:1 1 auto;padding:0 10px;font-size:13px;gap:6px}
+  .acct .an,.acct .chev{display:none}.acct{padding:0 5px}
   .wrap{padding:32px 16px 80px}.head{flex-direction:column;align-items:flex-start}.head h1{font-size:30px;line-height:36px}
   .kv{grid-template-columns:1fr}.kv .k{padding-bottom:0;border-bottom:0}
   .log > div,.log.multi > div{grid-template-columns:64px 1fr;row-gap:4px}.log .fr,.log .to,.log .b{grid-column:2}
@@ -369,6 +392,8 @@ const BOOT = `try{var t=localStorage.getItem("parley-theme");document.documentEl
 const SCRIPT = `
 document.querySelectorAll('[data-theme-toggle]').forEach(b=>b.addEventListener('click',()=>{const r=document.documentElement;const t=r.dataset.theme==='light'?'dark':'light';r.dataset.theme=t;try{localStorage.setItem('parley-theme',t)}catch(e){}}));
 document.addEventListener('click',e=>{const m=document.querySelector('.me');if(m&&m.open&&!m.contains(e.target))m.open=false});
+document.addEventListener('keydown',e=>{const m=document.querySelector('.me');if(e.key==='Escape'&&m&&m.open){m.open=false;m.querySelector('summary').focus()}});
+(()=>{const t=document.querySelector('.top');if(!t)return;const f=()=>t.classList.toggle('scrolled',scrollY>4);f();addEventListener('scroll',f,{passive:true})})();
 document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);const s=b.querySelector('span');if(s){const t=s.textContent;s.textContent='Copied';setTimeout(()=>s.textContent=t,1400)}}catch(e){}}));
 document.querySelectorAll('[data-tabs]').forEach(t=>t.addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(!b)return;const box=t.closest('[data-tabbox]')||document;t.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('on',x===b));box.querySelectorAll('[data-pane]').forEach(p=>p.hidden=p.dataset.pane!==b.dataset.tab)}));
 document.querySelectorAll('form[data-confirm]').forEach(f=>f.addEventListener('submit',e=>{if(!confirm(f.dataset.confirm))e.preventDefault()}));
@@ -402,18 +427,22 @@ export function appShell(opts: { title: string; active: Section; user: Viewer; c
   const { user } = opts
   const tab = (id: Section, href: string, label: string) => {
     const n = opts.counts?.[id]
-    return `<a class="tab${opts.active === id ? " on" : ""}" href="${href}"${opts.active === id ? ' aria-current="page"' : ""}>${label}${n ? `<span class="n">${n}</span>` : ""}</a>`
+    return `<a class="tab${opts.active === id ? " on" : ""}" href="${href}"${opts.active === id ? ' aria-current="page"' : ""}>${label}${n ? `<span class="n${id === "outbox" ? " q" : ""}" aria-label="${n} ${id === "outbox" ? "queued" : "connected"}">${n}</span>` : ""}</a>`
   }
+  const first = (user.name || user.email).split(/[\s@]/)[0]!
   return shell(`${opts.title} · Parley`, `
     <header class="top"><div class="top-in">
-      <div class="ws"><a href="/app">${LOGO}</a><span class="sl">/</span><span class="wn">${esc(user.name)}</span></div>
-      <nav class="tabs">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
+      <a class="home" href="/app" aria-label="Parley overview">${LOGO}</a>
+      <nav class="tabs" aria-label="Sections">${tab("overview", "/app", "Overview")}${tab("outbox", "/app/outbox", "Outbox")}${tab("agents", "/app/agents", "Agents")}${SHOW_NETWORK ? tab("network", "/app/network", "Network") : ""}${tab("settings", "/app/settings", "Settings")}</nav>
       <div class="right">
         <button class="icon-btn" type="button" data-theme-toggle title="Toggle theme" aria-label="Toggle theme"><span class="th-l">${icon("sun", 15)}</span><span class="th-d">${icon("moon", 15)}</span></button>
-        <details class="me"><summary aria-label="Account">${avatar(user, 26)}</summary>
-          <div class="menu"><div class="mh"><b>${esc(user.name)}</b><span>${esc(user.email)}</span></div>
-            <a href="/app/settings">Settings</a>
-            <form method="post" action="/auth/signout"><button type="submit">${icon("logout", 14)}Sign out</button></form></div>
+        <details class="me"><summary class="acct" aria-label="Account">${avatar(user, 24)}<span class="an">${esc(first)}</span><span class="chev">${icon("chevronDown", 13)}</span></summary>
+          <div class="menu"><div class="mh">${avatar(user, 34)}<div><b>${esc(user.name)}</b><span>${esc(user.email)}</span></div></div>
+            <a href="/app/settings">${icon("settings", 15)}Settings</a>
+            <a href="https://itsparley.com" target="_blank" rel="noopener">${mark(15)}itsparley.com<span class="ext">${icon("external", 12)}</span></a>
+            <a href="https://github.com/Verbiflow/parley" target="_blank" rel="noopener">${icon("github", 15)}GitHub<span class="ext">${icon("external", 12)}</span></a>
+            <div class="sep"></div>
+            <form method="post" action="/auth/signout"><button class="out" type="submit">${icon("logout", 15)}Sign out</button></form></div>
         </details>
       </div>
     </div></header>
