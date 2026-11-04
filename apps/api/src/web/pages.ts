@@ -307,7 +307,7 @@ export function dashboardPage(opts: {
       <td class="m">${s ? s.queued : "—"}</td>
       <td class="m">${s?.nextAt ? esc(until(s.nextAt, c.timezone)) : `<span class="faint">—</span>`}</td>
       <td class="m">${c.status === "connected" ? `<a href="${detail}">${opts.syncedCounts?.get(c.id) ?? 0} chats</a>` : `<a href="/link/${esc(c.id)}">finish linking</a>`}</td>
-      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<a href="${detail}" title="Connection settings">${icon("arrow", 14)}</a>`}</td>
+      <td class="r">${c.status === "connected" ? icon("arrow", 14) : `<form method="post" action="${detail}/disconnect" data-confirm="Cancel linking this ${esc(channelName(c.channel))} account?" style="display:inline"><button class="btn quiet sm" type="submit">cancel</button></form>`}</td>
     </tr>`
   }).join("")
 
@@ -526,11 +526,12 @@ export function linkPage(id: string): string {
         <div class="fc-b" id="card"><div class="spin"></div></div>
       </section>
       <p class="fine">Parley links as a companion device, like WhatsApp Web. Unlink it any time from your phone.</p>
+      <form method="post" action="/app/connections/${esc(id)}/disconnect" id="cancel" style="text-align:center;margin-top:10px"><button class="btn quiet sm" type="submit">Cancel linking</button></form>
     </div></main></div>
     <script>
       const id=${JSON.stringify(id)};const card=document.getElementById('card'),title=document.getElementById('title'),sub=document.getElementById('sub');
       function render(d){
-        if(d.status==='connected'){title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Your chats sync now; ignore any you want kept from agents.';card.innerHTML='<span class="st ok"><i></i>live</span><a class="btn lg block" href="'+d.chats_url+'">See your chats</a>';return true}
+        if(d.status==='connected'){document.getElementById('cancel')?.remove();title.textContent='Connected';sub.textContent=(d.channel||'Channel').replace(/^./,x=>x.toUpperCase())+' is linked. Your chats sync now; ignore any you want kept from agents.';card.innerHTML='<span class="st ok"><i></i>live</span><a class="btn lg block" href="'+d.chats_url+'">See your chats</a>';return true}
         if(d.qr_svg){title.textContent='Scan to link';sub.textContent='The code refreshes on its own.';card.innerHTML='<div class="qr">'+d.qr_svg+'</div><ol class="ol"><li>Open WhatsApp on your phone</li><li>Settings → Linked devices</li><li>Link a device, then scan</li></ol>';return false}
         card.innerHTML='<div class="spin"></div>';return false
       }
