@@ -15,6 +15,9 @@
     { "pattern": "www.itsparley.com", "custom_domain": true }
   ],
   "observability": { "enabled": true },
+  // Run next to the database: RDS and the EC2 sessions service are in us-east-1, and a dashboard page makes several
+  // dependent queries. At the visitor's nearest edge each one crossed the country (~70ms); here it's a few ms.
+  "placement": { "mode": "targeted", "region": "aws:us-east-1" },
   "vars": {
     "PARLEY_ENV": "production",
     "PUBLIC_URL": "https://app.itsparley.com",

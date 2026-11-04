@@ -31,6 +31,13 @@ export async function currentSession(c: Context, ctx: AppContext): Promise<{ use
   return store.sessionByToken(ctx.sql, await hashSecret(token))
 }
 
+/** The signed-in account's profile and session id in one query, or undefined. */
+export async function currentViewer(c: Context, ctx: AppContext): Promise<{ profile: store.Profile; sessionId: string } | undefined> {
+  const token = getCookie(c, COOKIE)
+  if (!token) return undefined
+  return store.sessionProfileByToken(ctx.sql, await hashSecret(token))
+}
+
 export async function currentUserId(c: Context, ctx: AppContext): Promise<string | undefined> {
   return (await currentSession(c, ctx))?.userId
 }

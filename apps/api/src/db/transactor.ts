@@ -16,6 +16,12 @@ export class Transactor {
     this.#pool.on("error", () => {})
   }
 
+  /**
+   * A one-off query on whichever pooled connection is free, so independent reads (`Promise.all`) really run side by
+   * side; the shared request connection would run them one after another. Not for anything that needs a transaction.
+   */
+  readonly query: Sql = async (text, values = []) => (await this.#pool.query(text, [...values])).rows
+
   async transaction<T>(work: (sql: Sql) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect()
     const sql: Sql = async (text, values = []) => (await client.query(text, [...values])).rows
