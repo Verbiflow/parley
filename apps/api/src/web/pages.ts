@@ -893,7 +893,7 @@ const CHATS_CSS = `
 .chat .s{font-size:12.5px;color:var(--faint);margin-top:1px}
 .chat .when{font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap}
 .chat.off .t,.chat.off .glyph{opacity:.45}
-.chat .s.miss{color:var(--bad)}
+.chat .s.miss{color:var(--bad)}.chat .s.warn{color:var(--warn)}
 .ign{font:inherit;font-size:12.5px;font-weight:500;height:28px;padding:0 12px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease)}
 .ign:hover{color:var(--text);background:var(--glass-hi)}
 .chat.off .ign{background:color-mix(in srgb,var(--sand) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 35%,transparent);color:var(--sand)}
@@ -954,6 +954,11 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
  * agents shouldn't see (people and groups, most recent first, like their phone). Each tap saves at once; filtering is
  * client-side.
  */
+/** Why a visible chat says "no history yet". */
+const NO_HISTORY = "Parley has no message from this chat to count back from (it was ignored while they came in), so agents can't load its earlier messages from your phone yet. They can as soon as a new message arrives in it."
+/** Asked before a chat is ignored: what goes, and what comes back if it's turned on again. */
+const IGNORE_CONFIRM = "Ignore {name}?\n\nAgents won't see this chat. Parley deletes the messages it stored from it and won't keep new ones (only a bookmark of the latest, with no text).\n\nIf you turn it back on, those messages don't come back by themselves: agents can fetch up to the last 50 from your phone with load_history, and anything older only from a chat export."
+
 export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number; webhooks: WebhooksView }): string {
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
@@ -981,9 +986,13 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     const sub = callLast ? `${c.kind === "group" ? "Group call" : callWord}${c.kind === "direct" && phoneOf(c.id) && c.name ? ` · ${phoneOf(c.id)}` : ""}`
       : c.lastCallAt ? `${base} · called ${ago(c.lastCallAt)}` : base
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
-    return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-sub="${esc(sub)}" data-q="${esc(search)}">
+    // Active, visible, but Parley has no message from it to count back from (it was ignored while they came in):
+    // agents can't load its earlier history until a new message arrives. Say so, rather than let an agent come up empty.
+    const noHistory = c.synced && isRecent(c) && !callLast && c.canLoadHistory === false
+    const shown = noHistory ? `${sub} · no history yet` : sub
+    return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-hist="${c.canLoadHistory === false ? 0 : 1}" data-sub="${esc(sub)}" data-q="${esc(search)}">
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
-      <div class="grow"><p class="t">${esc(label)}</p><p class="s${callLast && c.lastCallKind === "missed" ? " miss" : ""}">${c.synced ? esc(sub) : "ignored · agents never see it"}</p></div>
+      <div class="grow"><p class="t">${esc(label)}</p><p class="s${callLast && c.lastCallKind === "missed" ? " miss" : ""}${noHistory ? " warn" : ""}"${noHistory ? ` title="${esc(NO_HISTORY)}"` : ""}>${c.synced ? esc(shown) : "ignored · agents never see it"}</p></div>
       ${c.lastMessageAt ? `<span class="when">${ago(c.lastMessageAt)}</span>` : ""}
       <button type="button" class="ign">${c.synced ? "Ignore" : "Ignored"}</button>
     </div>`
@@ -1008,7 +1017,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ${sendingPrefs(conn, opts.today, opts.queued)}
       ${webhooksSection(conn.id, number || name, opts.webhooks)}
       <div class="sec-h chats-h"><span class="label">Chats</span></div>
-      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.</p>
+      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages: only a bookmark of the latest one (no text), so if you turn it back on, agents can fetch its recent history from your phone.</p>
       ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
           <div class="tags" id="tags">
@@ -1053,11 +1062,15 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
         // Ignore / un-ignore saves at once; only this chat changes on the server.
         let saving=0;
         list.addEventListener('click',async e=>{const b=e.target.closest('.ign');if(!b)return;const r=b.closest('.chat');const ignored=!r.classList.contains('off');
+          if(ignored&&!confirm(${JSON.stringify(IGNORE_CONFIRM)}.replace('{name}',r.querySelector('.t').textContent)))return;
           b.disabled=true;saving++;
           try{const res=await fetch('/app/connections/${esc(conn.id)}/chats/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
             if(!res.ok)throw new Error(res.status);
             r.classList.toggle('off',ignored);b.textContent=ignored?'Ignored':'Ignore';
-            r.querySelector('.s').textContent=ignored?'ignored · agents never see it':r.dataset.sub;tally()}
+            const s=r.querySelector('.s'),fresh=!ignored&&r.dataset.hist==='0';
+            s.textContent=ignored?'ignored · agents never see it':fresh?r.dataset.sub+' · no history yet':r.dataset.sub;
+            s.classList.toggle('warn',fresh);s.title=fresh?${JSON.stringify(NO_HISTORY)}:'';
+            if(ignored)r.dataset.hist='1';tally()}
           catch(x){alert("Couldn't save that. Check your connection and try again.")}
           finally{saving--;b.disabled=false}});
         apply();

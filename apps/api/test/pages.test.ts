@@ -1,3 +1,4 @@
+import type { ChatRow } from "../src/sessions/chats.ts"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { chatsPage, dashboardPage, landingPage, type AgentView } from "../src/web/pages.ts"
@@ -71,6 +72,14 @@ test("an account page shows its chats with the daily limit and disconnect on top
   const user = { name: "R", email: "r@parley.test", image: null, signedInWith: "local", createdAt: "2026-11-01T00:00:00Z" }
   const html = chatsPage({ user, connection: conn, chats: [], agentCount: 1, saved: false, today: { sentToday: 7, dailyLimit: 100 }, queued: 2, webhooks: { webhooks: [], deliveries: [] } })
   assert.match(html, /\+65 9136 3557/)
+  // Ignoring asks first and says what goes; a visible chat Parley can't load history for says so.
+  const row = (c: Partial<ChatRow>): ChatRow => ({ id: "g@g.us", kind: "group", name: "Family 2", synced: true, lastMessageAt: "2026-11-05T07:09:07Z", lastCallAt: null, lastCallKind: null, ...c })
+  const listed = chatsPage({ user, connection: conn, chats: [row({ canLoadHistory: false }), row({ id: "h@g.us", name: "Hikes", canLoadHistory: true }), row({ id: "o@g.us", name: "Old", synced: false, canLoadHistory: false })], agentCount: 1, saved: false, today: null, queued: 0, webhooks: { webhooks: [], deliveries: [] } })
+  assert.match(listed, /if\(ignored&&!confirm\("Ignore \{name\}\?/)
+  assert.match(listed, /load_history/)
+  assert.equal(listed.match(/· no history yet<\/p>/g)?.length, 1)
+  assert.match(listed, /data-id="g@g.us"[^>]*data-hist="0"[\s\S]*?class="s warn" title="Parley has no message from this chat/)
+  assert.doesNotMatch(listed, /Hikes<\/p><p class="s warn"/)
   assert.match(html, /name="daily_limit"[^>]*value="100"/)
   assert.match(html, /name="active_hours" value="on" onchange/)
   assert.match(html, /name="hours_form" value="1"/)

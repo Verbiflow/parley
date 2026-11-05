@@ -3,7 +3,11 @@ import type { CallKind, Chat, InboundMessage, MediaInfo, Reaction } from "@parle
 
 /** CRUD for `parley.chat` / `parley.message`: the chats on a connection, which are synced, and synced messages. */
 
-export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null }
+/**
+ * `canLoadHistory` (listChats only): Parley has a message to count back from (one stored, or an ignored chat's
+ * bookmark), so its earlier history can be fetched from the phone.
+ */
+export type ChatRow = { id: string; kind: "direct" | "group"; name: string | null; synced: boolean; lastMessageAt: string | null; lastCallAt: string | null; lastCallKind: CallKind | null; canLoadHistory?: boolean }
 /** A message's attachment as readers see it: what it is, without the channel's fetch handle. */
 export type MediaView = Omit<MediaInfo, "ref" | "thumbnail">
 /**
@@ -103,10 +107,13 @@ export async function mergeChats(sql: Sql, connectionId: string, pairs: Array<{ 
   const moved = await sql<{ f: string; t: string }>(
     `with p as (select distinct on (t) f, t from jsonb_to_recordset($2::jsonb) as p(f text, t text) order by t, f),
           src as (select c.*, p.t from parley.chat c join p on c.connection_id = $1 and c.id = p.f and c.kind = 'direct')
-     insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind)
-     select $1, t, 'direct', name, synced, last_message_at, last_call_at, last_call_kind from src
+     insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind, anchor)
+     select $1, t, 'direct', name, synced, last_message_at, last_call_at, last_call_kind, anchor from src
      on conflict (connection_id, id) do update set
        name = coalesce(parley.chat.name, excluded.name),
+       anchor = case when excluded.anchor is null then parley.chat.anchor
+                     when parley.chat.anchor is null or (excluded.anchor->>'at')::timestamptz > (parley.chat.anchor->>'at')::timestamptz then excluded.anchor
+                     else parley.chat.anchor end,
        synced = parley.chat.synced and excluded.synced,
        last_message_at = greatest(parley.chat.last_message_at, excluded.last_message_at),
        last_call_kind = case when parley.chat.last_call_at is null or excluded.last_call_at > parley.chat.last_call_at
@@ -181,14 +188,29 @@ export async function touchChat(sql: Sql, connectionId: string, chatId: string, 
 }
 
 export async function listChats(sql: Sql, connectionId: string, opts: { syncedOnly?: boolean } = {}): Promise<ChatRow[]> {
-  const rows = await sql<Raw>(
-    `select ${COLS} from parley.chat
+  const rows = await sql<Raw & { can_load: boolean }>(
+    `select ${COLS}, (anchor is not null or exists (select 1 from parley.message m where m.connection_id = c.connection_id and m.chat_id = c.id)) as can_load
+       from parley.chat c
       where connection_id = $1 ${opts.syncedOnly ? "and synced" : ""}
       order by last_message_at desc nulls last, name nulls last, id`,
     [connectionId]
   )
-  return rows.map(chatRow)
+  return rows.map((r) => ({ ...chatRow(r), canLoadHistory: r.can_load }))
 }
+
+/** A time as ISO text in UTC, whatever the session's time zone. */
+const UTC = (t: string) => `to_char(${t} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+/** A message's key and time as a chat's bookmark (`parley.chat.anchor`): never its text. */
+const ANCHOR_OF = (m: string) => `jsonb_build_object('id', ${m}.id, 'from_me', ${m}.from_me, 'sender', ${m}.sender, 'at', ${UTC(`${m}.sent_at`)})`
+/**
+ * Bookmark the newest stored message of these chats before their messages are deleted (an ignore), unless the chat
+ * already holds a newer bookmark.
+ */
+const BOOKMARK_STORED = `update parley.chat c set anchor = n.a
+   from (select distinct on (m.chat_id) m.chat_id, ${ANCHOR_OF("m")} as a, m.sent_at
+           from parley.message m where m.connection_id = $1 and m.chat_id in (select jsonb_array_elements_text($2::jsonb))
+          order by m.chat_id, m.sent_at desc, m.seq desc) n
+  where c.connection_id = $1 and c.id = n.chat_id and (c.anchor is null or (c.anchor->>'at')::timestamptz <= n.sent_at)`
 
 export async function getChat(sql: Sql, connectionId: string, chatId: string): Promise<ChatRow | undefined> {
   const [r] = await sql<Raw>(`select ${COLS} from parley.chat where connection_id = $1 and id = $2`, [connectionId, chatId])
@@ -206,13 +228,21 @@ export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: st
       where connection_id = $1 and not synced and id in (select jsonb_array_elements_text($2::jsonb)) returning id`,
     [connectionId, ids]
   )
-  await sql(
-    `with off as (
-       update parley.chat set synced = false, updated_at = now()
-        where connection_id = $1 and synced and id not in (select jsonb_array_elements_text($2::jsonb)) returning id)
-     delete from parley.message m using off where m.connection_id = $1 and m.chat_id = off.id`,
+  const off = await sql<{ id: string }>(
+    `select id from parley.chat where connection_id = $1 and synced and id not in (select jsonb_array_elements_text($2::jsonb))`,
     [connectionId, ids]
   )
+  if (off.length) {
+    const offIds = JSON.stringify(off.map((r) => r.id))
+    await sql(BOOKMARK_STORED, [connectionId, offIds])
+    await sql(
+      `with off as (
+         update parley.chat set synced = false, updated_at = now()
+          where connection_id = $1 and synced and id in (select jsonb_array_elements_text($2::jsonb)) returning id)
+       delete from parley.message m using off where m.connection_id = $1 and m.chat_id = off.id`,
+      [connectionId, offIds]
+    )
+  }
   await sql(`update parley.connection set chats_chosen_at = now(), updated_at = now() where id = $1`, [connectionId])
   return on.map((r) => r.id)
 }
@@ -220,10 +250,12 @@ export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: st
 /**
  * Ignore (or stop ignoring) a few chats; every other chat is left as it is. Chats sync by default, so this is the
  * person's control: an ignored chat's stored messages are deleted, and new ones are never stored or shown to agents.
+ * Only a bookmark of its newest message is kept (no text), so its history can be fetched again if it's turned back on.
  */
 export async function setIgnored(sql: Sql, connectionId: string, chatIds: string[], ignored: boolean): Promise<void> {
   if (!chatIds.length) return
   const ids = JSON.stringify(chatIds)
+  if (ignored) await sql(BOOKMARK_STORED, [connectionId, ids])
   await sql(
     `update parley.chat set synced = $3, updated_at = now()
       where connection_id = $1 and synced is distinct from $3 and id in (select jsonb_array_elements_text($2::jsonb))`,
@@ -269,6 +301,15 @@ export async function saveMessages(sql: Sql, connectionId: string, messages: Inb
         and (parley.message.media is null or (excluded.media ? 'thumbnail' and not parley.message.media ? 'thumbnail'))
      returning chat_id, id, (xmax = 0) as inserted`,
     [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), body: m.text, at: m.at, media: m.media ?? null })))]
+  )
+  // An ignored chat keeps none of these, only a bookmark of the newest (its id, sender and time, never its text).
+  await sql(
+    `update parley.chat c set anchor = n.a
+       from (select distinct on (m.chat_id) m.chat_id, jsonb_build_object('id', m.id, 'from_me', m.from_me, 'sender', left(m.sender, 200), 'at', ${UTC("m.at")}) as a, m.at
+               from jsonb_to_recordset($2::jsonb) as m(chat_id text, id text, sender text, from_me boolean, at timestamptz)
+              order by m.chat_id, m.at desc) n
+      where c.connection_id = $1 and c.id = n.chat_id and not c.synced and (c.anchor is null or (c.anchor->>'at')::timestamptz < n.at)`,
+    [connectionId, JSON.stringify(messages.map((m) => ({ chat_id: m.threadId, id: m.id, sender: m.from, from_me: Boolean(m.fromMe), at: m.at })))]
   )
   const reactions = await saveReactions(sql, connectionId, messages.flatMap((m) => m.reactions ?? []))
   return { inserted: rows.filter((r) => r.inserted).map((r) => ({ chatId: r.chat_id, id: r.id })), reactions }
@@ -341,13 +382,22 @@ export async function saveReactions(sql: Sql, connectionId: string, reactions: R
     }))
 }
 
-/** A chat's newest stored message: where fetching older history from the phone starts. */
-export async function newestMessage(sql: Sql, connectionId: string, chatId: string): Promise<{ messageId: string; fromMe: boolean; sender: string; at: string } | undefined> {
-  const [r] = await sql<{ id: string; from_me: boolean; sender: string; sent_at: Date }>(
-    `select id, from_me, sender, sent_at from parley.message where connection_id = $1 and chat_id = $2 order by sent_at desc, seq desc limit 1`,
+/**
+ * Where fetching older history from the phone starts: the chat's newest stored message or, with none stored, its
+ * bookmark (the newest message that came in while it was ignored), whichever is newer. `stored`: the anchor is a
+ * stored message (so it's one of the messages a fetch returns); a bookmark's message isn't stored.
+ */
+export async function newestMessage(sql: Sql, connectionId: string, chatId: string): Promise<{ messageId: string; fromMe: boolean; sender: string; at: string; stored: boolean } | undefined> {
+  const [r] = await sql<{ id: string; from_me: boolean; sender: string; sent_at: Date; stored: boolean }>(
+    `select * from (
+       (select id, from_me, sender, sent_at, true as stored from parley.message where connection_id = $1 and chat_id = $2 order by sent_at desc, seq desc limit 1)
+       union all
+       (select anchor->>'id', (anchor->>'from_me')::boolean, anchor->>'sender', (anchor->>'at')::timestamptz, false
+          from parley.chat where connection_id = $1 and id = $2 and anchor is not null)
+     ) x order by sent_at desc, stored desc limit 1`,
     [connectionId, chatId]
   )
-  return r && { messageId: r.id, fromMe: r.from_me, sender: r.sender, at: r.sent_at.toISOString() }
+  return r && { messageId: r.id, fromMe: r.from_me, sender: r.sender, at: new Date(r.sent_at).toISOString(), stored: r.stored }
 }
 
 /** A stored message's attachment, with the channel's fetch handle. Undefined when there's no such message or no media. */
