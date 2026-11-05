@@ -326,6 +326,8 @@ export const whatsappChannel: Channel = {
      * after a decryption failure). No relink: only Parley's side of the session with its own phone is renewed.
      */
     const unanswered = new Map<string, number>()
+    /** Recent history requests (id → when sent), so what comes back for them can be traced. Bounded. */
+    const historyRequests = new Map<string, number>()
     let phoneSessionRenewed = false
     const renewPhoneSession = async (why: "first request" | "unanswered request") => {
       const me = sock.user
@@ -498,6 +500,22 @@ export const whatsappChannel: Channel = {
       }
       on("creds.update", saveNow)
 
+      // What comes back for a history request: WhatsApp's server ack (with an error code if it refused it) and the
+      // phone's receipts (delivered, read, or "retry" when it couldn't decrypt it). Ids, types and codes only.
+      const traceRequest = (kind: "ack" | "receipt") => (node: { attrs?: Record<string, string> }) => {
+        const a = node.attrs ?? {}
+        const sent = a.id ? historyRequests.get(a.id) : undefined
+        if (sent === undefined) return
+        const from = a.from ?? ""
+        console.log(JSON.stringify({
+          msg: `whatsapp: history request ${kind}`, requestId: a.id, class: a.class, type: a.type ?? "delivery", error: a.error,
+          phash: a.phash ? true : undefined, device: from.includes(":") ? from.split(":")[1]!.split("@")[0] : from ? "0" : undefined,
+          addressing: from.endsWith("@lid") ? "lid" : from ? "pn" : undefined, ms: Date.now() - sent,
+        }))
+      }
+      sock.ws.on("CB:ack,class:message", traceRequest("ack"))
+      sock.ws.on("CB:receipt", traceRequest("receipt"))
+
       on("connection.update", (u) => {
         if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
         if (u.connection === "open") {
@@ -640,6 +658,8 @@ export const whatsappChannel: Channel = {
           if (isJidGroup(jid) && !anchor.fromMe && anchor.sender && anchor.sender !== "me") key.participant = toJid(anchor.sender)
           const requestId = await sock.fetchMessageHistory(Math.max(1, Math.min(50, count)), key, Date.parse(anchor.at))
           unanswered.set(requestId, Date.now())
+          historyRequests.set(requestId, Date.now())
+          if (historyRequests.size > 100) historyRequests.delete(historyRequests.keys().next().value!)
           console.log(JSON.stringify({ msg: "whatsapp: history requested", requestId, addressing: remoteJid.endsWith("@lid") ? "lid" : isJidGroup(remoteJid) ? "group" : "pn", count }))
         }
       },
