@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { makeWebhookPoster, type WebhookPoster } from "../src/sessions/webhook-delivery.ts"
-import { checkWebhookUrl, signWebhook, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
+import { checkHeaders, checkWebhookUrl, signWebhook, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
 import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
@@ -301,10 +301,11 @@ test("the real sender refuses private addresses (even by name) and never follows
     const open = makeWebhookPoster({ allowPrivate: true, timeoutMs: 500 })
     const body = JSON.stringify({ hello: "world" })
     const signature = await signWebhook("whsec_test", body, 1_700_000_000)
-    assert.deepEqual(await open({ url: `http://127.0.0.1:${port}/ok`, body, headers: { "parley-signature": signature, "parley-event": "webhook.test" } }), { status: 204 })
+    assert.deepEqual(await open({ url: `http://127.0.0.1:${port}/ok`, body, headers: { Authorization: "Bearer receiver-key", "parley-signature": signature, "parley-event": "webhook.test" } }), { status: 204 })
     assert.equal(hits[0]!.req.method, "POST")
     assert.equal(hits[0]!.req.headers["content-type"], "application/json")
     assert.equal(hits[0]!.req.headers["parley-event"], "webhook.test")
+    assert.equal(hits[0]!.req.headers.authorization, "Bearer receiver-key", "a webhook's own header goes over the wire")
     assert.equal(hits[0]!.body, body)
     assert.equal(signature, `t=1700000000,v1=${createHmac("sha256", "whsec_test").update(`1700000000.${body}`).digest("hex")}`)
     assert.deepEqual(await open({ url: `http://127.0.0.1:${port}/redirect`, ...req }), { status: 302 })
@@ -314,6 +315,75 @@ test("the real sender refuses private addresses (even by name) and never follows
     server.closeAllConnections()
     await new Promise<void>((r) => server.close(() => r()))
   }
+})
+
+test("headers of a webhook's own: valid names, one each, none of Parley's, values on one line; blank keeps when editing", () => {
+  assert.deepEqual(checkHeaders([{ name: " Authorization ", value: " Bearer k " }, { name: "", value: "" }]), [{ name: "Authorization", value: "Bearer k" }])
+  for (const [h, why] of [
+    [{ name: "Parley-Signature", value: "x" }, /Parley sets Parley-Signature itself/],
+    [{ name: "content-type", value: "text/plain" }, /sets content-type itself/],
+    [{ name: "Host", value: "evil.example" }, /sets Host itself/],
+    [{ name: "Bad Name", value: "x" }, /isn't a valid header name/],
+    [{ name: "X-Key", value: "a\r\nX-Injected: 1" }, /plain characters on one line/],
+    [{ name: "X-Key", value: "" }, /give X-Key a value/],
+  ] as const) assert.throws(() => checkHeaders([h]), why)
+  assert.throws(() => checkHeaders([{ name: "X-Key", value: "a" }, { name: "x-key", value: "b" }]), /there twice/)
+  assert.throws(() => checkHeaders(Array.from({ length: MAX_WEBHOOK_HEADERS + 1 }, (_, i) => ({ name: `X-${i}`, value: "v" }))), /at most 10/)
+  assert.deepEqual(checkHeaders([{ name: "authorization", value: null }], { Authorization: "Bearer old" }), [{ name: "authorization", value: "Bearer old" }])
+  assert.throws(() => checkHeaders([{ name: "X-New", value: null }], { Authorization: "Bearer old" }), /give X-New a value/)
+})
+
+test("a webhook can send a receiver's own key with every request: sealed at rest, sent with the signature, only ever shown as a hint", async () => {
+  reset()
+  const email = "routine@parley.test"
+  const { accountId, connectionId: cid } = await linked(email)
+  const token = await agentToken(base, email, "Grok Bot")
+  const key = "Bearer routine-key-0123456789"
+  const created = await callTool(base, token, "create_webhook", { url: "https://hooks.example.com/routine", headers: { Authorization: key, "X-Routine": "parley" } })
+  assert.equal(created.isError, false, JSON.stringify(created.result))
+  assert.deepEqual(created.result.headers, [{ name: "Authorization", value_ends_with: "6789" }, { name: "X-Routine", value_ends_with: null }])
+  assert.ok(!JSON.stringify(created.result).includes("routine-key"), "the value never comes back")
+  const id = created.result.id
+  const [row] = await sql<Record<string, unknown>>(`select * from parley.webhook where id = $1`, [id])
+  assert.ok(!JSON.stringify(row).includes("routine-key"), "sealed at rest")
+
+  // Sent on every request, beside Parley's own headers and signature.
+  await ctx.webhooks.test(sql, accountId, id)
+  await flush()
+  const sent = received.at(-1)!
+  assert.equal(sent.headers.Authorization, key)
+  assert.equal(sent.headers["X-Routine"], "parley")
+  assert.ok(verifies(sent, created.result.secret), "still signed")
+
+  // Parley's own can't be set, and a bad one changes nothing.
+  for (const headers of [{ "Parley-Signature": "forged" }, { "User-Agent": "x" }, { "Bad Name": "x" }, { "X-Key": "line\r\nX-Injected: 1" }]) {
+    const bad = await callTool(base, token, "update_webhook", { webhook_id: id, headers })
+    assert.equal(bad.isError, true, JSON.stringify(headers))
+  }
+  assert.deepEqual(await ctx.webhooks.headers(sql, accountId, id), { Authorization: key, "X-Routine": "parley" })
+
+  // On the number's page: names and hints, never the value. Editing with the value left blank keeps it; clearing a
+  // name removes that header; a new row adds one.
+  const cookie = (await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email }) })).headers.get("set-cookie")!.split(";")[0]!
+  const page = await (await fetch(`${base}/app/connections/${cid}`, { headers: { cookie } })).text()
+  assert.match(page, /sends <span class="hdl">Authorization<\/span> …6789, <span class="hdl">X-Routine<\/span>/)
+  assert.match(page, /value="Authorization" placeholder=""[^>]*>\s*<input[^>]*placeholder="unchanged \(…6789\)"/)
+  assert.ok(!page.includes("routine-key"))
+  const edit = await fetch(`${base}/app/connections/${cid}/webhooks/${id}/update`, {
+    method: "POST", redirect: "manual", headers: { cookie },
+    body: new URLSearchParams([["url", "https://hooks.example.com/routine"], ["events", "message.received"],
+      ["header_name", "Authorization"], ["header_value", ""], ["header_name", ""], ["header_value", ""], ["header_name", "X-Two"], ["header_value", "two"]]),
+  })
+  assert.equal(edit.status, 302)
+  assert.deepEqual(await ctx.webhooks.headers(sql, accountId, id), { Authorization: key, "X-Two": "two" })
+
+  // An agent can replace them all, or remove them with {}.
+  assert.equal((await callTool(base, token, "update_webhook", { webhook_id: id, headers: {} })).isError, false)
+  assert.deepEqual(await ctx.webhooks.headers(sql, accountId, id), {})
+  reset()
+  await ctx.webhooks.test(sql, accountId, id)
+  await flush()
+  assert.equal(received.at(-1)!.headers.Authorization, undefined)
 })
 
 test("agents manage webhooks over MCP, and each number's page shows and configures them", async () => {

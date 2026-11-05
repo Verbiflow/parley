@@ -442,6 +442,13 @@ export function webRoutes(ctx: AppContext): Hono {
 
   // ---- Webhooks: each number's, on its account page (#webhooks). ---------------------------------------------------
 
+  /** The header rows of a webhook form, paired up. Editing, a blank value keeps what that header already has. */
+  const headersFrom = (f: FormData, editing: boolean) => {
+    const names = f.getAll("header_name").map(String)
+    const values = f.getAll("header_value").map(String)
+    return names.map((name, i) => ({ name, value: editing && !(values[i] ?? "").trim() ? (name.trim() ? null : "") : (values[i] ?? "") }))
+  }
+
   // The old top-level page: webhooks live on each number's page now.
   app.get("/app/webhooks", (c) => c.redirect("/app"))
 
@@ -455,6 +462,7 @@ export function webRoutes(ctx: AppContext): Hono {
     try {
       const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, {
         connectionId: cid, url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), createdBy: "dashboard",
+        headers: headersFrom(f, false),
       })
       return accountPage(c, cid, { revealed: { id: webhook.id, secret, fresh: true } })
     } catch (e) {
@@ -491,7 +499,7 @@ export function webRoutes(ctx: AppContext): Hono {
       switch (c.req.param("action")) {
         case "update": {
           const f = await c.req.formData()
-          await ctx.webhooks.update(ctx.sql, userId, id, { url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? "") })
+          await ctx.webhooks.update(ctx.sql, userId, id, { url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), headers: headersFrom(f, true) })
           return back("saved")
         }
         case "enable":

@@ -28,6 +28,8 @@ export const TEST_EVENT = "webhook.test"
 
 /** The most webhooks one connection (number) can have. */
 export const MAX_WEBHOOKS = 10
+/** The most headers of its own a webhook can send. */
+export const MAX_WEBHOOK_HEADERS = 10
 /** Attempts per delivery: the first, then two retries. */
 export const MAX_ATTEMPTS = 3
 /** How long to wait before the second and third attempts. */
@@ -55,25 +57,34 @@ export type Webhook = {
   id: string; connectionId: string; url: string; events: WebhookEvent[]; description: string | null; enabled: boolean; createdBy: string
   /** The secret's last few characters, so a person can tell which one their receiver has. */
   secretHint: string
+  /** Headers of its own it sends on every request (e.g. the receiver's `Authorization`): names, and a hint of each value. */
+  headers: WebhookHeader[]
   lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string | null
   createdAt: string; updatedAt: string
 }
+/** A header the webhook sends, as shown back: its name and the value's last few characters (empty for a short value). */
+export type WebhookHeader = { name: string; hint: string }
+/** A header to set: `value: null` (editing only) keeps the value it already has under that name. */
+export type WebhookHeaderInput = { name: string; value: string | null }
 
 type Row = {
   id: string; account_id: string; connection_id: string; url: string; events: string[]; description: string | null; enabled: boolean; created_by: string; secret_hint: string
+  header_hints: WebhookHeader[] | string
   last_success_at: Date | null; last_failure_at: Date | null; last_error: string | null; created_at: Date; updated_at: Date
 }
 type SealedRow = Row & { sealed_version: string; sealed_key_id: string; sealed_iv: string; sealed: string }
+type SealedHeadersRow = { headers_sealed_version: string | null; headers_sealed_key_id: string | null; headers_sealed_iv: string | null; headers_sealed: string | null }
 type DeliveryRow = {
   id: string; webhook_id: string; event_id: string; event: string; status: DeliveryStatus; attempts: number; next_attempt_at: Date | null
   last_status: number | null; last_error: string | null; created_at: Date; delivered_at: Date | null; payload: unknown
 }
 
-const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, last_success_at, last_failure_at, last_error, created_at, updated_at`
+const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, header_hints, last_success_at, last_failure_at, last_error, created_at, updated_at`
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null)
 const view = (r: Row): Webhook => ({
   id: r.id, connectionId: r.connection_id, url: r.url, events: r.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)),
   description: r.description, enabled: r.enabled, createdBy: r.created_by, secretHint: r.secret_hint,
+  headers: typeof r.header_hints === "string" ? JSON.parse(r.header_hints) : r.header_hints,
   lastSuccessAt: iso(r.last_success_at), lastFailureAt: iso(r.last_failure_at), lastError: r.last_error,
   createdAt: iso(r.created_at)!, updatedAt: iso(r.updated_at)!,
 })
@@ -114,6 +125,48 @@ function checkEvents(events: readonly string[] | undefined): WebhookEvent[] {
 
 const cleanDescription = (d: string | null | undefined) => (d == null ? null : d.trim().slice(0, 200) || null)
 
+/** An HTTP header name (RFC 9110 token). */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,100}$/
+/** Visible ASCII, spaces and tabs: nothing that could end the header or start another. */
+const HEADER_VALUE = /^[\t\x20-\x7e]{1,2000}$/
+/**
+ * Headers Parley sets itself, or that would change how the request is framed or routed: a webhook can't send its own.
+ * Everything else (Authorization, X-Api-Key, …) is the receiver's business.
+ */
+const RESERVED_HEADERS = new Set([
+  "host", "content-type", "content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive", "te", "trailer",
+  "upgrade", "expect", "user-agent", "proxy-authorization", "proxy-connection",
+])
+const reserved = (lower: string) => RESERVED_HEADERS.has(lower) || lower.startsWith("parley-") || lower.startsWith("sec-")
+
+/** A header's value, as shown back: its last four characters when it's long enough not to give itself away. */
+const headerHint = (value: string) => (value.length >= 12 ? value.slice(-4) : "")
+
+/**
+ * The headers a webhook will send, checked: valid names, one of each (case doesn't count), none Parley sets itself,
+ * values on one line. `value: null` keeps what `existing` has under that name.
+ */
+export function checkHeaders(input: readonly WebhookHeaderInput[], existing: Record<string, string> = {}): Array<{ name: string; value: string }> {
+  const out: Array<{ name: string; value: string }> = []
+  const seen = new Set<string>()
+  const kept = new Map(Object.entries(existing).map(([k, v]) => [k.toLowerCase(), v]))
+  for (const h of input) {
+    const name = h.name.trim()
+    if (!name && !h.value?.trim()) continue
+    if (!HEADER_NAME.test(name)) throw new WebhookError("invalid", `"${name.slice(0, 100)}" isn't a valid header name (letters, digits and - only, like X-Api-Key)`)
+    const lower = name.toLowerCase()
+    if (reserved(lower)) throw new WebhookError("invalid", `Parley sets ${name} itself; use another header (Authorization or X-Api-Key, say)`)
+    if (seen.has(lower)) throw new WebhookError("invalid", `${name} is there twice`)
+    seen.add(lower)
+    const value = h.value === null ? kept.get(lower) : h.value.trim()
+    if (!value) throw new WebhookError("invalid", `give ${name} a value`)
+    if (!HEADER_VALUE.test(value)) throw new WebhookError("invalid", `${name}'s value must be 1–2000 plain characters on one line`)
+    out.push({ name, value })
+  }
+  if (out.length > MAX_WEBHOOK_HEADERS) throw new WebhookError("invalid", `a webhook can send at most ${MAX_WEBHOOK_HEADERS} headers of its own`)
+  return out
+}
+
 /** A fresh signing secret: `whsec_` and 32 random bytes, base64url. */
 function newWebhookSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
@@ -121,6 +174,8 @@ function newWebhookSecret(): string {
 }
 
 const binding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook", name: id, version })
+/** The headers are sealed apart from the signing secret, under their own purpose, so neither opens as the other. */
+const headersBinding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook-headers", name: id, version })
 
 const enc = new TextEncoder()
 const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("")
@@ -154,6 +209,32 @@ export class Webhooks {
     return { version, keyId: s.keyId, iv: s.iv, sealed: s.sealed, hint: secret.slice(-4) }
   }
 
+  /** The columns a set of headers is kept in: sealed values and the hints shown back (all null/empty for none). */
+  async #sealHeaders(accountId: string, id: string, headers: Array<{ name: string; value: string }>) {
+    const hints = JSON.stringify(headers.map((h) => ({ name: h.name, hint: headerHint(h.value) })))
+    if (!headers.length) return { hints, version: null, keyId: null, iv: null, sealed: null }
+    const version = crypto.randomUUID()
+    const s = await (await this.#sealer()).seal(headersBinding(accountId, id, version), enc.encode(JSON.stringify(headers)))
+    return { hints, version, keyId: s.keyId, iv: s.iv, sealed: s.sealed }
+  }
+
+  /** The headers a webhook sends of its own, opened: name to value, in the order they were given. */
+  async headers(sql: Sql, accountId: string, id: string): Promise<Record<string, string>> {
+    if (!UUID.test(id)) throw new WebhookError("not_found", "no such webhook")
+    const [row] = await sql<SealedHeadersRow>(
+      `select headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed from parley.webhook where id = $1 and account_id = $2`,
+      [id, accountId]
+    )
+    if (!row) throw new WebhookError("not_found", "no such webhook")
+    if (!row.headers_sealed_version || !row.headers_sealed_key_id || !row.headers_sealed_iv || !row.headers_sealed) return {}
+    const bytes = await (await this.#sealer()).open(headersBinding(accountId, id, row.headers_sealed_version), {
+      scheme: "server.v1", keyId: row.headers_sealed_key_id, iv: row.headers_sealed_iv, sealed: row.headers_sealed,
+    })
+    if (!bytes) throw new Error(`webhook ${id}'s headers don't open`)
+    const list = JSON.parse(new TextDecoder().decode(bytes)) as Array<{ name: string; value: string }>
+    return Object.fromEntries(list.map((h) => [h.name, h.value]))
+  }
+
   /** Plain http is only for local development (a receiver on this machine still needs to be public, though). */
   get allowHttp(): boolean {
     return this.#config.env === "local"
@@ -182,39 +263,60 @@ export class Webhooks {
   }
 
   /** Register a webhook on one of the account's connections. Answers it with its signing secret, the one time the secret is handed over unasked. */
-  async create(sql: Sql, accountId: string, req: { connectionId: string; url: string; events?: readonly string[] | undefined; description?: string | null | undefined; createdBy?: string | undefined }): Promise<{ webhook: Webhook; secret: string }> {
+  async create(sql: Sql, accountId: string, req: {
+    connectionId: string; url: string; events?: readonly string[] | undefined; description?: string | null | undefined; createdBy?: string | undefined
+    headers?: readonly WebhookHeaderInput[] | undefined
+  }): Promise<{ webhook: Webhook; secret: string }> {
     const url = checkWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = checkEvents(req.events)
+    const headers = checkHeaders(req.headers ?? [])
     if (!UUID.test(req.connectionId)) throw new WebhookError("not_found", "no such connection")
     const [conn] = await sql<{ id: string }>(`select id from parley.connection where id = $1 and account_id = $2`, [req.connectionId, accountId])
     if (!conn) throw new WebhookError("not_found", "no such connection")
     const id = crypto.randomUUID()
     const secret = newWebhookSecret()
     const s = await this.#sealSecret(accountId, id, secret)
+    const h = await this.#sealHeaders(accountId, id, headers)
     const [row] = await sql<Row>(
-      `insert into parley.webhook (id, account_id, connection_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint)
-       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11
+      `insert into parley.webhook (id, account_id, connection_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint,
+                                   header_hints, headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed)
+       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14, $15, $16, $17, $18
         where (select count(*) from parley.webhook where connection_id = $13) < $12
        returning ${COLS}`,
-      [id, accountId, url, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId]
+      [id, accountId, url, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId,
+        h.hints, h.version, h.keyId, h.iv, h.sealed]
     )
     if (!row) throw new WebhookError("limit", `a number can have at most ${MAX_WEBHOOKS} webhooks; remove one first`)
     return { webhook: view(row), secret }
   }
 
   /**
-   * Change a webhook's URL, events, description, or whether it's on. Turning one off fails what it still had waiting
-   * (nothing is held back to flood it when it comes back on).
+   * Change a webhook's URL, events, description, headers, or whether it's on. `headers` replaces the whole set (empty
+   * removes them all). Turning one off fails what it still had waiting (nothing is held back to flood it when it
+   * comes back on).
    */
-  async update(sql: Sql, accountId: string, id: string, req: { url?: string | undefined; events?: readonly string[] | undefined; description?: string | null | undefined; enabled?: boolean | undefined }): Promise<Webhook> {
+  async update(sql: Sql, accountId: string, id: string, req: {
+    url?: string | undefined; events?: readonly string[] | undefined; description?: string | null | undefined; enabled?: boolean | undefined
+    headers?: readonly WebhookHeaderInput[] | undefined
+  }): Promise<Webhook> {
     await this.get(sql, accountId, id)
     const url = req.url === undefined ? null : checkWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = req.events === undefined ? null : checkEvents(req.events)
+    const h = req.headers === undefined
+      ? null
+      : await this.#sealHeaders(accountId, id, checkHeaders(req.headers, req.headers.some((x) => x.value === null) ? await this.headers(sql, accountId, id) : {}))
     const [row] = await sql<Row>(
       `update parley.webhook set url = coalesce($3, url), events = coalesce($4, events),
-              description = case when $5 then $6 else description end, enabled = coalesce($7, enabled), updated_at = now()
+              description = case when $5 then $6 else description end, enabled = coalesce($7, enabled),
+              header_hints = case when $8 then $9::jsonb else header_hints end,
+              headers_sealed_version = case when $8 then $10::uuid else headers_sealed_version end,
+              headers_sealed_key_id = case when $8 then $11 else headers_sealed_key_id end,
+              headers_sealed_iv = case when $8 then $12 else headers_sealed_iv end,
+              headers_sealed = case when $8 then $13 else headers_sealed end,
+              updated_at = now()
         where id = $1 and account_id = $2 returning ${COLS}`,
-      [id, accountId, url, events, req.description !== undefined, cleanDescription(req.description), req.enabled ?? null]
+      [id, accountId, url, events, req.description !== undefined, cleanDescription(req.description), req.enabled ?? null,
+        h !== null, h?.hints ?? null, h?.version ?? null, h?.keyId ?? null, h?.iv ?? null, h?.sealed ?? null]
     )
     if (!row) throw new WebhookError("not_found", "no such webhook")
     if (req.enabled === false) {

@@ -106,12 +106,12 @@ async function sendOne(ctx: { sql: Sql; webhooks: Webhooks; post: WebhookPoster 
   let status: number | null = null
   let error: string | null = null
   try {
-    const secret = await ctx.webhooks.secret(ctx.sql, d.account_id, d.webhook_id)
+    const [secret, own] = await Promise.all([ctx.webhooks.secret(ctx.sql, d.account_id, d.webhook_id), ctx.webhooks.headers(ctx.sql, d.account_id, d.webhook_id)])
     const body = JSON.stringify(d.payload)
     const signature = await signWebhook(secret, body, Math.floor(Date.now() / 1000))
     const res = await ctx.post({
       url: d.url, body,
-      headers: { "parley-event": d.event, "parley-event-id": d.event_id, "parley-delivery-id": d.id, "parley-attempt": String(d.attempts), "parley-signature": signature },
+      headers: { ...own, "parley-event": d.event, "parley-event-id": d.event_id, "parley-delivery-id": d.id, "parley-attempt": String(d.attempts), "parley-signature": signature },
     })
     status = res.status
     if (status < 200 || status >= 300) error = status >= 300 && status < 400 ? `answered HTTP ${status} (redirects aren't followed)` : `answered HTTP ${status}`
