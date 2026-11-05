@@ -6,6 +6,7 @@ import { proxyAgent } from "@parley/proxies/agent"
 import { SendFailure, type CallKind, type Channel, type Chat, type InboundMessage, type LiveConnection, type OpenOptions, type OutboundContent, type Reaction } from "../contract.ts"
 import { makeAuthState } from "./auth-state.ts"
 import { Readable } from "node:stream"
+import { get as httpsGet, type Agent } from "node:https"
 import { textOf, mediaOf, messageOfRef, reactionOf, revokedOf, embeddedReactions, mp4Seconds, type RawReaction } from "./parse.ts"
 import { WHATSAPP_ID, WHATSAPP_CAPABILITIES } from "./meta.ts"
 
@@ -102,6 +103,37 @@ export function contentFor(jid: string, content: OutboundContent): AnyMessageCon
     case "audio": return { audio: data, mimetype: media.mimetype, ptt: /ogg|opus/i.test(media.mimetype) }
     case "document": return { document: data, mimetype: media.mimetype, fileName: media.fileName ?? "file", caption }
   }
+}
+
+/**
+ * The account's own profile picture, as a `data:` URL of WhatsApp's small thumbnail (WhatsApp's picture links expire,
+ * so the host keeps the bytes). null: the account has no picture. undefined: couldn't tell (a network blip) — keep
+ * whatever the host already has.
+ */
+async function ownPicture(sock: ReturnType<typeof makeWASocket>, agent?: Agent): Promise<string | null | undefined> {
+  const me = sock.user?.id
+  if (!me) return undefined
+  let url: string | undefined
+  try {
+    url = await sock.profilePictureUrl(jidNormalizedUser(me), "preview", 10_000)
+  } catch (e) {
+    const code = (e as { output?: { statusCode?: number } }).output?.statusCode
+    return code === 404 || code === 401 ? null : undefined
+  }
+  if (!url) return null
+  const bytes = await new Promise<Buffer | undefined>((resolve) => {
+    const req = httpsGet(url, { agent, timeout: 10_000 }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(undefined) }
+      const parts: Buffer[] = []
+      let size = 0
+      res.on("data", (c: Buffer) => { size += c.length; if (size > 100_000) { req.destroy(); resolve(undefined) } else parts.push(c) })
+      res.on("end", () => resolve(Buffer.concat(parts)))
+      res.on("error", () => resolve(undefined))
+    })
+    req.on("timeout", () => req.destroy())
+    req.on("error", () => resolve(undefined))
+  })
+  return bytes?.length ? `data:image/jpeg;base64,${bytes.toString("base64")}` : undefined
 }
 
 /**
@@ -449,6 +481,9 @@ export const whatsappChannel: Channel = {
             .then((groups) => report(Object.values(groups).map((g) => chatOf(g.id, g.subject))))
             .catch(() => {})
           syncNames(sock, 8000, 2)
+          ownPicture(sock, fetchAgent)
+            .then((image) => { if (image !== undefined && !stopped) emit({ type: "avatar", image }) })
+            .catch(() => {})
         }
         if (u.connection === "close") {
           if (stopped) return

@@ -91,6 +91,8 @@ export type ChannelEvent =
   | { type: "link"; method: LinkMethod; data: string }
   /** Linked and live. `handle` is the account's own address on the channel (e.g. its phone number). */
   | { type: "open"; handle: string }
+  /** The account's own profile picture, as a small `data:` image URL, or null when it has none. Sent after `open`. */
+  | { type: "avatar"; image: string | null }
   /** Opaque channel session state to persist. The host seals it (AES-256-GCM) before storing in Postgres. */
   | { type: "state"; state: string }
   /** Chats the channel learned of (initial history sync, a new conversation, a name change). An upsert, not a full list. */

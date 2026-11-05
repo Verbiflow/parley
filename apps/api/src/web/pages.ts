@@ -158,6 +158,9 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .acard:not(.add):hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
 .acard .ah{position:relative;display:flex;align-items:center;gap:12px}
 .acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-ring)}
+.acard .ct.dp{position:relative;background:none;box-shadow:none}
+.acard .ct.dp img{width:40px;height:40px;border-radius:50%;object-fit:cover;box-shadow:inset 0 0 0 1px rgba(255,246,232,.08)}
+.acard .ct.dp .badge{position:absolute;top:-3px;right:-3px;display:grid;place-items:center;width:17px;height:17px;border-radius:50%;background:var(--card);box-shadow:0 0 0 1px var(--line-2)}
 .acard .grow{flex:1;min-width:0}
 .acard b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .acard small{display:block;font-size:12.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -260,7 +263,9 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
     ? `<a class="awh" href="/app/connections/${esc(c.id)}#webhooks"><span>Webhooks</span>${webhooks ? `<span class="m">${webhooks}</span>` : `<span class="cfg">Configure ${icon("arrow", 12)}</span>`}</a>`
     : ""
   return `<div class="acard"><a class="cover" href="${href}" aria-label="${esc(number)}"></a>
-    <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
+    <div class="ah">${c.avatar
+      ? `<span class="ct dp"><img src="${esc(c.avatar)}" alt="" width="40" height="40"><span class="badge">${channelMark(c.channel, 11)}</span></span>`
+      : `<span class="ct">${channelMark(c.channel, 20)}</span>`}<div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
     ${body}
     ${hooks}
   </div>`
