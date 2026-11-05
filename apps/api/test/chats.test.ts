@@ -29,7 +29,7 @@ async function linked(email: string) {
   return { accountId: account.id, connectionId }
 }
 
-test("chats sync by default; ignoring one deletes what was stored and keeps new messages out; un-ignoring resumes", async () => {
+test("chats sync by default; ignoring one hides it from agents (its messages kept privately); un-ignoring brings it all back", async () => {
   const { accountId, connectionId } = await linked("chats@parley.test")
 
   fake.simulator.announceChats(connectionId, [
@@ -48,7 +48,7 @@ test("chats sync by default; ignoring one deletes what was stored and keeps new 
   await waitUntil(() => sessions.messages(accountId, connectionId, "alice", { limit: 10 }), (r) => r.messages.length === 2)
   await waitUntil(() => sessions.messages(accountId, connectionId, "bob", { limit: 10 }), (r) => r.messages.length === 1)
 
-  // Ignore Bob: his stored message is deleted, agents can't read him, and new messages from him aren't kept.
+  // Ignore Bob: agents can't read him; his messages, old and new, are kept privately.
   await setIgnored(sql, connectionId, ["bob"], true)
   await assert.rejects(sessions.messages(accountId, connectionId, "bob", { limit: 10 }), /no such synced chat/)
   assert.deepEqual((await sessions.chats(accountId, connectionId, { syncedOnly: true })).map((c) => c.id).sort(), ["alice", "family"])
@@ -56,7 +56,8 @@ test("chats sync by default; ignoring one deletes what was stored and keeps new 
   fake.simulator.deliver(connectionId, { threadId: "alice", from: "alice", text: "live one" })
   await waitUntil(() => sessions.messages(accountId, connectionId, "alice", { limit: 10 }), (r) => r.messages.length === 3)
   const [{ bobs }] = await sql<{ bobs: string }>(`select count(*)::text as bobs from parley.message where connection_id = $1 and chat_id = 'bob'`, [connectionId])
-  assert.equal(bobs, "0")
+  assert.equal(bobs, "2")
+  assert.ok(!(await sessions.inbox(accountId, { limit: 50 })).some((m) => m.chatId === "bob"))
 
   // A chat that turns up later syncs too (ignoring is per chat, not a snapshot of the list).
   fake.simulator.deliver(connectionId, { threadId: "dana", from: "dana", text: "new here" })
@@ -67,11 +68,11 @@ test("chats sync by default; ignoring one deletes what was stored and keeps new 
   const named = await waitUntil(() => sessions.chats(accountId, connectionId), (c) => c.find((x) => x.id === "bob")?.name === "Bob")
   assert.equal(named.find((c) => c.id === "alice")!.name, "Alice")
 
-  // Un-ignore Bob: new messages are kept again.
+  // Un-ignore Bob: everything he sent is there again, and new messages keep coming.
   await setIgnored(sql, connectionId, ["bob"], false)
   fake.simulator.deliver(connectionId, { threadId: "bob", from: "bob", text: "back again" })
-  const back = await waitUntil(() => sessions.messages(accountId, connectionId, "bob", { limit: 10 }), (r) => r.messages.length === 1)
-  assert.equal(back.messages[0]!.text, "back again")
+  const back = await waitUntil(() => sessions.messages(accountId, connectionId, "bob", { limit: 10 }), (r) => r.messages.length === 3)
+  assert.deepEqual(back.messages.map((m) => m.text), ["bob's secret", "still private", "back again"])
 })
 
 test("another account can't read or choose chats on a connection", async () => {
@@ -260,14 +261,15 @@ test("an ignore made under a private id carries to the number once they're match
   const [row] = await sessions.chats(accountId, connectionId)
   assert.equal(row!.id, "6599990000@s.whatsapp.net")
   assert.equal(row!.synced, false)
-  // And a message to that number later isn't kept.
+  // And a message to that number later is kept privately, never shown.
   fake.simulator.deliver(connectionId, { threadId: "6599990000@s.whatsapp.net", from: "x", text: "nope" })
   await new Promise((r) => setTimeout(r, 100))
   const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
-  assert.equal(n, "0")
+  assert.equal(n, "1")
+  assert.deepEqual(await sessions.inbox(accountId, { limit: 10 }), [])
 })
 
-test("a history batch is stored in one go: chats get their latest activity, ignored chats keep nothing", async () => {
+test("a history batch is stored in one go: chats get their latest activity, ignored chats' messages are kept but hidden", async () => {
   const { accountId, connectionId } = await linked("bulk@parley.test")
   await setIgnored(sql, connectionId, ["muted@s.whatsapp.net"], true)
   const { touchChats, saveMessages } = await import("../src/sessions/chats.ts")
@@ -282,5 +284,6 @@ test("a history batch is stored in one go: chats get their latest activity, igno
   assert.equal(chats.get("muted@s.whatsapp.net")!.synced, false)
   assert.equal(chats.get("p2@s.whatsapp.net")!.lastMessageAt, msgs[599 - ((599 - 2) % 3)]!.at)
   const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
-  assert.equal(n, "400")
+  assert.equal(n, "600")
+  assert.ok(!(await sessions.inbox(accountId, { limit: 200 })).some((m) => m.chatId === "muted@s.whatsapp.net"))
 })

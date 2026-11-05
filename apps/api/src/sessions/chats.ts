@@ -1,7 +1,11 @@
 import type { Sql } from "@parley/auth/db"
 import type { CallKind, Chat, InboundMessage, MediaInfo, Reaction } from "@parley/channels"
 
-/** CRUD for `parley.chat` / `parley.message`: the chats on a connection, which are synced, and synced messages. */
+/**
+ * CRUD for `parley.chat` / `parley.message`: the chats on a connection, which are synced (visible to agents), and their
+ * messages. An ignored chat's messages are kept too, privately: nothing agents can reach reads them (every read below
+ * joins on `c.synced`), and they're there again if the person turns the chat back on.
+ */
 
 /**
  * `canLoadHistory` (listChats only): Parley has a message to count back from (one stored, or an ignored chat's
@@ -158,13 +162,6 @@ export async function mergeChats(sql: Sql, connectionId: string, pairs: Array<{ 
      where k.id = $1`,
     [connectionId, done]
   )
-  // A merged chat that's ignored keeps nothing.
-  await sql(
-    `delete from parley.message m using parley.chat c
-      where m.connection_id = $1 and c.connection_id = $1 and c.id = m.chat_id and not c.synced
-        and c.id in (select t from jsonb_to_recordset($2::jsonb) as p(f text, t text))`,
-    [connectionId, done]
-  )
 }
 
 /**
@@ -218,7 +215,7 @@ export async function getChat(sql: Sql, connectionId: string, chatId: string): P
 }
 
 /**
- * Make exactly `chatIds` the synced set. Chats turned off lose their stored messages. Returns the ids that were newly
+ * Make exactly `chatIds` the synced set. Chats turned off are hidden from agents (their messages kept privately). Returns the ids that were newly
  * turned on (so the caller can backfill them from history it's holding).
  */
 export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: string[]): Promise<string[]> {
@@ -235,11 +232,10 @@ export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: st
   if (off.length) {
     const offIds = JSON.stringify(off.map((r) => r.id))
     await sql(BOOKMARK_STORED, [connectionId, offIds])
+    // Hidden from agents, kept privately (see the top of this file).
     await sql(
-      `with off as (
-         update parley.chat set synced = false, updated_at = now()
-          where connection_id = $1 and synced and id in (select jsonb_array_elements_text($2::jsonb)) returning id)
-       delete from parley.message m using off where m.connection_id = $1 and m.chat_id = off.id`,
+      `update parley.chat set synced = false, updated_at = now()
+        where connection_id = $1 and synced and id in (select jsonb_array_elements_text($2::jsonb))`,
       [connectionId, offIds]
     )
   }
@@ -249,8 +245,8 @@ export async function setSyncedChats(sql: Sql, connectionId: string, chatIds: st
 
 /**
  * Ignore (or stop ignoring) a few chats; every other chat is left as it is. Chats sync by default, so this is the
- * person's control: an ignored chat's stored messages are deleted, and new ones are never stored or shown to agents.
- * Only a bookmark of its newest message is kept (no text), so its history can be fetched again if it's turned back on.
+ * person's control: agents never see an ignored chat (reading, search, webhooks, sending). Its messages are kept
+ * privately, so turning it back on brings its history back.
  */
 export async function setIgnored(sql: Sql, connectionId: string, chatIds: string[], ignored: boolean): Promise<void> {
   if (!chatIds.length) return
@@ -261,7 +257,6 @@ export async function setIgnored(sql: Sql, connectionId: string, chatIds: string
       where connection_id = $1 and synced is distinct from $3 and id in (select jsonb_array_elements_text($2::jsonb))`,
     [connectionId, ids, !ignored]
   )
-  if (ignored) await sql(`delete from parley.message where connection_id = $1 and chat_id in (select jsonb_array_elements_text($2::jsonb))`, [connectionId, ids])
   await sql(
     `update parley.connection set ignored_chats = coalesce((
        select jsonb_agg(distinct x) from (
@@ -282,7 +277,7 @@ export async function chatsChosen(sql: Sql, connectionId: string): Promise<boole
 export type MessageKey = { chatId: string; id: string }
 
 /**
- * Store messages, but only those in synced chats (the filter is in the insert, so a race with un-syncing can't leak).
+ * Store messages, in every chat Parley knows (an ignored chat's privately: agents never read them).
  * Reactions they arrived with are stored after them. Answers what actually changed: the messages stored for the first
  * time (not ones seen before, or skipped), and the reactions that changed.
  */
@@ -293,7 +288,7 @@ export async function saveMessages(sql: Sql, connectionId: string, messages: Inb
      select $1, m.chat_id, m.id, left(m.sender, 200), m.from_me, m.body, m.at, m.media
        from jsonb_array_elements($2::jsonb) with ordinality as e(v, ord),
             jsonb_to_record(e.v) as m(chat_id text, id text, sender text, from_me boolean, body text, at timestamptz, media jsonb)
-       join parley.chat c on c.connection_id = $1 and c.id = m.chat_id and c.synced
+       join parley.chat c on c.connection_id = $1 and c.id = m.chat_id
       order by e.ord
      on conflict (connection_id, chat_id, id) do update set media = excluded.media
       -- The same message again (a backfill): fill in an attachment stored without one, or without its preview.

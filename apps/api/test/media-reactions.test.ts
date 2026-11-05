@@ -297,44 +297,32 @@ test("load_history: asks the phone for the N before the oldest message Parley ha
   await assert.rejects(sessions.loadHistory(other.id, connectionId, "ana", 5), /not your connection/)
 })
 
-test("an ignored chat keeps a bookmark (no text) of its newest message, so turned back on it can load history before anything new arrives", async () => {
-  const { accountId, connectionId } = await linked("bookmark@parley.test")
+test("an ignored chat's messages are kept privately: agents can't see, search, react in or send to it; turned back on, its history is all there", async () => {
+  const { accountId, connectionId } = await linked("private@parley.test")
   const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
   fake.simulator.deliver(connectionId, { id: "g1", threadId: "team", from: "bo", text: "plans for sunday", at: at(0) })
-  fake.simulator.deliver(connectionId, { id: "g2", threadId: "team", from: "me", fromMe: true, text: "in", at: at(1) })
-  await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "team" }), (m) => m.length === 2)
-  const anchorOf = async () => (await sql<{ anchor: any }>(`select anchor from parley.chat where connection_id = $1 and id = 'team'`, [connectionId]))[0]!.anchor
-
-  // Ignoring deletes the messages but bookmarks the newest: its id, sender and time, never its text.
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "team" }), (m) => m.length === 1)
   await setIgnored(sql, connectionId, ["team"], true)
-  assert.equal((await sql(`select 1 from parley.message where connection_id = $1 and chat_id = 'team'`, [connectionId])).length, 0)
-  assert.deepEqual(await anchorOf(), { id: "g2", from_me: true, sender: "me", at: "2026-11-04T01:01:00.000Z" })
-  // Messages that arrive while it's ignored move the bookmark forward (still nothing stored); older ones don't.
-  fake.simulator.deliver(connectionId, { id: "g3", threadId: "team", from: "cy", text: "secret stuff", at: at(5) })
-  fake.simulator.deliver(connectionId, { id: "g0", threadId: "team", from: "cy", text: "older", at: at(-5) })
-  await waitUntil(anchorOf, (a) => a.id === "g3")
-  assert.equal((await sql(`select 1 from parley.message where connection_id = $1 and chat_id = 'team'`, [connectionId])).length, 0)
-  assert.doesNotMatch(JSON.stringify(await anchorOf()), /secret/)
-  assert.equal((await sessions.chats(accountId, connectionId)).find((c) => c.id === "team")!.canLoadHistory, true)
+  // More arrives while it's ignored: kept, never shown.
+  fake.simulator.deliver(connectionId, { id: "g2", threadId: "team", from: "cy", text: "secret stuff", at: at(5) })
+  await waitUntil(async () => (await sql(`select 1 from parley.message where connection_id = $1 and chat_id = 'team'`, [connectionId])).length, (n) => n === 2)
+  assert.deepEqual(await sessions.inbox(accountId, { limit: 10, chatId: "team" }), [])
+  assert.deepEqual(await sessions.inbox(accountId, { limit: 10, search: { words: ["secret"] } }), [])
+  assert.ok(!(await sessions.inboxChats(accountId)).some((c) => c.id === "team"))
+  await assert.rejects(sessions.messages(accountId, connectionId, "team", { limit: 10 }), /no such synced chat/)
+  await assert.rejects(sessions.loadHistory(accountId, connectionId, "team", 10), /no such synced chat/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "team", text: "hi" }), /ignored this chat/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "team", text: "👍", reactTo: "g2" }), /ignored this chat/)
 
-  // Turned back on, load_history counts back from the bookmark, asking for all N (the bookmarked message isn't stored).
+  // Turned back on: everything is there, no fetching needed.
   await setIgnored(sql, connectionId, ["team"], false)
+  assert.deepEqual((await sessions.inbox(accountId, { limit: 10, chatId: "team" })).map((m) => m.text), ["secret stuff", "plans for sunday"])
+  assert.equal((await sessions.chats(accountId, connectionId)).find((c) => c.id === "team")!.canLoadHistory, true)
+  // load_history counts back from the oldest stored message.
   const before = fake.simulator.backfills(connectionId).length
-  const pending = sessions.loadHistory(accountId, connectionId, "team", 10)
-  const reqs = await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === before + 1)
-  const req = reqs.at(-1)!
-  assert.deepEqual([req.anchor.threadId, req.anchor.messageId, req.anchor.fromMe, req.anchor.sender, req.count], ["team", "g3", false, "cy", 10])
-  fake.simulator.deliver(connectionId, { id: "g3", threadId: "team", from: "cy", text: "secret stuff", at: at(5) })
-  fake.simulator.deliver(connectionId, { id: "g2", threadId: "team", from: "me", fromMe: true, text: "in", at: at(1) })
-  const { messages } = await pending
-  assert.ok(messages.some((m) => m.id === "g2"))
-
-  // Once messages are stored, the oldest of them is the anchor, not the bookmark.
-  fake.simulator.deliver(connectionId, { id: "g4", threadId: "team", from: "bo", text: "see you", at: at(9) })
-  await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "team" }), (m) => m.some((x) => x.id === "g4"))
   void sessions.loadHistory(accountId, connectionId, "team", 10).catch(() => {})
-  const last = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === before + 2)).at(-1)!
-  assert.deepEqual([last.anchor.messageId, last.count], ["g2", 10])
+  const req = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === before + 1)).at(-1)!
+  assert.deepEqual([req.anchor.messageId, req.count], ["g1", 10])
 })
 
 test("a chat that was never stored and has no bookmark says it can't load history yet", async () => {

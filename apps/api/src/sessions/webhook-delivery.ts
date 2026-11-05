@@ -166,11 +166,14 @@ export async function emitLiveEvents(
   conn: Pick<Connection, "id" | "accountId" | "channel">,
   change: { messages?: { stored: MessageKey[]; inbound: InboundMessage[] }; reactions?: ChangedReaction[]; deleted?: ForgottenMessage[] }
 ): Promise<number> {
-  const stored = change.messages?.stored ?? []
-  const reactions = change.reactions ?? []
-  const deleted = change.deleted ?? []
-  if (!stored.length && !reactions.length && !deleted.length) return 0
   if (!(await hasWebhooks(ctx.sql, conn.id))) return 0
+  // Only chats agents can see: an ignored chat's messages are stored (privately) but never sent anywhere.
+  const all = [...(change.messages?.stored ?? []).map((m) => m.chatId), ...(change.reactions ?? []).map((r) => r.chatId), ...(change.deleted ?? []).map((m) => m.chatId)]
+  const visible = new Set((await ctx.sql<{ id: string }>(`select id from parley.chat where connection_id = $1 and synced and id = any ($2::text[])`, [conn.id, [...new Set(all)]])).map((r) => r.id))
+  const stored = (change.messages?.stored ?? []).filter((m) => visible.has(m.chatId))
+  const reactions = (change.reactions ?? []).filter((r) => visible.has(r.chatId))
+  const deleted = (change.deleted ?? []).filter((m) => visible.has(m.chatId))
+  if (!stored.length && !reactions.length && !deleted.length) return 0
   const [{ handle } = { handle: null }] = await ctx.sql<{ handle: string | null }>(`select handle from parley.connection where id = $1`, [conn.id])
   const chats = await chatsOf(ctx.sql, conn.id, [...stored.map((m) => m.chatId), ...reactions.map((r) => r.chatId), ...deleted.map((m) => m.chatId)])
   const events: WebhookEventInput[] = []
