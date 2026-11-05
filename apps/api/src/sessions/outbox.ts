@@ -32,18 +32,20 @@ export type PacedConnection = {
   consecutiveRateLimits: number; haltedReason: string | null
   /** Sends a local day may hold, every kind together. The person sets it. */
   dailyLimit: number
+  /** Send only inside the channel's local active hours. Off unless the person turns it on for this number. */
+  activeHours: boolean
 }
 
 type ConnRow = {
   id: string; account_id: string; channel: string; status: string; timezone: string; country: string | null
   paused_until: Date | null; action_pauses: Partial<Record<ActionKind, string>>; consecutive_rate_limits: number; halted_reason: string | null
-  daily_limit: number
+  daily_limit: number; active_hours: boolean
 }
-const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit"
+const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit, active_hours"
 const conn = (r: ConnRow): PacedConnection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, timezone: r.timezone, country: r.country,
   pausedUntil: r.paused_until, actionPauses: r.action_pauses, consecutiveRateLimits: r.consecutive_rate_limits, haltedReason: r.halted_reason,
-  dailyLimit: r.daily_limit,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours,
 })
 
 /**
@@ -128,7 +130,7 @@ function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, n
   const pause = c.actionPauses[action] ? new Date(c.actionPauses[action]!) : null
   const pausedUntil = [c.pausedUntil, notBefore, pause].reduce<Date | null>((max, d) => (d && (!max || d > max) ? d : max), null)
   return planNext(
-    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, pausedIndefinitely: halted(c), dailyTotal: c.dailyLimit },
+    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, pausedIndefinitely: halted(c), dailyTotal: c.dailyLimit, activeHours: c.activeHours },
     action
   )
 }
@@ -401,17 +403,18 @@ export async function resume(tx: Transactor, accountId: string, connectionId: st
 export const MAX_DAILY_LIMIT = 1000
 
 /**
- * Set where the account appears to live (its active hours follow this time zone) and how many messages it may send a
- * day. The queue is laid out again, so a lower limit pushes the overflow to tomorrow and a higher one pulls it in.
+ * Set where the account appears to live (its active hours, when on, follow this time zone), how many messages it may
+ * send a day, and whether it keeps to active hours. The queue is laid out again, so a lower limit pushes the overflow
+ * to tomorrow and a higher one pulls it in; turning active hours off pulls overnight sends in.
  */
-export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined }, now: Date): Promise<void> {
+export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined }, now: Date): Promise<void> {
   const limit = locale.dailyLimit !== undefined && Number.isInteger(locale.dailyLimit) && locale.dailyLimit >= 1 && locale.dailyLimit <= MAX_DAILY_LIMIT ? locale.dailyLimit : null
   await tx.transaction(async (sql) => {
     await owned(sql, accountId, connectionId, true)
     const [r] = await sql<ConnRow>(
-      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), updated_at = now()
+      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), active_hours = coalesce($5, active_hours), updated_at = now()
         where id = $1 returning ${CONN_COLUMNS}`,
-      [connectionId, locale.timezone ?? null, locale.country ?? null, limit]
+      [connectionId, locale.timezone ?? null, locale.country ?? null, limit, typeof locale.activeHours === "boolean" ? locale.activeHours : null]
     )
     await replan(sql, conn(r!), now)
   })

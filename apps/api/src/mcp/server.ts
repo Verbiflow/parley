@@ -502,7 +502,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Send a message",
       description:
-        "Queue a message on a connected channel: text, or a photo, video, GIF, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
+        "Queue a message on a connected channel: text, or a photo, video, GIF, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: with gaps between sends, breaks after bursts, and a daily limit; if the person turned on active hours for the number, only inside its local active hours. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the \`to\` chat.`),
         to: z.string().describe("Recipient on the channel: a chat_id from list_chats, or a phone number for WhatsApp."),

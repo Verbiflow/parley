@@ -27,6 +27,8 @@ export type PlanInput = {
    * the person chose. Spacing, gaps, breaks and weekly caps still apply.
    */
   dailyTotal?: number
+  /** Keep to the policy's active hours and days. On unless set to false: off, the account sends at any hour. */
+  activeHours?: boolean
 }
 
 /** Why a slot is later than `now`. */
@@ -76,7 +78,7 @@ export function planNext(input: PlanInput, action: ActionKind): PlanResult {
   }
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    if (pushTo(nextActiveTime(t, policy, timeZone, seed), "outside_active_hours")) continue
+    if (input.activeHours !== false && pushTo(nextActiveTime(t, policy, timeZone, seed), "outside_active_hours")) continue
 
     const prev = findLast(slots, (s) => s.at.getTime() <= t)
     if (prev && pushTo(prev.at.getTime() + gapAfter(prev.at.getTime()), "gap")) continue
