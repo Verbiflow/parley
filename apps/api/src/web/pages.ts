@@ -5,7 +5,7 @@ import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityS
 import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
-  CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
+  CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, profileMark, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, soonMark, soonTip, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
@@ -268,7 +268,9 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
     ? `<a class="awh" href="/app/connections/${esc(c.id)}#webhooks"><span>Webhooks</span>${webhooks ? `<span class="m">${webhooks}</span>` : `<span class="cfg">Configure ${icon("arrow", 12)}</span>`}</a>`
     : ""
   return `<div class="acard"><a class="cover" href="${href}" aria-label="${esc(number)}"></a>
-    <div class="ah"><span class="ct">${channelMark(c.channel, 20)}</span><div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
+    <div class="ah">${c.avatar
+      ? profileMark(c.channel, c.avatar, 40)
+      : `<span class="ct">${channelMark(c.channel, 20)}</span>`}<div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
     ${body}
     ${hooks}
   </div>`
@@ -666,6 +668,8 @@ const WEBHOOKS_CSS = `
 .whnone{font-size:13.5px;margin:6px 0 0}.chats-h{margin-top:36px;margin-bottom:14px}.whsec .sec-note{margin-bottom:14px}
 .edit summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted)}.edit[open]{padding:14px 0 4px}.edit[open] summary{margin-bottom:14px}
 .note.reveal{margin-bottom:20px}.secret{display:flex;flex-direction:column;gap:10px;width:100%}.secret .term{margin:0}
+.plrow td{padding-top:4px}.plrow .term{margin:0;max-height:420px;overflow:auto}.plmeta{font-size:12px;margin-bottom:8px}.plmeta .mono{font-family:var(--mono)}
+.tbl tbody tr.plrow:hover{background:none}.tbl tr.dlrow{cursor:pointer}.tbl tr.dlrow[aria-expanded="true"]{background:var(--hover)}.tbl tr.dlrow[aria-expanded="true"] td{border-bottom-color:transparent}
 .health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
 `
 
@@ -693,15 +697,6 @@ function deliveryResult(d: Delivery): string {
 /** The event checkboxes, for adding a webhook (all on) or editing one (its own). */
 const eventPicker = (on: readonly string[]) => `<div class="evpick">${WEBHOOK_EVENTS.map((e) =>
   `<label><input type="checkbox" name="events" value="${e}"${on.includes(e) ? " checked" : ""}><span><b>${e}</b><small>${esc(EVENT_TEXT[e])}</small></span></label>`).join("")}</div>`
-
-const VERIFY_SNIPPET = `// Node: verify a Parley webhook request (raw body, before JSON.parse)
-import { createHmac, timingSafeEqual } from "node:crypto"
-function verify(rawBody, header, secret) {
-  const { t, v1 } = Object.fromEntries(header.split(",").map((kv) => kv.split("=")))
-  if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false
-  const want = createHmac("sha256", secret).update(\`\${t}.\${rawBody}\`).digest("hex")
-  return v1.length === want.length && timingSafeEqual(Buffer.from(v1), Buffer.from(want))
-}`
 
 /** What the account page's webhooks section shows besides the list: a secret to show, an error, a notice. */
 export type WebhooksView = {
@@ -744,14 +739,26 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
     </tr>`
   }).join("")
 
-  const deliveryRows = opts.deliveries.map((d) => `<tr>
+  const deliveryRows = opts.deliveries.map((d) => {
+    const done = d.status === "delivered" || d.status === "failed"
+    const hook = hooks.get(d.webhookId)
+    const canResend = done && hook && (hook.enabled || d.event === "webhook.test")
+    return `<tr class="dlrow" data-toggle="pl-${esc(d.id)}" aria-expanded="false" title="Show the payload">
       <td class="m faint">${esc(ago(d.createdAt))}</td>
       <td class="m">${esc(d.event)}</td>
-      <td class="clip m">${esc(shortUrl(hooks.get(d.webhookId)?.url ?? ""))}</td>
+      <td class="clip m">${esc(shortUrl(hook?.url ?? ""))}</td>
       <td>${status(DELIVERY_TONE[d.status], d.status)}</td>
       <td class="m">${d.attempts}<span class="faint">/${MAX_ATTEMPTS}</span></td>
       <td class="clip" title="${esc(deliveryResult(d))}">${esc(deliveryResult(d))}</td>
-    </tr>`).join("")
+      <td class="r"><div class="acts-row">
+        ${canResend ? `<form method="post" action="${at}/deliveries/${esc(d.id)}/resend"><button class="btn quiet sm" type="submit">Resend</button></form>` : ""}
+      </div></td>
+    </tr>
+    <tr class="plrow" id="pl-${esc(d.id)}" hidden><td colspan="7">
+      <div class="plmeta faint">Parley-Event-Id <span class="mono">${esc(d.eventId)}</span> · Parley-Delivery-Id <span class="mono">${esc(d.id)}</span></div>
+      ${copyLine(JSON.stringify(d.payload, null, 2), { multiline: true })}
+    </td></tr>`
+  }).join("")
 
   const revealed = opts.revealed && hooks.get(opts.revealed.id)
   const secretNote = revealed ? `<div class="note reveal"><div class="secret">
@@ -781,9 +788,8 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
       ${addForm}
     </section>
     ${none ? "" : foldSection("Recent webhook deliveries", opts.deliveries.length
-      ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th></tr></thead><tbody>${deliveryRows}</tbody></table>`
-      : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}
-    ${foldSection("Receiving webhooks", `<p class="sec-note">A JSON <code>POST</code> per event, with headers <code>Parley-Event</code>, <code>Parley-Event-Id</code>, <code>Parley-Delivery-Id</code>, <code>Parley-Attempt</code> and <code>Parley-Signature: t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where v1 is HMAC-SHA256 of <code>&lt;t&gt;.&lt;raw body&gt;</code> under the secret. Answer any 2xx within 10 seconds. Anything else is tried again, ${MAX_ATTEMPTS} attempts in all (at once, after 30 seconds, after 5 minutes), so dedupe on the event id. Redirects aren't followed, and URLs that resolve to private addresses are refused.</p>${copyLine(VERIFY_SNIPPET, { multiline: true })}`)}`
+      ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th><th></th></tr></thead><tbody>${deliveryRows}</tbody></table>`
+      : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}`
 }
 
 // ---- Settings -----------------------------------------------------------------------------------------------------
@@ -987,7 +993,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   return appShell({
     title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS + WEBHOOKS_CSS,
     body: `${pageHead({
-      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
+      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: conn.avatar ? profileMark(conn.channel, conn.avatar, 44) : channelMark(conn.channel, 28),
       sub: `${status(st.tone, st.text)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
       actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
         <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,

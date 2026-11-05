@@ -1,5 +1,7 @@
 import { SignInKey, serverSeal, type IdentityConfig, type SecretSeal, type Sql } from "@parley/auth"
 import { isPrivateHost } from "../mcp/media.ts"
+import { accountLabel } from "../mcp/accounts.ts"
+import { signMediaLink } from "../media-link.ts"
 
 /**
  * Webhooks: URLs that hear, as it happens, about new messages, reactions and deletions on one connection (one linked
@@ -46,6 +48,8 @@ export type DeliveryStatus = "pending" | "sending" | "delivered" | "failed"
 export type Delivery = {
   id: string; webhookId: string; eventId: string; event: string; status: DeliveryStatus; attempts: number
   nextAttemptAt: string | null; lastStatus: number | null; lastError: string | null; createdAt: string; deliveredAt: string | null
+  /** The JSON body it sends (the same on every attempt). */
+  payload: unknown
 }
 export type Webhook = {
   id: string; connectionId: string; url: string; events: WebhookEvent[]; description: string | null; enabled: boolean; createdBy: string
@@ -62,7 +66,7 @@ type Row = {
 type SealedRow = Row & { sealed_version: string; sealed_key_id: string; sealed_iv: string; sealed: string }
 type DeliveryRow = {
   id: string; webhook_id: string; event_id: string; event: string; status: DeliveryStatus; attempts: number; next_attempt_at: Date | null
-  last_status: number | null; last_error: string | null; created_at: Date; delivered_at: Date | null
+  last_status: number | null; last_error: string | null; created_at: Date; delivered_at: Date | null; payload: unknown
 }
 
 const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, last_success_at, last_failure_at, last_error, created_at, updated_at`
@@ -77,6 +81,7 @@ export const deliveryView = (r: DeliveryRow): Delivery => ({
   id: r.id, webhookId: r.webhook_id, eventId: r.event_id, event: r.event, status: r.status, attempts: r.attempts,
   nextAttemptAt: r.status === "pending" ? iso(r.next_attempt_at) : null, lastStatus: r.last_status, lastError: r.last_error,
   createdAt: iso(r.created_at)!, deliveredAt: iso(r.delivered_at),
+  payload: typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload,
 })
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -252,17 +257,52 @@ export class Webhooks {
     if (!rows.length) throw new WebhookError("not_found", "no such webhook")
   }
 
-  /** Queue a test event for one webhook (sent like any other, whatever it subscribes to, even while it's off). */
+  /**
+   * Queue a test event for one webhook (sent like any other, whatever it subscribes to, even while it's off). It's
+   * shaped like a message.received (the same envelope, `data.chat` and `data.message`), so a receiver built against
+   * the test reads real messages the same way.
+   */
   async test(sql: Sql, accountId: string, id: string): Promise<Delivery> {
     const hook = await this.get(sql, accountId, id)
+    const [conn] = await sql<{ id: string; channel: string; handle: string | null }>(`select id, channel, handle from parley.connection where id = $1`, [hook.connectionId])
     const eventId = crypto.randomUUID()
+    const now = new Date().toISOString()
     const payload = {
-      id: eventId, type: TEST_EVENT, created_at: new Date().toISOString(),
-      data: { webhook_id: hook.id, text: "A test event from Parley. If you can read this, your endpoint works." },
+      id: eventId, type: TEST_EVENT, created_at: now,
+      connection: { id: hook.connectionId, channel: conn?.channel ?? null, account: conn ? accountLabel(conn) : null },
+      data: {
+        webhook_id: hook.id,
+        chat: { id: "test", name: "Parley test", kind: "direct" },
+        message: { id: `test-${eventId}`, from: "test", from_me: false, text: "A test event from Parley. If you can read this, your endpoint works.", at: now },
+      },
     }
     const [row] = await sql<DeliveryRow>(
       `insert into parley.webhook_delivery (webhook_id, event_id, event, payload) values ($1, $2, $3, $4) returning *`,
       [hook.id, eventId, TEST_EVENT, JSON.stringify(payload)]
+    )
+    return deliveryView(row!)
+  }
+
+  /**
+   * Send a delivery's event again, as a new delivery to the same webhook: the same body and event id (so a receiver
+   * that dedupes on it can tell it's the same event), with a fresh media download link if it carried one. The webhook
+   * must be on (test events go either way).
+   */
+  async resend(sql: Sql, accountId: string, deliveryId: string): Promise<Delivery> {
+    const was = await this.delivery(sql, accountId, deliveryId)
+    if (!was) throw new WebhookError("not_found", "no such delivery")
+    const hook = await this.get(sql, accountId, was.webhookId)
+    if (!hook.enabled && was.event !== TEST_EVENT) throw new WebhookError("invalid", "the webhook is off; turn it on to resend")
+    const payload = structuredClone(was.payload) as { connection?: { id?: string }; data?: { chat?: { id?: string }; message?: { id?: string; media?: Record<string, unknown> } } }
+    const media = payload.data?.message?.media
+    if (media?.download_url && this.#config.publicUrl && payload.connection?.id && payload.data?.chat?.id && payload.data.message?.id) {
+      const link = await signMediaLink(this.#config.signInKey, { accountId, connectionId: payload.connection.id, chatId: payload.data.chat.id, messageId: payload.data.message.id })
+      media.download_url = `${this.#config.publicUrl}/media/${link.token}`
+      media.download_expires_at = link.expiresAt
+    }
+    const [row] = await sql<DeliveryRow>(
+      `insert into parley.webhook_delivery (webhook_id, event_id, event, payload) values ($1, $2, $3, $4) returning *`,
+      [hook.id, was.eventId, was.event, JSON.stringify(payload)]
     )
     return deliveryView(row!)
   }

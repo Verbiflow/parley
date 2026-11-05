@@ -195,6 +195,7 @@ export function webRoutes(ctx: AppContext): Hono {
   }
   const NOTICES: Record<string, string> = {
     tested: "Test event queued. It shows under Recent webhook deliveries within a few seconds (refresh to see how it went).",
+    resent: "Resend queued. It shows as a new row under Recent webhook deliveries within a few seconds (refresh to see how it went).",
     saved: "Webhook saved.",
     deleted: "Webhook deleted.",
   }
@@ -458,6 +459,22 @@ export function webRoutes(ctx: AppContext): Hono {
       return accountPage(c, cid, { revealed: { id: webhook.id, secret, fresh: true } })
     } catch (e) {
       if (e instanceof WebhookError) return e.code === "not_found" ? c.text("Unknown connection.", 404) : accountPage(c, cid, { error: e.message }, 400)
+      throw e
+    }
+  })
+
+  // Send a delivery's event again (a new delivery, same body and event id).
+  app.post("/app/connections/:cid/webhooks/deliveries/:did/resend", async (c) => {
+    const userId = await currentUserId(c, ctx)
+    if (!userId) return c.redirect("/")
+    const cid = c.req.param("cid")
+    try {
+      const d = await ctx.webhooks.delivery(ctx.sql, userId, c.req.param("did"))
+      if (!d || (await ctx.webhooks.get(ctx.sql, userId, d.webhookId)).connectionId !== cid) return c.text("Unknown delivery.", 404)
+      await ctx.webhooks.resend(ctx.sql, userId, d.id)
+      return c.redirect(`/app/connections/${encodeURIComponent(cid)}?webhook=resent#webhooks`)
+    } catch (e) {
+      if (e instanceof WebhookError) return e.code === "not_found" ? c.text("Unknown delivery.", 404) : accountPage(c, cid, { error: e.message }, 400)
       throw e
     }
   })

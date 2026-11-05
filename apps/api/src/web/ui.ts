@@ -64,6 +64,11 @@ export function channelMark(id: string, size = 16): string {
   return `<svg class="cm" viewBox="${b.viewBox ?? "0 0 24 24"}" width="${size}" height="${size}" aria-hidden="true">${b.svg}</svg>`
 }
 
+/** A linked number's own profile picture, with its channel's mark small in the top-right corner. */
+export function profileMark(channel: string, image: string, size = 40): string {
+  return `<span class="pdp" style="width:${size}px;height:${size}px" aria-hidden="true"><img src="${esc(image)}" alt="" width="${size}" height="${size}"><span class="badge">${channelMark(channel, Math.round(size * 0.27))}</span></span>`
+}
+
 export const channelName = (id: string) => CHANNELS[id]?.name ?? id.replace(/^./, (c) => c.toUpperCase())
 
 /** The popover a channel that isn't live yet shows when it's hovered or focused. */
@@ -225,6 +230,9 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .label{font-size:12.5px;color:var(--muted)}
 .logo{display:inline-flex;align-items:center;gap:8px;font-weight:500;font-size:15px;letter-spacing:-.02em;color:var(--text)}
 .cm{flex:none;display:inline-block;vertical-align:-3px}
+.pdp{position:relative;flex:none;display:inline-block}
+.pdp img{display:block;width:100%;height:100%;border-radius:50%;object-fit:cover;box-shadow:inset 0 0 0 1px var(--line-2)}
+.pdp .badge{position:absolute;top:-8%;right:-8%;display:grid;place-items:center;width:42%;height:42%;border-radius:50%;background:var(--card);box-shadow:0 0 0 1px var(--line-2)}
 .glyph{display:inline-grid;place-items:center;flex:none;border-radius:8px;font-size:11px;font-weight:500;color:var(--on-avatar);background:var(--avatar);box-shadow:var(--glyph-ring);letter-spacing:.01em}
 .glyph.round{border-radius:50%}
 .glyph.brand{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text)}
@@ -319,6 +327,7 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 
 .wrap{position:relative;max-width:1200px;margin:0 auto;padding:52px 28px 120px}
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding-bottom:32px}
+.head .pdp .badge{background:var(--bg)}
 .head .crumb{display:inline-flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px}
 .head .crumb:hover{color:var(--text)}
 .head h1{margin:0;font-size:36px;line-height:42px;font-weight:400;letter-spacing:-.035em;display:flex;align-items:center;gap:14px}
@@ -415,6 +424,7 @@ document.addEventListener('keydown',e=>{const m=document.querySelector('.me');if
 document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);const s=b.querySelector('span');if(s){const t=s.textContent;s.textContent='Copied';setTimeout(()=>s.textContent=t,1400)}}catch(e){}}));
 document.querySelectorAll('[data-tabs]').forEach(t=>t.addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(!b)return;const box=t.closest('[data-tabbox]')||document;t.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('on',x===b));box.querySelectorAll('[data-pane]').forEach(p=>p.hidden=p.dataset.pane!==b.dataset.tab)}));
 document.querySelectorAll('form[data-locale]').forEach(f=>{try{f.timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';const r=(navigator.language||'').split('-')[1];if(r&&/^[A-Za-z]{2}$/.test(r))f.country.value=r.toUpperCase()}catch(e){}});
+document.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',e=>{if(b.tagName==='TR'&&e.target.closest('a,button,form,input'))return;const t=document.getElementById(b.dataset.toggle);if(!t)return;t.hidden=!t.hidden;b.setAttribute('aria-expanded',String(!t.hidden))}));
 document.addEventListener('submit',e=>{const f=e.target.closest('form[data-confirm]');if(f&&!confirm(f.dataset.confirm))e.preventDefault()});
 document.querySelectorAll('tr[data-href]').forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a,button,form'))location.href=r.dataset.href}));
 `
