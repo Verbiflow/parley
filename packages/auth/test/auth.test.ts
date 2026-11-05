@@ -43,7 +43,7 @@ test("SignInKey seals and opens, bound to its associated data", async () => {
 
 test("connection tokens round-trip and reject tampering/expiry", async () => {
   const keys = await tokenKeys({ signingKey: LOCAL_SIGNING_KEY }, "local")
-  const principal = { userId: "11111111-1111-1111-1111-111111111111", deviceId: "22222222-2222-2222-2222-222222222222", deviceKind: "cli" as const, entitlements: ["cloud"] }
+  const principal = { userId: "5b0e8a1c-3f4d-4c2e-9a7b-1d6f0e2c8a41", deviceId: "9c3d2e1f-7a6b-4d5c-8e9f-0a1b2c3d4e5f", deviceKind: "cli" as const, entitlements: ["cloud"] }
   const { token } = await keys.sign(principal)
   const verified = await keys.verify(token)
   assert.equal(verified.userId, principal.userId)
