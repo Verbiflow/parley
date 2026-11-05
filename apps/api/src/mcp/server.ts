@@ -4,7 +4,7 @@ import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { getConnection } from "../sessions/store.ts"
-import { markRead, newByChat, newReactions, searchChats, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
+import { historyAnchor, markRead, newByChat, newReactions, searchChats, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
 import { MAX_GAP_SECONDS, OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -547,7 +547,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
             ...messageOut(m),
           })),
           ...(messages.length === max && oldest ? { more: `There may be more matches: search again with before: "${oldest}" for older ones.` } : {}),
-          ...(!messages.length && !chats.length ? { note: "Nothing matched in the messages Parley has stored. Older messages may only be on the phone: load_history fetches a chat's older ones, then search again." } : {}),
+          ...(!messages.length && !chats.length ? { note: "Nothing matched in the messages Parley has stored. Older messages may only be on the phone: try load_history on the chat once. If it can't fetch them, ask the account holder to export the chat from WhatsApp (in the chat: ⋮ → Export chat, on the phone or WhatsApp Web) and share the file." } : {}),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not search")
@@ -642,6 +642,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       try {
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id })
         const { answered, messages } = await ctx.sessions.loadHistory(userId, conn.id, chat_id, count ?? 20)
+        const oldest = answered ? undefined : await historyAnchor(ctx.sql, conn.id, chat_id).catch(() => undefined)
         const account = new Map([[conn.id, accountLabel(conn)]])
         const fresh = await newSince(userId, { connectionId: conn.id, chatId: chat_id }, account)
         const shownNew = messages.filter((m) => m.isNew).length
@@ -652,7 +653,10 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
           ...(receipts ? { read_receipts: receipts } : {}),
           ...(fresh.newReactionsOut.length ? { new_reactions: fresh.newReactionsOut } : {}),
           ...(fresh.summary.messages > shownNew ? { more_new: `${plural(fresh.summary.messages - shownNew, "new message")} didn't fit in \`count\`: read_inbox with this chat_id and a bigger limit shows them.` } : {}),
-          ...(answered ? {} : { note: "The phone didn't answer in time (it may be offline or asleep). These are the messages Parley already has; try again later." }),
+          ...(answered ? {} : {
+            history_available: false,
+            note: `Older history isn't available right now: the account holder's phone didn't send it (it may be offline, or WhatsApp on the phone may be declining history requests for a while; retrying soon rarely helps, so don't keep retrying). ${oldest ? `Parley's messages in this chat go back to ${oldest.at.slice(0, 10)}.` : ""} These are the latest messages Parley has. For anything older, tell the account holder Parley can't fetch it and ask them to export the chat from WhatsApp (in the chat: ⋮ → Export chat, on the phone or WhatsApp Web) and share the file.`.replace("  ", " "),
+          }),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not load the history")
