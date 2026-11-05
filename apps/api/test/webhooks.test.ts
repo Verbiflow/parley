@@ -180,7 +180,9 @@ test("three attempts at most: at once, after 30 s, after 5 min; a later success 
   const { webhook } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/flaky" })
   answers = [500, 0, 503]
   fake.simulator.deliver(connectionId, { id: "f1", threadId: "ana", from: "ana", text: "one" })
-  await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 1)
+  // The delivery is queued just after the message is stored, so wait for the delivery itself: each flush below is
+  // meant to be exactly one attempt.
+  await waitUntil(() => pending(accountId), (p) => p.length === 1)
   const t0 = new Date()
   assert.equal(await flush(t0), 1)
   let [d] = await pending(accountId)
@@ -207,7 +209,7 @@ test("three attempts at most: at once, after 30 s, after 5 min; a later success 
   reset()
   answers = [502]
   fake.simulator.deliver(connectionId, { id: "f2", threadId: "ana", from: "ana", text: "two" })
-  await waitUntil(async () => (await sessions.inbox(accountId, { limit: 5 })).length, (n) => n === 2)
+  await waitUntil(() => pending(accountId), (p) => p.length === 1)
   const t1 = new Date()
   await flush(t1)
   await flush(new Date(t1.getTime() + 30_000))
