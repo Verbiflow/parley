@@ -38,7 +38,7 @@ function Ticks({ n, read, className = "" }: { n: 1 | 2; read: boolean; className
 }
 
 const PMark = ({ size = 22 }: { size?: number }) => (
-  <span className="grid place-items-center rounded-[7px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9)]" style={{ width: size, height: size }}>
+  <span className="grid place-items-center rounded-[7px] bg-[image:var(--primary)] text-[color:var(--on-primary)] shadow-[var(--primary-shadow)]" style={{ width: size, height: size }}>
     <ParleyMark size={Math.round(size * 0.6)} />
   </span>
 )
@@ -172,7 +172,7 @@ function Phone({ stage }: { stage: Stage }) {
 
 /* ---------- the scene: the phone, with the ask and the hold floating over it ---------- */
 
-const GLASS = "rounded-[16px] bg-[rgb(30_28_25/0.92)] shadow-[inset_0_1px_0_rgb(255_255_255/0.09),0_0_0_1px_rgb(255_255_255/0.09),0_24px_48px_-16px_rgb(0_0_0/0.95)]"
+const GLASS = "rounded-[16px] bg-[var(--float)] shadow-[var(--float-ring)]"
 
 /** Parley holding the message for a natural moment, then confirming it went out from your number. */
 function ParleyPill({ stage, className = "" }: { stage: Stage; className?: string }) {
@@ -198,7 +198,7 @@ function Scene({ stage }: { stage: Stage }) {
       <div className="absolute left-1/2 top-0 -translate-x-1/2"><Phone stage={stage} /></div>
       <motion.div className={`absolute left-0 top-[118px] w-[238px] p-3 ${GLASS}`} initial={false} animate={{ opacity: stage >= 2 ? 0 : 1, y: stage >= 2 ? -8 : 0 }} transition={{ duration: 0.4, ease }}>
         <div className="flex items-center gap-2 text-[11.5px]"><Claude size={13} /><span className="font-medium">Claude</span>
-          <span className={`ml-auto grid size-4 place-items-center rounded-full transition-colors ${stage >= 1 ? "bg-[#5fd38d] text-[#0d1a12]" : "bg-white/10 text-transparent"}`}><Check size={8} /></span>
+          <span className={`ml-auto grid size-4 place-items-center rounded-full transition-colors ${stage >= 1 ? "bg-[#5fd38d] text-[#0d1a12]" : "bg-[var(--fill-2)] text-transparent"}`}><Check size={8} /></span>
         </div>
         <p className="mt-1.5 text-[12.5px] leading-snug text-ink">Send Maya the Q4 deck and ask if Thursday at 3 still works</p>
       </motion.div>

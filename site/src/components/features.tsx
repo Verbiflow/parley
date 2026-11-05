@@ -28,7 +28,7 @@ function Tile({ title, children, visual, className = "" }: { title: string; chil
   return (
     <article className={`group relative flex flex-col overflow-hidden rounded-[18px] ${FRAME} ${className}`}>
       <div className="relative h-[320px] overflow-hidden">
-        <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(rgb(255_246_232/0.06)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(70%_70%_at_50%_45%,black,transparent)]" />
+        <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(var(--dots)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(70%_70%_at_50%_45%,black,transparent)]" />
         {visual}
       </div>
       <div className="relative px-6 pb-6 pt-1">
@@ -94,7 +94,7 @@ function Carousel({ grid, count, list, children }: { grid: string; count: number
         {children}
       </div>
       <div className="mt-5 flex justify-center gap-1.5 lg:hidden" aria-hidden>
-        {Array.from({ length: count }, (_, i) => <span key={i} className={`h-1.5 rounded-full transition-all duration-300 ${i === at ? "w-5 bg-ink-2" : "w-1.5 bg-white/15"}`} />)}
+        {Array.from({ length: count }, (_, i) => <span key={i} className={`h-1.5 rounded-full transition-all duration-300 ${i === at ? "w-5 bg-ink-2" : "w-1.5 bg-[var(--pip)]"}`} />)}
       </div>
     </>
   )
@@ -131,7 +131,7 @@ function Identity() {
                 animate={{ opacity: i === 0 ? 1 : i === 1 ? 0.75 : 0.45, y: i * 22, scale: 1 - i * 0.06, zIndex: 10 - i }}
                 exit={{ opacity: 0, y: 40, scale: 0.85 }}
                 transition={spring}
-                className="absolute inset-x-0 top-0 origin-top rounded-[18px] bg-[rgb(52_48_43/0.72)] p-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_12px_30px_-12px_rgb(0_0_0/0.7)] backdrop-blur-xl"
+                className="absolute inset-x-0 top-0 origin-top rounded-[18px] bg-[var(--banner)] p-3 shadow-[var(--banner-ring)] backdrop-blur-xl"
               >
                 <div className="flex items-start gap-2.5">
                   <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[#25D366]"><WhatsApp size={19} className="[&_path]:fill-white" /></span>
@@ -171,8 +171,8 @@ function Pacing() {
               </motion.span>
             </AnimatePresence>
           </div>
-          <div className="relative h-11 overflow-hidden rounded-[10px] bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
-            {!bot && <div className="absolute inset-y-0 bg-white/[0.025]" style={{ left: day(8), right: `calc(100% - ${day(21)})` }} />}
+          <div className="relative h-11 overflow-hidden rounded-[10px] bg-[var(--fill)] shadow-[var(--fill-ring)]">
+            {!bot && <div className="absolute inset-y-0 bg-[var(--fill)]" style={{ left: day(8), right: `calc(100% - ${day(21)})` }} />}
             {(bot ? Array.from({ length: 14 }, (_, i) => 9.4 + i * 0.035) : HOURS).map((h, i) => (
               <motion.i
                 key={`${n}-${i}`}
@@ -267,10 +267,10 @@ function Record() {
   return (
     <div ref={ref} className="absolute inset-0 flex flex-col px-5 pt-6 sm:px-7 sm:pt-7">
       <div className="flex items-center justify-between text-[11.5px]">
-        <span className="flex items-center gap-2 text-ink-2"><span className="relative grid size-2 place-items-center"><span className="absolute size-2 animate-ping rounded-full bg-[#5fd38d]/60" /><span className="size-1.5 rounded-full bg-[#5fd38d]" /></span>Live</span>
+        <span className="text-ink-2">Live</span>
         <button type="button" tabIndex={-1} aria-hidden className="flex items-center gap-2 text-muted">
           Cursor
-          <span className={`relative h-[18px] w-8 rounded-full transition-colors duration-300 ${paused ? "bg-white/10" : "bg-[#5fd38d]/80"}`}>
+          <span className={`relative h-[18px] w-8 rounded-full transition-colors duration-300 ${paused ? "bg-[var(--fill-2)]" : "bg-[#5fd38d]/80"}`}>
             <motion.span className="absolute top-[2px] size-[14px] rounded-full bg-ink shadow" animate={{ left: paused ? 2 : 16 }} transition={spring} />
           </span>
         </button>
@@ -289,9 +289,9 @@ function Record() {
                 animate={{ opacity: 1 - pos * 0.16, y: 0 }}
                 exit={{ opacity: 0 }}
                 transition={spring}
-                className="mb-1.5 flex items-center gap-3 rounded-[11px] bg-white/[0.035] px-3 py-2.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.045)]"
+                className="mb-1.5 flex items-center gap-3 rounded-[11px] bg-[var(--fill)] px-3 py-2.5 shadow-[var(--fill-ring)]"
               >
-                <span className={`grid size-6 place-items-center rounded-[7px] bg-white/[0.06] ${item.agent === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={item.agent} size={13} /></span>
+                <span className={`grid size-6 place-items-center rounded-[7px] bg-[var(--fill-2)] ${item.agent === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={item.agent} size={13} /></span>
                 <span className="min-w-0 flex-1 truncate text-[12.5px]"><span className="text-ink">{item.to}</span><span className="text-faint"> · {item.agent}</span></span>
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.span key={step} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium ${step === -1 ? "bg-[#e5533c]/15 text-[#f08a73]" : step === 3 ? "bg-[#53bdeb]/12 text-[#7fcdf0]" : step === 0 ? "bg-sand/12 text-sand" : "bg-white/[0.06] text-ink-2"}`}>
@@ -303,7 +303,7 @@ function Record() {
             )
           })}
         </AnimatePresence>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[#11100e] to-transparent" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[var(--card)] to-transparent" />
       </div>
     </div>
   )
@@ -358,7 +358,7 @@ function Qr() {
 function LinkScene({ channels }: { channels: React.ReactNode }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center gap-7">
-      <div className="relative size-[112px] overflow-hidden rounded-[14px] bg-[#f3efe8] p-2 text-[#1b1712] shadow-[0_16px_40px_-16px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.1)]">
+      <div className="relative size-[112px] overflow-hidden rounded-[14px] bg-[#f3efe8] p-2 text-[#1b1712] shadow-[var(--qr-shadow)]">
         <Qr />
         <span className="scan absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-transparent to-[rgb(217_130_91/0.45)] [border-bottom:1.5px_solid_rgb(217_130_91)]" />
       </div>
@@ -374,18 +374,18 @@ function Wire() {
       <svg viewBox="0 0 240 120" className="absolute h-[120px] w-[240px]" aria-hidden>
         {[22, 60, 98].map((y, i) => (
           <g key={y}>
-            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" stroke="rgb(255 246 232 / .12)" strokeWidth="1" />
-            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" stroke="rgb(227 185 141)" strokeWidth="1.4" strokeLinecap="round" strokeDasharray="14 160" className="flow" style={{ animationDelay: `${i * 0.6}s` }} />
+            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" style={{ stroke: "var(--wire)" }} strokeWidth="1" />
+            <path d={`M44 ${y} C 110 ${y}, 120 60, 186 60`} fill="none" strokeWidth="1.4" strokeLinecap="round" strokeDasharray="14 160" className="flow" style={{ stroke: "var(--color-sand)", animationDelay: `${i * 0.6}s` }} />
           </g>
         ))}
       </svg>
       <div className="relative flex h-[120px] w-[240px] items-center justify-between">
         <div className="flex flex-col gap-[10px]">
           {agents.map((a) => (
-            <span key={a} title={a} className={`grid size-7 place-items-center rounded-[8px] bg-[#1d1b18] shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.08)] ${a === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={a} size={14} /></span>
+            <span key={a} title={a} className={`grid size-7 place-items-center rounded-[8px] bg-[var(--tile)] shadow-[var(--tile-ring)] ${a === "Claude" ? "text-[#D97757]" : "text-ink-2"}`}><AgentMark name={a} size={14} /></span>
           ))}
         </div>
-        <span className="grid size-[52px] place-items-center rounded-[14px] bg-[linear-gradient(180deg,#fffaf3,#e6cfb0)] text-[#1b140e] shadow-[inset_0_1px_0_rgb(255_255_255/0.9),0_0_0_1px_rgb(227_185_141/0.5),0_0_40px_-4px_rgb(227_185_141/0.5)]">
+        <span className="grid size-[52px] place-items-center rounded-[14px] bg-[image:var(--primary)] text-[color:var(--on-primary)] shadow-[var(--primary-shadow),0_0_40px_-4px_rgb(227_185_141/0.5)]">
           <svg viewBox="0 0 64 64" width="24" height="24" fill="currentColor" fillRule="evenodd" aria-hidden><path d={PARLEY} /></svg>
         </span>
       </div>
@@ -403,14 +403,14 @@ function Ask() {
   const sent = t >= PROMPT.length + 6
   return (
     <div ref={ref} className="absolute inset-0 flex items-center justify-center px-6">
-      <div className="w-full max-w-[300px] rounded-[16px] bg-[#1a1916] p-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.08),0_20px_40px_-20px_rgb(0_0_0/0.9)]">
+      <div className="w-full max-w-[300px] rounded-[16px] bg-[var(--panel)] p-3 shadow-[var(--panel-ring)]">
         <p className="h-[42px] text-[13px] leading-[1.6] text-ink">
           {typed}
           {!sent && <span className="ml-px inline-block h-[15px] w-[1.5px] translate-y-[3px] animate-blink bg-sand" />}
         </p>
         <div className="mt-1 flex items-center gap-2">
-          <span className="flex items-center gap-1.5 rounded-full bg-white/[0.05] px-2 py-1 text-[10.5px] text-muted"><span className="grid size-3.5 place-items-center rounded-[4px] bg-ink text-bg"><svg viewBox="0 0 64 64" width="8" height="8" fill="currentColor" fillRule="evenodd" aria-hidden><path d={PARLEY} /></svg></span>Parley</span>
-          <motion.span animate={{ scale: sent ? [1, 0.88, 1] : 1 }} transition={{ duration: 0.3 }} className={`ml-auto grid size-7 place-items-center rounded-full transition-colors duration-300 ${typed.length === PROMPT.length ? "bg-ink text-bg" : "bg-white/[0.08] text-faint"}`}>
+          <span className="flex items-center gap-1.5 rounded-full bg-[var(--fill-2)] px-2 py-1 text-[10.5px] text-muted"><span className="grid size-3.5 place-items-center rounded-[4px] bg-ink text-bg"><svg viewBox="0 0 64 64" width="8" height="8" fill="currentColor" fillRule="evenodd" aria-hidden><path d={PARLEY} /></svg></span>Parley</span>
+          <motion.span animate={{ scale: sent ? [1, 0.88, 1] : 1 }} transition={{ duration: 0.3 }} className={`ml-auto grid size-7 place-items-center rounded-full transition-colors duration-300 ${typed.length === PROMPT.length ? "bg-ink text-bg" : "bg-[var(--fill-2)] text-faint"}`}>
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" /></svg>
           </motion.span>
         </div>
@@ -423,7 +423,7 @@ function Step({ n, title, visual, children }: { n: number; title: string; visual
   return (
     <div role="listitem" className={`${SLIDE} relative flex flex-col overflow-hidden rounded-[18px] ${FRAME}`}>
       <div className="relative h-[200px] overflow-hidden">
-        <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(rgb(255_246_232/0.06)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(65%_65%_at_50%_50%,black,transparent)]" />
+        <div aria-hidden className="absolute inset-0 [background-image:radial-gradient(var(--dots)_1px,transparent_1.2px)] [background-size:18px_18px] [mask-image:radial-gradient(65%_65%_at_50%_50%,black,transparent)]" />
         {visual}
       </div>
       <div className="flex flex-1 flex-col px-6 pb-6 pt-1">

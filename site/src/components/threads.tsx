@@ -58,6 +58,13 @@ export function Threads({ className = "" }: { className?: string }) {
     }
 
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const light = window.matchMedia("(prefers-color-scheme: light)")
+    // On paper the threads are drawn in caramel and laid over the page; on the dark page they add light.
+    const palette = () => light.matches
+      ? { line: "150,96,52", peak: "128,76,38", pulse: "163,101,58", k: 0.8, blend: "source-over" as const }
+      : { line: "227,185,141", peak: "240,205,165", pulse: "248,214,172", k: 1, blend: "lighter" as const }
+    let P = palette()
+    const rgba = (c: string, a: number) => `rgba(${c},${a * P.k})`
     const t0 = performance.now()
     let frame = 0
     let last = t0
@@ -71,11 +78,11 @@ export function Threads({ className = "" }: { className?: string }) {
       const [px] = w < WIDE ? PINCH.mobile : PINCH.desktop
 
       const grad = ctx.createLinearGradient(0, 0, w, 0)
-      grad.addColorStop(0, "rgba(227,185,141,0)")
-      grad.addColorStop(Math.max(px - 0.24, 0.05), "rgba(227,185,141,0.05)")
-      grad.addColorStop(px, "rgba(240,205,165,0.5)")
-      grad.addColorStop(Math.min(px + 0.16, 0.98), "rgba(227,185,141,0.16)")
-      grad.addColorStop(1, "rgba(227,185,141,0.04)")
+      grad.addColorStop(0, rgba(P.line, 0))
+      grad.addColorStop(Math.max(px - 0.24, 0.05), rgba(P.line, 0.05))
+      grad.addColorStop(px, rgba(P.peak, 0.5))
+      grad.addColorStop(Math.min(px + 0.16, 0.98), rgba(P.line, 0.16))
+      grad.addColorStop(1, rgba(P.line, 0.04))
       ctx.strokeStyle = grad
       ctx.lineWidth = 0.75
       ctx.beginPath()
@@ -86,7 +93,7 @@ export function Threads({ className = "" }: { className?: string }) {
       }
       ctx.stroke()
 
-      ctx.globalCompositeOperation = "lighter"
+      ctx.globalCompositeOperation = P.blend
       for (const p of pulses) {
         if (!still) p.u += p.speed * dt
         if (p.u > 1.05) {
@@ -106,7 +113,7 @@ export function Threads({ className = "" }: { className?: string }) {
             if (s) ctx.lineTo(x, y)
             else ctx.moveTo(x, y)
           }
-          ctx.strokeStyle = `rgba(248,214,172,${alpha * fade})`
+          ctx.strokeStyle = rgba(P.pulse, alpha * fade)
           ctx.lineWidth = width
           ctx.stroke()
         }
@@ -134,6 +141,11 @@ export function Threads({ className = "" }: { className?: string }) {
     ro.observe(canvas)
     const onVis = () => !document.hidden && visible && resume()
     document.addEventListener("visibilitychange", onVis)
+    const onScheme = () => {
+      P = palette()
+      resume()
+    }
+    light.addEventListener("change", onScheme)
     resume()
 
     return () => {
@@ -141,6 +153,7 @@ export function Threads({ className = "" }: { className?: string }) {
       io.disconnect()
       ro.disconnect()
       document.removeEventListener("visibilitychange", onVis)
+      light.removeEventListener("change", onScheme)
     }
   }, [])
 

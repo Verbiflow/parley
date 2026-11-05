@@ -73,7 +73,7 @@ function Hero() {
       </div>
       <Shell className="grid items-center gap-16 pt-32 sm:gap-20 sm:pt-44 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-10 lg:pt-36">
         <div>
-          <a href={GITHUB_URL} className="group inline-flex h-7 items-center gap-2 rounded-full pl-1 pr-3 text-[12.5px] text-ink-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.08)] transition-colors hover:text-ink">
+          <a href={GITHUB_URL} className="group inline-flex h-7 items-center gap-2 rounded-full pl-1 pr-3 text-[12.5px] text-ink-2 shadow-[var(--pill-ring)] transition-colors hover:text-ink">
             <span className="rounded-full bg-sand/15 px-2 py-0.5 text-[11px] font-medium text-sand">New</span>
             Photos, files and reactions
             <Arrow />
@@ -125,13 +125,13 @@ function Product() {
 
 function Start() {
   const channels = CHANNELS.map(([name, Logo]) => (
-    <span key={name} title={name} className="grid size-9 place-items-center rounded-[10px] bg-[#1d1b18] shadow-[inset_0_1px_0_rgb(255_255_255/0.07),0_0_0_1px_rgb(255_255_255/0.07)]">
+    <span key={name} title={name} className="grid size-9 place-items-center rounded-[10px] bg-[var(--tile)] shadow-[var(--tile-ring)]">
       <Logo size={17} />
       <span className="sr-only">{name}</span>
     </span>
   ))
   const copy = (
-    <div className="flex items-center gap-1.5 rounded-full bg-white/[0.035] p-1 pl-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)]">
+    <div className="flex items-center gap-1.5 rounded-full bg-[var(--fill)] p-1 pl-3.5 shadow-[var(--fill-ring)]">
       <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2">{MCP_URL}</code>
       <CopyButton text={MCP_URL} label="Copy" className={`${buttonClass("primary", "sm")} h-7 shrink-0 px-3 text-[12px]`} />
     </div>
@@ -156,7 +156,7 @@ function OpenSource() {
             <Button href={APP_URL} variant="ghost">Use hosted Parley</Button>
           </div>
         </div>
-        <div className="flex items-center border-t border-white/[0.06] bg-white/[0.015] p-8 sm:p-12 lg:border-l lg:border-t-0">
+        <div className="flex items-center border-t border-line bg-[var(--pane)] p-8 sm:p-12 lg:border-l lg:border-t-0">
           <pre className="w-full overflow-x-auto font-mono text-[12.5px] leading-[1.9] text-muted">
             <span className="text-faint">$</span> <span className="text-ink">git clone</span> github.com/Verbiflow/parley{"\n"}
             <span className="text-faint">$</span> <span className="text-ink">npm install</span>{"\n"}
