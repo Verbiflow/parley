@@ -162,6 +162,34 @@ test("active hours are off unless turned on for the number; switching them repla
   assert.equal((await getOutbound(sql, accountId, m.message.id)).scheduledFor, night.toISOString())
 })
 
+test("the gap between sends is the number's to set; empty goes back to the channel's default", async () => {
+  const { accountId, connectionId } = await linked("gap@parley.test")
+  const gapOf = async () => {
+    const a = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "a" }, T0)
+    const b = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "b", kind: "message" }, T0)
+    return (Date.parse(b.message.scheduledFor!) - Date.parse(a.message.scheduledFor!)) / 1000
+  }
+  const before = await gapOf()
+  assert.ok(before >= 30 && before <= 150, `default gap ${before}s`)
+
+  await sessions.setLocale(accountId, connectionId, { gapSeconds: 5 }, T0)
+  // The queue is laid out again on the new gap.
+  const queued = await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })
+  const times = queued.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
+  assert.ok((times[1]! - times[0]!) / 1000 <= 10, "replanned onto the shorter gap")
+  // Saving other settings leaves the gap alone.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 200 }, T0)
+  const last = times.at(-1)!
+  const next = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "c", kind: "message" }, T0)
+  const after = (Date.parse(next.message.scheduledFor!) - last) / 1000
+  assert.ok(after >= 5 && after <= 10, `custom gap ${after}s`)
+
+  await sessions.setLocale(accountId, connectionId, { gapSeconds: null }, T0)
+  const restored = await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })
+  const spread = restored.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
+  for (let i = 1; i < spread.length; i++) assert.ok((spread[i]! - spread[i - 1]!) / 1000 >= 30)
+})
+
 test("typing is per message: off unless asked, and handed to the channel with the send", async () => {
   const { accountId, connectionId } = await linked("typing@parley.test")
   const plain = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "no typing" }, T0)

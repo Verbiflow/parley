@@ -34,18 +34,20 @@ export type PacedConnection = {
   dailyLimit: number
   /** Send only inside the channel's local active hours. Off unless the person turns it on for this number. */
   activeHours: boolean
+  /** Least seconds between two sends (up to twice that at random); null keeps the channel's default. The person sets it. */
+  gapSeconds: number | null
 }
 
 type ConnRow = {
   id: string; account_id: string; channel: string; status: string; timezone: string; country: string | null
   paused_until: Date | null; action_pauses: Partial<Record<ActionKind, string>>; consecutive_rate_limits: number; halted_reason: string | null
-  daily_limit: number; active_hours: boolean
+  daily_limit: number; active_hours: boolean; gap_seconds: number | null
 }
-const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit, active_hours"
+const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit, active_hours, gap_seconds"
 const conn = (r: ConnRow): PacedConnection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, timezone: r.timezone, country: r.country,
   pausedUntil: r.paused_until, actionPauses: r.action_pauses, consecutiveRateLimits: r.consecutive_rate_limits, haltedReason: r.halted_reason,
-  dailyLimit: r.daily_limit, activeHours: r.active_hours,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds,
 })
 
 /**
@@ -123,7 +125,9 @@ type Context = { policy: PacingPolicy; slots: Slot[] }
 
 /** The one daily limit (`dailyLimit`) replaced the per-kind warmup ramp; pushback still pauses and backs off. */
 function pacingContext(c: PacedConnection, slots: Slot[]): Context {
-  return { policy: policyFor(c.channel), slots }
+  const policy = policyFor(c.channel)
+  if (c.gapSeconds === null) return { policy, slots }
+  return { policy: { ...policy, gapSeconds: { min: c.gapSeconds, max: c.gapSeconds * 2 } }, slots }
 }
 
 function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, notBefore?: Date | null): PlanResult {
@@ -401,20 +405,26 @@ export async function resume(tx: Transactor, accountId: string, connectionId: st
 
 /** Highest daily limit a person can set; past it no account sends like a person. */
 export const MAX_DAILY_LIMIT = 1000
+/** Longest gap a person can set between two sends. */
+export const MAX_GAP_SECONDS = 3600
 
 /**
  * Set where the account appears to live (its active hours, when on, follow this time zone), how many messages it may
- * send a day, and whether it keeps to active hours. The queue is laid out again, so a lower limit pushes the overflow
- * to tomorrow and a higher one pulls it in; turning active hours off pulls overnight sends in.
+ * send a day, whether it keeps to active hours, and the gap between sends (`gapSeconds`: null for the channel's
+ * default, left out to keep it). The queue is laid out again, so a lower limit pushes the overflow to tomorrow and a
+ * higher one pulls it in; turning active hours off pulls overnight sends in; a shorter gap pulls the queue closer.
  */
-export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined }, now: Date): Promise<void> {
+export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined }, now: Date): Promise<void> {
   const limit = locale.dailyLimit !== undefined && Number.isInteger(locale.dailyLimit) && locale.dailyLimit >= 1 && locale.dailyLimit <= MAX_DAILY_LIMIT ? locale.dailyLimit : null
+  const g = locale.gapSeconds
+  const setGap = g === null || (Number.isInteger(g) && g! >= 0 && g! <= MAX_GAP_SECONDS)
   await tx.transaction(async (sql) => {
     await owned(sql, accountId, connectionId, true)
     const [r] = await sql<ConnRow>(
-      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), active_hours = coalesce($5, active_hours), updated_at = now()
+      `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), active_hours = coalesce($5, active_hours),
+             gap_seconds = case when $6 then $7::int else gap_seconds end, updated_at = now()
         where id = $1 returning ${CONN_COLUMNS}`,
-      [connectionId, locale.timezone ?? null, locale.country ?? null, limit, typeof locale.activeHours === "boolean" ? locale.activeHours : null]
+      [connectionId, locale.timezone ?? null, locale.country ?? null, limit, typeof locale.activeHours === "boolean" ? locale.activeHours : null, setGap, setGap ? g : null]
     )
     await replan(sql, conn(r!), now)
   })
