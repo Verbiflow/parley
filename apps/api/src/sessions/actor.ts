@@ -131,6 +131,8 @@ type SessionsContext = {
   fetchMedia?: MediaFetcher
   /** Posts webhook requests (see `webhook-delivery.ts`). Tests pass a stand-in. */
   postWebhook?: WebhookPoster
+  /** Send due webhook deliveries on a timer (default). Tests that run the delivery loop by hand turn it off. */
+  webhookTimer?: boolean
   webhooks?: Webhooks
 }
 
@@ -164,6 +166,7 @@ export class Sessions {
     await this.ctx.coordinator?.start((req) => this.#handleRpc(req))
     this.#dispatcher = setInterval(() => void this.dispatchDue().catch(() => {}), DISPATCH_INTERVAL_MS)
     this.#dispatcher.unref()
+    if (this.ctx.webhookTimer === false) return
     this.#webhookTimer = setInterval(() => void this.deliverWebhooks().catch((e: unknown) =>
       console.error(JSON.stringify({ msg: "webhook delivery failed", error: e instanceof Error ? e.message : String(e) }))), WEBHOOK_INTERVAL_MS)
     this.#webhookTimer.unref()
