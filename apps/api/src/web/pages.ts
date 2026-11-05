@@ -679,15 +679,6 @@ function deliveryResult(d: Delivery): string {
 const eventPicker = (on: readonly string[]) => `<div class="evpick">${WEBHOOK_EVENTS.map((e) =>
   `<label><input type="checkbox" name="events" value="${e}"${on.includes(e) ? " checked" : ""}><span><b>${e}</b><small>${esc(EVENT_TEXT[e])}</small></span></label>`).join("")}</div>`
 
-const VERIFY_SNIPPET = `// Node: verify a Parley webhook request (raw body, before JSON.parse)
-import { createHmac, timingSafeEqual } from "node:crypto"
-function verify(rawBody, header, secret) {
-  const { t, v1 } = Object.fromEntries(header.split(",").map((kv) => kv.split("=")))
-  if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false
-  const want = createHmac("sha256", secret).update(\`\${t}.\${rawBody}\`).digest("hex")
-  return v1.length === want.length && timingSafeEqual(Buffer.from(v1), Buffer.from(want))
-}`
-
 /** What the account page's webhooks section shows besides the list: a secret to show, an error, a notice. */
 export type WebhooksView = {
   webhooks: Webhook[]; deliveries: Delivery[]
@@ -767,8 +758,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
     </section>
     ${none ? "" : foldSection("Recent webhook deliveries", opts.deliveries.length
       ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th></tr></thead><tbody>${deliveryRows}</tbody></table>`
-      : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}
-    ${foldSection("Receiving webhooks", `<p class="sec-note">A JSON <code>POST</code> per event, with headers <code>Parley-Event</code>, <code>Parley-Event-Id</code>, <code>Parley-Delivery-Id</code>, <code>Parley-Attempt</code> and <code>Parley-Signature: t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where v1 is HMAC-SHA256 of <code>&lt;t&gt;.&lt;raw body&gt;</code> under the secret. Answer any 2xx within 10 seconds. Anything else is tried again, ${MAX_ATTEMPTS} attempts in all (at once, after 30 seconds, after 5 minutes), so dedupe on the event id. Redirects aren't followed, and URLs that resolve to private addresses are refused.</p>${copyLine(VERIFY_SNIPPET, { multiline: true })}`)}`
+      : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}`
 }
 
 // ---- Settings -----------------------------------------------------------------------------------------------------
