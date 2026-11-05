@@ -67,7 +67,7 @@ const deliveryOut = (d: Delivery, opts: { payload?: boolean } = {}) => ({
  * and a whole example. Handed over with the secret (create_webhook) and on list_webhooks / test_webhook.
  */
 const PAYLOAD = {
-  envelope: "Every body: { id (the event id, same as the Parley-Event-Id header), type (the event, same as Parley-Event), created_at, connection: { id, channel, account (the number, e.g. \"+65 9136 3557\") }, data }.",
+  envelope: "Every body: { id (the event id, same as the Parley-Event-Id header), type (the event, same as Parley-Event), created_at (when it happened), sent_at (when this request went: each retry and resend has its own; the id stays the same), connection: { id, channel, account (the number, e.g. \"+65 9136 3557\") }, data }.",
   data: {
     "message.received / message.sent": "data.chat { id, name, kind: \"direct\" | \"group\" }, data.message { id, from (sender id, or \"me\"), from_me, text (the text, or a media caption / placeholder like \"[photo]\"), at, media? { kind, mimetype, file_name, size, width, height, seconds, download_url (expires in an hour), download_expires_at } }",
     "reaction.added / reaction.removed": "data.chat, data.reaction { from, from_me, emoji (\"\" when removed), previous_emoji, at }, data.message { id, from, from_me, text } (the message reacted to)",
@@ -813,7 +813,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "create_webhook",
     {
       title: "Create a webhook",
-      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
+      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, sent_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
         url: z.string().max(2000).describe("A public https URL (not a private, local or internal address)."),
@@ -909,7 +909,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "resend_webhook_delivery",
     {
       title: "Resend a webhook delivery",
-      description: "Send a past delivery's event again (delivery ids are in list_webhooks), e.g. after fixing a receiver. It goes as a new delivery to the same webhook with the same body and event id (a receiver that dedupes on Parley-Event-Id sees a repeat) and a fresh media download link. Waits up to about 10 seconds for the outcome. The webhook must be on (test events go either way).",
+      description: "Send a past delivery's event again (delivery ids are in list_webhooks), e.g. after fixing a receiver. It goes as a new delivery to the same webhook with the same body and event id (a receiver that dedupes on Parley-Event-Id sees a repeat; sent_at shows when this one went) and a fresh media download link. Waits up to about 10 seconds for the outcome. The webhook must be on (test events go either way).",
       inputSchema: { delivery_id: z.string() },
     },
     async ({ delivery_id }, extra) => {
