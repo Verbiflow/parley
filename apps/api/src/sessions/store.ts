@@ -17,6 +17,8 @@ export type Connection = {
    * agent can skip either on a call, never turn one on that's off here.
    */
   readReceipts: boolean
+  /** The number's own profile picture (a small `data:` image URL), null when it has none or we haven't seen it yet. */
+  avatar: string | null
   typing: boolean
 }
 /**
@@ -31,15 +33,16 @@ type Row = {
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
   daily_limit: number
   read_receipts: boolean; typing: boolean
+  avatar: string | null
 }
 const row = (r: Row): Connection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, handle: r.handle, displayName: r.display_name,
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
-  dailyLimit: r.daily_limit, readReceipts: r.read_receipts, typing: r.typing,
+  dailyLimit: r.daily_limit, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, read_receipts, typing"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, read_receipts, typing, avatar"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(
@@ -88,6 +91,11 @@ export async function markConnected(sql: Sql, id: string, handle: string, countr
     `update parley.connection set status = 'connected', handle = $2, country = coalesce(country, $3), linked_at = coalesce(linked_at, now()), updated_at = now() where id = $1`,
     [id, handle, country ?? null]
   )
+}
+
+/** The number's own profile picture, as the channel last saw it (null: it has none). */
+export async function setAvatar(sql: Sql, id: string, image: string | null): Promise<void> {
+  await sql(`update parley.connection set avatar = $2 where id = $1 and avatar is distinct from $2`, [id, image])
 }
 
 /** The account a handle names, without the device part: "6591363557:12@s.whatsapp.net" → "6591363557". */
