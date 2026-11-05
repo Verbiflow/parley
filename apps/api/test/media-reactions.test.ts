@@ -256,7 +256,7 @@ test("sending from a URL: the sessions service downloads it (videos past 16 MB a
   assert.equal(new TextDecoder().decode(out!.content.media!.data), "mp4-bytes")
 })
 
-test("load_history: asks the phone for the chat's last N, adds what Parley never had, fills in what it had without media, and returns them", async () => {
+test("load_history: asks the phone for the N before the oldest message Parley has, adds what it never had, fills in what it had without media, and each call goes further back", async () => {
   const { accountId, connectionId } = await linked("history@parley.test")
   const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
   await assert.rejects(sessions.loadHistory(accountId, connectionId, "ana", 5), /no message in this chat to count back from/)
@@ -267,8 +267,8 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
 
   const pending = sessions.loadHistory(accountId, connectionId, "ana", 4)
   const [req] = await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 1)
-  // The newest stored message is the anchor; the other three are asked for before it.
-  assert.deepEqual([req!.anchor.threadId, req!.anchor.messageId, req!.anchor.fromMe, req!.count], ["ana", "t", true, 3])
+  // As WhatsApp's own "get older messages": the oldest stored message is the anchor, and N are asked for before it.
+  assert.deepEqual([req!.anchor.threadId, req!.anchor.messageId, req!.anchor.fromMe, req!.count], ["ana", "p", false, 4])
 
   // The phone's answer: a message Parley never had, and the photo again, now with its attachment and a reaction.
   const reaction = { threadId: "ana", messageId: "p", from: "me", fromMe: true, emoji: "❤️", at: at(1) }
@@ -276,7 +276,8 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "late", thumbnail: "dGh1bWI=" }, reactions: [reaction] })
   const { answered, messages } = await pending
   assert.equal(answered, true)
-  assert.deepEqual(messages.map((m) => m.id), ["lost", "p", "t"])
+  // What came back, up to the anchor (not the chat's latest).
+  assert.deepEqual(messages.map((m) => m.id), ["lost", "p"])
   const p = messages.find((m) => m.id === "p")!
   assert.equal(p.media?.kind, "image")
   assert.deepEqual(p.reactions.map((r) => r.emoji), ["❤️"])
@@ -285,6 +286,12 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "later" } })
   await new Promise((r) => setTimeout(r, 50))
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
+
+  // The next call counts back from the oldest message now stored, further back. Unanswered, it returns the latest.
+  const again = sessions.loadHistory(accountId, connectionId, "ana", 4)
+  const next = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 2)).at(-1)!
+  assert.equal(next.anchor.messageId, "lost")
+  void again.catch(() => {})
 
   const other = await store.upsertAccount(sql, { subject: "local:nosy2@parley.test", email: "nosy2@parley.test", name: "N", signedInWith: "local" })
   await assert.rejects(sessions.loadHistory(other.id, connectionId, "ana", 5), /not your connection/)
@@ -322,12 +329,12 @@ test("an ignored chat keeps a bookmark (no text) of its newest message, so turne
   const { messages } = await pending
   assert.ok(messages.some((m) => m.id === "g2"))
 
-  // Once a newer message is stored, that's the anchor again (one of the N).
+  // Once messages are stored, the oldest of them is the anchor, not the bookmark.
   fake.simulator.deliver(connectionId, { id: "g4", threadId: "team", from: "bo", text: "see you", at: at(9) })
   await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "team" }), (m) => m.some((x) => x.id === "g4"))
   void sessions.loadHistory(accountId, connectionId, "team", 10).catch(() => {})
   const last = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === before + 2)).at(-1)!
-  assert.deepEqual([last.anchor.messageId, last.count], ["g4", 9])
+  assert.deepEqual([last.anchor.messageId, last.count], ["g2", 10])
 })
 
 test("a chat that was never stored and has no bookmark says it can't load history yet", async () => {

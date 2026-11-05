@@ -11,7 +11,7 @@ import { Webhooks } from "./webhooks.ts"
 import { deliverDue, emitLiveEvents, postWebhook, pruneDeliveries, type WebhookPoster } from "./webhook-delivery.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setAvatar, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxQuery, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, historyAnchor, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxQuery, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -445,7 +445,7 @@ export class Sessions {
     if (!entry?.live) entry = await this.#hydrate(connectionId)
     if (!entry?.live) throw new ConnectError("not_connected", "connection is not live")
     if (!entry.live.backfill) throw new ConnectError("not_found", "this channel can't fetch history")
-    const anchor = await newestMessage(this.ctx.sql, connectionId, chatId)
+    const anchor = await historyAnchor(this.ctx.sql, connectionId, chatId)
     if (!anchor) throw new ConnectError("not_found", "Parley has no message in this chat to count back from (WhatsApp fetches history from the phone by counting back from a message), most likely because it was ignored when its messages came in. It can once a new message arrives in the chat; until then, ask the account holder for an export of the chat")
     const before = Date.parse(anchor.at)
     const key = `${connectionId}\n${chatId}`
@@ -467,15 +467,15 @@ export class Sessions {
       listeners.add(onArrive)
     })
     try {
-      // The newest stored message is one of the `n`; ask for the rest before it. A bookmark (an ignored chat's newest
-      // message, never stored) isn't: ask for all `n`.
-      const { stored, ...from } = anchor
-      await entry.live.backfill({ threadId: chatId, ...from }, stored ? Math.max(1, n - 1) : n)
+      // The `n` messages before the oldest one Parley has (or the bookmark).
+      await entry.live.backfill({ threadId: chatId, ...anchor }, n)
     } catch (e) {
       stop(false)
       throw e
     }
-    return { answered: await answered, messages: await readMessages(this.ctx.sql, connectionId, chatId, { limit: n }) }
+    // Answered: the older messages that just came in, up to the anchor. Not: the chat's latest, as Parley has them.
+    const ok = await answered
+    return { answered: ok, messages: await readMessages(this.ctx.sql, connectionId, chatId, ok ? { limit: n + 1, before: new Date(before + 1).toISOString() } : { limit: n }) }
   }
 
   /**

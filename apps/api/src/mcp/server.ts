@@ -628,11 +628,11 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "load_history",
     {
       title: "Load a chat's history",
-      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false — and then, by default, sends read receipts on WhatsApp too (see read_receipts).",
+      description: "Fetch a chat's older messages from the account holder's phone, as WhatsApp's own \"get older messages from your phone\" does: the `count` messages before the oldest one Parley has (e.g. from before the account was linked, or while the chat was ignored), with their attachments and reactions. Call it again to go further back, `count` at a time. Waits up to about 20 seconds for the phone, which must be online; `answered` says whether it replied. Answered, it returns the older messages it fetched; not, the chat's latest messages as Parley has them. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false — and then, by default, sends read receipts on WhatsApp too (see read_receipts).",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the chat.`),
         chat_id: z.string().describe("The chat (chat_id from list_chats or read_inbox)."),
-        count: z.number().int().min(1).max(50).optional().describe("How many of the latest messages (default 20, at most 50)."),
+        count: z.number().int().min(1).max(50).optional().describe("How many older messages to fetch (default 20, at most 50)."),
         mark_read: MARK_READ,
         read_receipts: READ_RECEIPTS,
       },

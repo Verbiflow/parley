@@ -383,21 +383,21 @@ export async function saveReactions(sql: Sql, connectionId: string, reactions: R
 }
 
 /**
- * Where fetching older history from the phone starts: the chat's newest stored message or, with none stored, its
- * bookmark (the newest message that came in while it was ignored), whichever is newer. `stored`: the anchor is a
- * stored message (so it's one of the messages a fetch returns); a bookmark's message isn't stored.
+ * Where fetching older history from the phone starts, as WhatsApp's own apps do ("get older messages from your
+ * phone"): the oldest message Parley has stored in the chat, or with none stored, its bookmark (the newest message that
+ * came in while it was ignored). The phone answers with the messages before it, so each fetch reaches further back.
  */
-export async function newestMessage(sql: Sql, connectionId: string, chatId: string): Promise<{ messageId: string; fromMe: boolean; sender: string; at: string; stored: boolean } | undefined> {
-  const [r] = await sql<{ id: string; from_me: boolean; sender: string; sent_at: Date; stored: boolean }>(
+export async function historyAnchor(sql: Sql, connectionId: string, chatId: string): Promise<{ messageId: string; fromMe: boolean; sender: string; at: string } | undefined> {
+  const [r] = await sql<{ id: string; from_me: boolean; sender: string; sent_at: Date }>(
     `select * from (
-       (select id, from_me, sender, sent_at, true as stored from parley.message where connection_id = $1 and chat_id = $2 order by sent_at desc, seq desc limit 1)
+       (select id, from_me, sender, sent_at, 0 as pri from parley.message where connection_id = $1 and chat_id = $2 order by sent_at, seq limit 1)
        union all
-       (select anchor->>'id', (anchor->>'from_me')::boolean, anchor->>'sender', (anchor->>'at')::timestamptz, false
+       (select anchor->>'id', (anchor->>'from_me')::boolean, anchor->>'sender', (anchor->>'at')::timestamptz, 1
           from parley.chat where connection_id = $1 and id = $2 and anchor is not null)
-     ) x order by sent_at desc, stored desc limit 1`,
+     ) x order by pri limit 1`,
     [connectionId, chatId]
   )
-  return r && { messageId: r.id, fromMe: r.from_me, sender: r.sender, at: new Date(r.sent_at).toISOString(), stored: r.stored }
+  return r && { messageId: r.id, fromMe: r.from_me, sender: r.sender, at: new Date(r.sent_at).toISOString() }
 }
 
 /** A stored message's attachment, with the channel's fetch handle. Undefined when there's no such message or no media. */
