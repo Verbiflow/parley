@@ -651,6 +651,8 @@ const WEBHOOKS_CSS = `
 .whnone{font-size:13.5px;margin:6px 0 0}.chats-h{margin-top:36px;margin-bottom:14px}.whsec .sec-note{margin-bottom:14px}
 .edit summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted)}.edit[open]{padding:14px 0 4px}.edit[open] summary{margin-bottom:14px}
 .note.reveal{margin-bottom:20px}.secret{display:flex;flex-direction:column;gap:10px;width:100%}.secret .term{margin:0}
+.plrow td{padding-top:4px}.plrow .term{margin:0;max-height:420px;overflow:auto}.plmeta{font-size:12px;margin-bottom:8px}.plmeta .mono{font-family:var(--mono)}
+.tbl tbody tr.plrow:hover{background:none}
 .health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
 `
 
@@ -720,14 +722,27 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
     </tr>`
   }).join("")
 
-  const deliveryRows = opts.deliveries.map((d) => `<tr>
+  const deliveryRows = opts.deliveries.map((d) => {
+    const done = d.status === "delivered" || d.status === "failed"
+    const hook = hooks.get(d.webhookId)
+    const canResend = done && hook && (hook.enabled || d.event === "webhook.test")
+    return `<tr>
       <td class="m faint">${esc(ago(d.createdAt))}</td>
       <td class="m">${esc(d.event)}</td>
-      <td class="clip m">${esc(shortUrl(hooks.get(d.webhookId)?.url ?? ""))}</td>
+      <td class="clip m">${esc(shortUrl(hook?.url ?? ""))}</td>
       <td>${status(DELIVERY_TONE[d.status], d.status)}</td>
       <td class="m">${d.attempts}<span class="faint">/${MAX_ATTEMPTS}</span></td>
       <td class="clip" title="${esc(deliveryResult(d))}">${esc(deliveryResult(d))}</td>
-    </tr>`).join("")
+      <td class="r"><div class="acts-row">
+        <button class="btn quiet sm" type="button" data-toggle="pl-${esc(d.id)}" aria-expanded="false">Payload</button>
+        ${canResend ? `<form method="post" action="${at}/deliveries/${esc(d.id)}/resend"><button class="btn quiet sm" type="submit">Resend</button></form>` : ""}
+      </div></td>
+    </tr>
+    <tr class="plrow" id="pl-${esc(d.id)}" hidden><td colspan="7">
+      <div class="plmeta faint">Parley-Event-Id <span class="mono">${esc(d.eventId)}</span> · Parley-Delivery-Id <span class="mono">${esc(d.id)}</span></div>
+      ${copyLine(JSON.stringify(d.payload, null, 2), { multiline: true })}
+    </td></tr>`
+  }).join("")
 
   const revealed = opts.revealed && hooks.get(opts.revealed.id)
   const secretNote = revealed ? `<div class="note reveal"><div class="secret">
@@ -757,7 +772,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
       ${addForm}
     </section>
     ${none ? "" : foldSection("Recent webhook deliveries", opts.deliveries.length
-      ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th></tr></thead><tbody>${deliveryRows}</tbody></table>`
+      ? `<table class="tbl"><thead><tr><th>When</th><th>Event</th><th>To</th><th>State</th><th>Tries</th><th>Result</th><th></th></tr></thead><tbody>${deliveryRows}</tbody></table>`
       : empty("Nothing sent yet", "Each event shows up here as it's delivered. Send a test to try an endpoint."), { aside: `${opts.deliveries.length ? `${opts.deliveries.length} latest` : ""}`, open: opts.deliveries.length > 0 && Boolean(opts.notice || opts.revealed) })}`
 }
 

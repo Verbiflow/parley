@@ -154,6 +154,24 @@ test("media comes with what it is and an expiring download link", async () => {
   assert.equal(media.ref, undefined, "the channel's fetch handle never leaves")
   assert.match(media.download_url, /^https:\/\/app\.parley\.test\/media\//)
   assert.ok(Date.parse(media.download_expires_at) > Date.now())
+
+  // Each delivery keeps the body it sent; a resend sends it again (same event id) with a fresh download link.
+  const [d] = await ctx.webhooks.deliveries(sql, accountId, { limit: 1 })
+  assert.deepEqual(d!.payload, received[0]!.body)
+  const later = Date.now() + 5_000
+  const realNow = Date.now
+  Date.now = () => later
+  let again
+  try { again = await ctx.webhooks.resend(sql, accountId, d!.id) } finally { Date.now = realNow }
+  assert.notEqual(again.id, d!.id)
+  assert.equal(again.eventId, d!.eventId)
+  await flush()
+  const resent = received[1]!
+  assert.equal(resent.body.id, received[0]!.body.id, "the same event id")
+  assert.equal(resent.headers["parley-delivery-id"], again.id)
+  assert.equal(resent.body.data.message.text, "look")
+  assert.notEqual(resent.body.data.message.media.download_url, media.download_url, "a fresh link")
+  assert.ok(Date.parse(resent.body.data.message.media.download_expires_at) > Date.parse(media.download_expires_at))
 })
 
 test("three attempts at most: at once, after 30 s, after 5 min; a later success delivers", async () => {
@@ -212,9 +230,18 @@ test("a webhook that's off gets nothing, and turning it off drops what was waiti
   const all = await ctx.webhooks.deliveries(sql, accountId, { limit: 10 })
   assert.deepEqual(all.map((d) => [d.status, d.lastError]), [["failed", "the webhook was turned off"]])
 
+  // Real events can't be resent to a webhook that's off.
+  await assert.rejects(ctx.webhooks.resend(sql, accountId, all[0]!.id), /turn it on/)
+
   await ctx.webhooks.test(sql, accountId, webhook.id)
   await flush()
-  assert.equal(received[0]!.body.type, "webhook.test")
+  const t = received[0]!.body
+  assert.equal(t.type, "webhook.test")
+  // Shaped like a message event, so a receiver built against the test reads real ones the same way.
+  assert.deepEqual(t.connection, { id: connectionId, channel: "fake-wa", account: "+65 9136 3557" })
+  assert.deepEqual(t.data.chat, { id: "test", name: "Parley test", kind: "direct" })
+  assert.equal(t.data.message.from_me, false)
+  assert.match(t.data.message.text, /test event from Parley/)
 })
 
 test("URLs: public http(s) only, no credentials, at most ten per account; secrets rotate", async () => {
@@ -290,7 +317,7 @@ test("the real sender refuses private addresses (even by name) and never follows
 test("agents manage webhooks over MCP, and each number's page shows and configures them", async () => {
   reset()
   const email = "mcp-hooks@parley.test"
-  const { connectionId: cid } = await linked(email)
+  const { accountId: owner, connectionId: cid } = await linked(email)
   const token = await agentToken(base, email, "Hook Agent")
   const created = await callTool(base, token, "create_webhook", { url: "https://hooks.example.com/agent", events: ["message.received"], description: "CRM sync" })
   assert.equal(created.isError, false, JSON.stringify(created.result))
@@ -317,6 +344,20 @@ test("agents manage webhooks over MCP, and each number's page shows and configur
   assert.equal(listed.result.webhooks[0].secret, undefined, "listing never shows the secret")
   assert.equal(listed.result.webhooks[0].account, "+65 9136 3557")
   assert.equal(listed.result.webhooks[0].recent_deliveries[0].event, "webhook.test")
+  assert.equal(listed.result.webhooks[0].recent_deliveries[0].payload, undefined, "payloads only when asked")
+  assert.equal(listed.result.payload_format.read_text_at, "data.message.text (not data.text)")
+  assert.ok(created.result.payload_format.example.data.message.text, "create_webhook says what the body looks like")
+  assert.match(result.result.payload.data.message.text, /test event from Parley/, "test_webhook shows what it sent")
+  const withBodies = await callTool(base, token, "list_webhooks", { include_payloads: true })
+  const sent = withBodies.result.webhooks[0].recent_deliveries[0]
+  assert.equal(sent.payload.id, sent.event_id)
+  const again = callTool(base, token, "resend_webhook_delivery", { delivery_id: sent.id })
+  const loop2 = setInterval(() => void sessions.deliverWebhooks(), 100)
+  const resent = await again.finally(() => clearInterval(loop2))
+  assert.equal(resent.isError, false, JSON.stringify(resent.result))
+  assert.equal(resent.result.status, "delivered")
+  assert.equal(resent.result.event_id, sent.event_id)
+  assert.equal(resent.result.resent_from, sent.id)
 
   const updated = await callTool(base, token, "update_webhook", { webhook_id: id, enabled: false, rotate_secret: true })
   assert.equal(updated.result.enabled, false)
@@ -375,6 +416,20 @@ test("agents manage webhooks over MCP, and each number's page shows and configur
   await form("test")
   await flush()
   assert.ok(verifies(received.at(-1)!, newSecret!), "signed with the rotated secret")
+
+  // Each delivery's payload is on the page, and it can be resent from there.
+  const [last] = await ctx.webhooks.deliveries(sql, owner, { connectionId: cid, limit: 1 })
+  const withPayload = await pageOf()
+  assert.match(withPayload, new RegExp(`id="pl-${last!.id}" hidden`))
+  assert.ok(withPayload.includes(`/webhooks/deliveries/${last!.id}/resend`))
+  assert.ok(withPayload.includes("test event from Parley"), "the payload is shown")
+  const before = received.length
+  const resend = await fetch(`${at}/deliveries/${last!.id}/resend`, { method: "POST", headers: { cookie }, redirect: "manual" })
+  assert.equal(resend.headers.get("location"), `/app/connections/${cid}?webhook=resent#webhooks`)
+  await flush()
+  assert.equal(received.length, before + 1)
+  assert.equal(received.at(-1)!.body.id, last!.eventId)
+  assert.equal((await fetch(`${base}/app/connections/${cid}/webhooks/deliveries/${crypto.randomUUID()}/resend`, { method: "POST", headers: { cookie }, redirect: "manual" })).status, 404)
   assert.ok(!verifies(received.at(-1)!, secret!))
 
   const rejected = await fetch(at, { method: "POST", headers: { cookie }, body: new URLSearchParams({ url: "https://localhost/x" }) })

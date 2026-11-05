@@ -57,10 +57,33 @@ const webhookView = (w: Webhook, account?: string | null) => ({
   id: w.id, connection_id: w.connectionId, ...(account !== undefined ? { account } : {}), url: w.url, events: w.events, description: w.description, enabled: w.enabled, created_by: w.createdBy,
   secret_ends_with: w.secretHint, last_success_at: w.lastSuccessAt, last_failure_at: w.lastFailureAt, last_error: w.lastError, created_at: w.createdAt,
 })
-const deliveryOut = (d: Delivery) => ({
+const deliveryOut = (d: Delivery, opts: { payload?: boolean } = {}) => ({
   id: d.id, webhook_id: d.webhookId, event: d.event, event_id: d.eventId, status: d.status, attempts: d.attempts,
   next_attempt_at: d.nextAttemptAt, last_status: d.lastStatus, last_error: d.lastError, created_at: d.createdAt, delivered_at: d.deliveredAt,
+  ...(opts.payload ? { payload: d.payload } : {}),
 })
+/**
+ * What a webhook request's JSON body looks like, for an agent writing the receiver: the envelope, each event's `data`,
+ * and a whole example. Handed over with the secret (create_webhook) and on list_webhooks / test_webhook.
+ */
+const PAYLOAD = {
+  envelope: "Every body: { id (the event id, same as the Parley-Event-Id header), type (the event, same as Parley-Event), created_at, connection: { id, channel, account (the number, e.g. \"+65 9136 3557\") }, data }.",
+  data: {
+    "message.received / message.sent": "data.chat { id, name, kind: \"direct\" | \"group\" }, data.message { id, from (sender id, or \"me\"), from_me, text (the text, or a media caption / placeholder like \"[photo]\"), at, media? { kind, mimetype, file_name, size, width, height, seconds, download_url (expires in an hour), download_expires_at } }",
+    "reaction.added / reaction.removed": "data.chat, data.reaction { from, from_me, emoji (\"\" when removed), previous_emoji, at }, data.message { id, from, from_me, text } (the message reacted to)",
+    "message.deleted": "data.chat, data.message { id, from, from_me, at } (no text: it stays deleted)",
+    "webhook.test": "shaped like message.received: data.webhook_id, data.chat { id: \"test\", ... }, data.message { ..., text }",
+  },
+  read_text_at: "data.message.text (not data.text)",
+  example: {
+    id: "778c3c6a-3455-4d1a-a6d4-6d1ebd791f08", type: "message.received", created_at: "2026-11-05T00:11:04.224Z",
+    connection: { id: "75490190-6bd4-4557-a353-fe51310c02a1", channel: "whatsapp", account: "+65 9136 3557" },
+    data: {
+      chat: { id: "14084203023@s.whatsapp.net", name: "Ana", kind: "direct" },
+      message: { id: "3EB09F8B6C075FDDD15814", from: "14084203023@s.whatsapp.net", from_me: false, text: "hi there", at: "2026-11-05T00:11:03.000Z" },
+    },
+  },
+}
 /** How a receiver checks a request is Parley's, said once wherever a secret is handed over. */
 const VERIFY = "Each request is a JSON POST with headers Parley-Event, Parley-Event-Id, Parley-Delivery-Id, Parley-Attempt and Parley-Signature: \"t=<unix seconds>,v1=<hex>\". To verify, compute HMAC-SHA256 with the secret (the whole whsec_… string) as the key over \"<t>.<raw request body>\", compare it to v1 in constant time, and reject a t more than 5 minutes old. Answer any 2xx within 10 seconds; anything else is retried (" + MAX_ATTEMPTS + " attempts in all: at once, after 30 seconds, after 5 minutes). The same event can arrive twice: dedupe on Parley-Event-Id."
 const EVENTS_DOC = WEBHOOK_EVENTS.map((e) => `${e} (${EVENT_TEXT[e]})`).join("; ")
@@ -760,10 +783,14 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_webhooks",
     {
       title: "List webhooks",
-      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's events, whether it's on, its last success and failure, and its latest deliveries.",
-      inputSchema: { connection_id: filters.connection_id, deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5).") },
+      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's events, whether it's on, its last success and failure, and its latest deliveries (with include_payloads, the exact JSON body each sent: use it to debug a receiver). Also answers `payload_format`, what every request body looks like.",
+      inputSchema: {
+        connection_id: filters.connection_id,
+        deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5)."),
+        include_payloads: z.boolean().optional().describe("Include each delivery's JSON body (default false)."),
+      },
     },
-    async ({ connection_id, deliveries }, extra) => {
+    async ({ connection_id, deliveries, include_payloads }, extra) => {
       const { userId } = principalOf(extra)
       try {
         const conn = connection_id ? await findConnection(ctx, userId, connection_id) : undefined
@@ -771,8 +798,9 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         const per = deliveries ?? 5
         const recent = await Promise.all(hooks.map((w) => (per ? ctx.webhooks.deliveries(ctx.sql, userId, { webhookId: w.id, limit: per }) : Promise.resolve([]))))
         return json({
-          webhooks: hooks.map((w, i) => ({ ...webhookView(w, account.get(w.connectionId) ?? null), recent_deliveries: recent[i]!.map(deliveryOut) })),
+          webhooks: hooks.map((w, i) => ({ ...webhookView(w, account.get(w.connectionId) ?? null), recent_deliveries: recent[i]!.map((d) => deliveryOut(d, { payload: include_payloads })) })),
           events: Object.fromEntries(WEBHOOK_EVENTS.map((e) => [e, EVENT_TEXT[e]])),
+          payload_format: PAYLOAD,
           ...(hooks.length ? {} : { note: "No webhooks yet. create_webhook adds one." }),
         })
       } catch (e) {
@@ -785,7 +813,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "create_webhook",
     {
       title: "Create a webhook",
-      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
+      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
         url: z.string().max(2000).describe("A public https URL (not a private, local or internal address)."),
@@ -798,7 +826,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       try {
         const conn = await pickConnection(ctx, userId, connection_id)
         const { webhook, secret } = await ctx.webhooks.create(ctx.sql, userId, { connectionId: conn.id, url, events, description, createdBy: await agentName(sessionId) })
-        return json({ ...webhookView(webhook, accountLabel(conn)), secret, verify: VERIFY, next: "Call test_webhook with this id to send a test event and see that it arrives." })
+        return json({ ...webhookView(webhook, accountLabel(conn)), secret, verify: VERIFY, payload_format: PAYLOAD, next: "Call test_webhook with this id to send a test event and see that it arrives." })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not create the webhook")
       }
@@ -851,7 +879,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "test_webhook",
     {
       title: "Test a webhook",
-      description: "Send a webhook.test event to a webhook (signed like every other) and wait up to about 10 seconds to say whether it was delivered: the status the URL answered, or why it failed. A failed first attempt is retried like any delivery.",
+      description: "Send a webhook.test event to a webhook (signed like every other, and shaped like a message.received: the text is at data.message.text) and wait up to about 10 seconds to say whether it was delivered: the status the URL answered, or why it failed. A failed first attempt is retried like any delivery. The answer includes the exact payload sent.",
       inputSchema: { webhook_id: z.string() },
     },
     async ({ webhook_id }, extra) => {
@@ -865,7 +893,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
           d = await ctx.webhooks.delivery(ctx.sql, userId, queued.id)
           if (!d || d.status === "delivered" || d.status === "failed" || (d.status === "pending" && d.attempts > 0)) break
         }
-        const out = deliveryOut(d ?? queued)
+        const out = deliveryOut(d ?? queued, { payload: true })
         const note = !d ? "The webhook was deleted." : d.status === "delivered"
           ? `Delivered: the URL answered HTTP ${d.lastStatus}.`
           : d.attempts > 0 ? `Not delivered: ${d.lastError ?? "unknown error"}.${d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""}`
@@ -873,6 +901,34 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json({ ...out, note })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not test the webhook")
+      }
+    }
+  )
+
+  server.registerTool(
+    "resend_webhook_delivery",
+    {
+      title: "Resend a webhook delivery",
+      description: "Send a past delivery's event again (delivery ids are in list_webhooks), e.g. after fixing a receiver. It goes as a new delivery to the same webhook with the same body and event id (a receiver that dedupes on Parley-Event-Id sees a repeat) and a fresh media download link. Waits up to about 10 seconds for the outcome. The webhook must be on (test events go either way).",
+      inputSchema: { delivery_id: z.string() },
+    },
+    async ({ delivery_id }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const queued = await ctx.webhooks.resend(ctx.sql, userId, delivery_id)
+        let d: Delivery | undefined = queued
+        for (let i = 0; i < 40; i++) {
+          await new Promise((r) => setTimeout(r, 250))
+          d = await ctx.webhooks.delivery(ctx.sql, userId, queued.id)
+          if (!d || d.status === "delivered" || d.status === "failed" || (d.status === "pending" && d.attempts > 0)) break
+        }
+        const note = !d ? "The webhook was deleted." : d.status === "delivered"
+          ? `Delivered: the URL answered HTTP ${d.lastStatus}.`
+          : d.attempts > 0 ? `Not delivered: ${d.lastError ?? "unknown error"}.${d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""}`
+          : "Still waiting to be sent. Check list_webhooks in a moment."
+        return json({ ...deliveryOut(d ?? queued), resent_from: delivery_id, note })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not resend the delivery")
       }
     }
   )
