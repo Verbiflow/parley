@@ -235,12 +235,12 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
 /** One card per channel, for the first link: the live ones get a Connect button, the rest stay dim until hovered. */
-function connectorCards(): string {
+function connectorCards(resume: Connection | undefined): string {
   return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => c.live
     ? `<div class="conn ready">
       <span class="ct">${channelMark(id, 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
-      <div class="cf">${connectForm(`Connect ${c.name}`, "btn")}</div>
+      <div class="cf">${resume?.channel === id ? finishLink(resume, "btn") : connectForm(`Connect ${c.name}`, "btn")}</div>
     </div>`
     : `<div class="conn later soon-x" tabindex="0" aria-label="${c.name}, coming soon">
       <span class="ct">${channelMark(id, 26)}</span>
@@ -272,10 +272,15 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
   </div>`
 }
 
-/** The last card in the grid: link another number now, and the channels that are on their way. */
-const addCard = () => `<div class="acard add">
-    <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>Link another number</small></div></div>
-    <div class="af">${connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id]) => soonMark(id, 16)).join("")}</span></div>
+/** A link someone started and never scanned: not an account yet, just where the next "Connect" picks up. */
+export const unfinishedLink = (c: Connection) => !c.handle && (c.status === "linking" || c.status === "closed")
+
+const finishLink = (c: Connection, cls: string) => `<a class="${cls}" href="/link/${esc(c.id)}">Finish linking<span class="ar">${icon("arrow", 13)}</span></a>`
+
+/** The last card in the grid: link another number now (or finish the one started), and the channels on their way. */
+const addCard = (resume: Connection | undefined) => `<div class="acard add">
+    <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>${resume ? "You started linking a number" : "Link another number"}</small></div></div>
+    <div class="af">${resume ? finishLink(resume, "btn sm") : connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id]) => soonMark(id, 16)).join("")}</span></div>
   </div>`
 
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
@@ -471,12 +476,14 @@ export function dashboardPage(opts: {
   user: Viewer; connections: Connection[]; agents: AgentView[]; mcpUrl: string; syncedCounts?: Map<string, number>
   summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: ActivityEntry[]; webhookCounts?: Map<string, number>
 }): string {
-  const visible = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
+  const shown = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
+  const visible = shown.filter((c) => !unfinishedLink(c))
+  const resume = shown.find(unfinishedLink)
   const live = visible.filter((c) => c.status === "connected")
   const sentToday = [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.sentToday, 0)
   const queued = opts.queued ?? [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.queued, 0)
   const activeAgents = opts.agents.filter(isActive).length
-  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id), opts.webhookCounts?.get(c.id) ?? 0)).join("")}${addCard()}</div>`
+  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id), opts.webhookCounts?.get(c.id) ?? 0)).join("")}${addCard(resume)}</div>`
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:16px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
@@ -488,7 +495,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Welcome to Parley", sub: "Two steps and your agents can text people from your own account: connect an account, then connect your agent." })}
     ${alerts}
-    ${section("Connect an account", hasChannel ? cards : connectorCards(), hasChannel ? doneTag : "", hasChannel ? "" : "Parley links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
+    ${section("Connect an account", hasChannel ? cards : connectorCards(resume), hasChannel ? doneTag : "", hasChannel ? "" : "Parley links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${section("Connect your agent", agentSetup(opts.mcpUrl, opts.agents), opts.agents.length ? doneTag : "Streamable HTTP · OAuth", "", stepNo(2, opts.agents.length > 0))}`)
   }
 

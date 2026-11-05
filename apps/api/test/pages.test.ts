@@ -36,6 +36,17 @@ test("the overview with two WhatsApp numbers lists both, offers another, and say
   assert.match(html, /data-live="\/app\/activity\/feed\?compact=1"/)
   const solo = dashboardPage({ user, connections: [conn("work", "6591363557:7@s.whatsapp.net")], agents: [agent], mcpUrl: "https://x/mcp", recent: [{ ...sent, connectionId: "work" }] })
   assert.doesNotMatch(solo, /class="fr"/)
+
+  // A link that was started and never scanned isn't an account: no card of its own, and "Connect" finishes it instead.
+  for (const status of ["linking", "closed"] as const) {
+    const started = { ...conn("new", ""), handle: null, status, linkedAt: null }
+    const withAccounts = dashboardPage({ user, connections: [conn("work", "6591363557:7@s.whatsapp.net"), started], agents: [agent], mcpUrl: "https://x/mcp" })
+    assert.doesNotMatch(withAccounts, /Waiting for the QR scan|waiting for scan/i)
+    assert.match(withAccounts, /You started linking a number.*href="\/link\/new">Finish linking/s)
+    const onlyThat = dashboardPage({ user, connections: [started], agents: [], mcpUrl: "https://x/mcp" })
+    assert.match(onlyThat, /class="conn ready">.*href="\/link\/new">Finish linking/s)
+    assert.doesNotMatch(onlyThat, /class="acard"|class="done-tag"/)
+  }
 })
 
 test("an account page shows its chats with the daily limit and disconnect on top", () => {
