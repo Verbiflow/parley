@@ -266,12 +266,13 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         channel: z.string().describe("Channel id, e.g. \"whatsapp\". Use list_channels to see options."),
         timezone: z.string().refine(isValidTimeZone, "unknown IANA time zone").optional().describe("IANA time zone the account holder lives in, e.g. \"Europe/London\". Messages go out during their local daytime. Defaults to UTC."),
         country: z.string().regex(/^[A-Za-z]{2}$/).optional().describe("ISO country code the account lives in, e.g. \"GB\". Picks a proxy exit there; learned from the phone number when omitted."),
+        full_history: z.boolean().optional().describe("Ask the phone for the account's whole history while linking, as WhatsApp's desktop app does (default true). false: only the last few weeks, so agents may not find conversations from before the account was linked."),
       },
     },
-    async ({ channel, timezone, country }, extra) => {
+    async ({ channel, timezone, country, full_history }, extra) => {
       const { userId } = principalOf(extra)
       try {
-        const started = await ctx.sessions.connect(userId, channel, { timezone, country })
+        const started = await ctx.sessions.connect(userId, channel, { timezone, country, fullHistory: full_history })
         return json({
           connection_id: started.connectionId,
           channel: started.channel,

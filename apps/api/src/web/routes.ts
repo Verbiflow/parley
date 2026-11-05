@@ -10,7 +10,7 @@ import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
 import { MAX_DAILY_LIMIT, MAX_GAP_SECONDS, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
-import { setBehaviour } from "../sessions/store.ts"
+import { carryOver, setBehaviour } from "../sessions/store.ts"
 import { WebhookError, moveWebhooks } from "../sessions/webhooks.ts"
 import { isValidTimeZone, policyFor } from "@parley/pacing"
 import { PRESET_IDS, PROXY_KINDS, PROXY_PROTOCOLS, type PresetId, type ProxyKind } from "@parley/proxies"
@@ -215,12 +215,12 @@ export function webRoutes(ctx: AppContext): Hono {
     return c.redirect(`/app/connections/${c.req.param("id")}`)
   })
 
-  // Read receipts and typing for this number. An unchecked box isn't sent at all: absent means off.
+  // Read receipts, typing and full history for this number. An unchecked box isn't sent at all: absent means off.
   app.post("/app/connections/:id/behaviour", async (c) => {
     const userId = await currentUserId(c, ctx)
     if (!userId) return c.redirect("/")
     const form = await c.req.formData()
-    const ok = await setBehaviour(ctx.sql, userId, c.req.param("id"), { readReceipts: form.get("read_receipts") === "on", typing: form.get("typing") === "on" })
+    const ok = await setBehaviour(ctx.sql, userId, c.req.param("id"), { readReceipts: form.get("read_receipts") === "on", typing: form.get("typing") === "on", fullHistory: form.get("full_history") === "on" })
     if (!ok) return c.text("Unknown connection.", 404)
     return c.redirect(`/app/connections/${c.req.param("id")}`)
   })
@@ -394,11 +394,9 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!old) return c.text("Unknown connection.", 404)
     await ctx.sessions.logout(userId, old.id).catch(() => {})
     try {
-      const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined })
-      // The new link keeps what was ignored (by number / group id), so a rebuilt list doesn't un-ignore anything.
-      await ctx.sql(`update parley.connection n set ignored_chats = o.ignored_chats from parley.connection o where n.id = $1 and o.id = $2`, [started.connectionId, old.id])
-      // And its webhooks, so the new link keeps calling the same URLs.
-      await moveWebhooks(ctx.sql, [old.id], started.connectionId)
+      const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined, fullHistory: old.fullHistory })
+      // The new link takes over what was ignored, the webhooks, the number's settings and what Parley stored.
+      await carryOver(ctx.sql, started.connectionId, [old.id])
       return c.redirect(`/link/${started.connectionId}`)
     } catch (e) {
       if (e instanceof ConnectError && e.code === "no_exit") return c.redirect(`/app/network?error=${encodeURIComponent(e.message)}`)

@@ -722,7 +722,7 @@ export class Sessions {
       const [row] = await this.ctx.sql<{ message: Uint8Array }>(`select message from parley.sent_message where connection_id = $1 and id = $2`, [connectionId, id])
       return row ? new Uint8Array(row.message) : undefined
     }
-    const live = await channel.open({ connectionId, state, proxy, emit, sentMessage })
+    const live = await channel.open({ connectionId, state, proxy, emit, sentMessage, fullHistory: conn?.fullHistory ?? true })
     entry.live = live
     await this.ctx.coordinator?.claim(connectionId)
     return entry

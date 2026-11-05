@@ -148,7 +148,7 @@ export const whatsappChannel: Channel = {
   id: WHATSAPP_ID,
   capabilities: WHATSAPP_CAPABILITIES,
 
-  async open({ state, proxy, emit, sentMessage }: OpenOptions): Promise<LiveConnection> {
+  async open({ state, proxy, emit, sentMessage, fullHistory = true }: OpenOptions): Promise<LiveConnection> {
     // One agent for the WebSocket and one for media/HTTPS fetches, so nothing leaves from the server's own IP.
     const agent = proxy ? proxyAgent(proxy) : undefined
     const fetchAgent = proxy ? proxyAgent(proxy) : undefined
@@ -472,15 +472,16 @@ export const whatsappChannel: Channel = {
       sock = makeWASocket({
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
         logger: SILENT,
-        // Linked as a desktop app with full history: the phone sends its whole history copy at link time, as it does
-        // for WhatsApp's own desktop app (a browser identity only gets the last few weeks). WhatsApp sends full history
-        // only to "Mac OS"/"Windows" + "Desktop".
-        browser: ["Mac OS", "Desktop", "14.5.0"],
+        // With full history (the number's setting, on by default) linked as a desktop app: the phone sends its whole
+        // history copy at link time, as for WhatsApp's own desktop app. WhatsApp sends full history only to
+        // "Mac OS"/"Windows" + "Desktop"; a browser identity gets the last few weeks.
+        browser: fullHistory ? ["Mac OS", "Desktop", "14.5.0"] : ["Parley", "Chrome", "1.0"],
         // Don't mark the account online on connect, or the phone stops getting notifications.
         markOnlineOnConnect: false,
-        syncFullHistory: true,
-        // Every history batch, the full archive included. Ignored chats' messages are kept privately (agents never see them).
-        shouldSyncHistoryMessage: () => true,
+        syncFullHistory: fullHistory,
+        // Every history batch (the full archive only when asked for). Ignored chats' messages are kept privately.
+        // Without full history, still take the one-time recent-chats sync: that's where one-to-one chats come from.
+        shouldSyncHistoryMessage: (h) => fullHistory || h.syncType !== proto.Message.HistorySyncType.FULL,
         // Resend a message a recipient couldn't decrypt (see `sent` above).
         // Logged (ids only, no text) so a message stuck on "Waiting for this message" can be traced.
         getMessage: async (key) => {
