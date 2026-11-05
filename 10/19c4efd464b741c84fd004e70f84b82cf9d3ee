@@ -1,0 +1,23 @@
+apps/api/src/context.ts
+  s_1bda550d5e639c::t_00c01682e17ed3 44,53
+apps/api/src/sessions/actor.ts
+  s_1bda550d5e639c::t_00c01682e17ed3 134-135,169
+apps/api/test/webhooks.test.ts
+  s_1bda550d5e639c::t_00c01682e17ed3 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1019c4efd464b741c84fd004e70f84b82cf9d3ee",
+  "prompts": {},
+  "sessions": {
+    "s_1bda550d5e639c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74b69549-cccf-49de-952f-06adb01bc06f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
