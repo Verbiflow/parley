@@ -5,8 +5,8 @@ export const MCP_URL = `${APP_URL}/mcp`
 export const GITHUB_URL = "https://github.com/Verbiflow/parley"
 
 const BUTTON = {
-  primary: "sheen text-[#1b140e] bg-[linear-gradient(180deg,#fffaf3_0%,#f3e6d4_52%,#e6cfb0_100%)] shadow-[inset_0_1px_0_rgb(255_255_255/0.95),inset_0_-1px_0_rgb(140_95_50/0.22),0_0_0_1px_rgb(227_185_141/0.55),0_10px_28px_-10px_rgb(227_185_141/0.55)] hover:brightness-[1.04]",
-  ghost: "text-ink-2 bg-[linear-gradient(180deg,rgb(255_255_255/0.075),rgb(255_255_255/0.025))] shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_0_0_1px_rgb(255_255_255/0.09)] hover:text-ink hover:brightness-125",
+  primary: "sheen text-[color:var(--on-primary)] bg-[image:var(--primary)] shadow-[var(--primary-shadow)] hover:brightness-[1.04]",
+  ghost: "text-ink-2 bg-[image:var(--glass)] shadow-[var(--glass-ring)] hover:text-ink hover:bg-[image:var(--glass-hi)]",
 }
 
 const SIZE = {
@@ -15,7 +15,7 @@ const SIZE = {
 }
 
 /** The raised surface every card and window on the page shares: hairline edge, a lit top edge, a deep soft shadow. */
-export const FRAME = "bg-[#11100e] shadow-[inset_0_1px_0_0_rgb(255_255_255/0.06),0_0_0_1px_rgb(255_255_255/0.065),0_30px_80px_-40px_rgb(0_0_0/0.8)]"
+export const FRAME = "bg-[var(--card)] shadow-[var(--frame)]"
 
 export const buttonClass = (variant: keyof typeof BUTTON = "ghost", size: keyof typeof SIZE = "md") =>
   `group inline-flex items-center justify-center gap-1.5 rounded-full font-medium tracking-[-0.005em] whitespace-nowrap transition-[filter,color,transform] duration-150 active:scale-[.98] cursor-pointer ${SIZE[size]} ${BUTTON[variant]}`

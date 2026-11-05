@@ -71,6 +71,13 @@ export function profileMark(channel: string, image: string, size = 40): string {
 
 export const channelName = (id: string) => CHANNELS[id]?.name ?? id.replace(/^./, (c) => c.toUpperCase())
 
+/** The popover a channel that isn't live yet shows when it's hovered or focused. */
+export const soonTip = (id: string) => `<span class="tip" role="tooltip"><b>${channelName(id)}</b>Coming soon</span>`
+
+/** A channel that isn't live yet: its mark dimmed until it's hovered or focused, then lit with a "Coming soon" popover. */
+export const soonMark = (id: string, size = 16) =>
+  `<span class="soon-x" tabindex="0" aria-label="${channelName(id)}, coming soon">${channelMark(id, size)}${soonTip(id)}</span>`
+
 /** Initials in a hairline square: for a contact, a provider, an agent app without a known mark. */
 export function glyph(name: string, size = 24, round = false): string {
   const words = name.replace(/@.*/, "").replace(/^\+/, "").split(/[\s._-]+/).filter(Boolean)
@@ -177,11 +184,39 @@ const CSS = `
   --primary-shadow:inset 0 1px 0 rgba(255,255,255,.95),inset 0 -1px 0 rgba(140,95,50,.22),0 0 0 1px rgba(227,185,141,.55),0 10px 28px -10px rgba(227,185,141,.55);
   --glow:rgba(227,185,141,.075);
   --avatar:linear-gradient(160deg,#3b3129,#221d18);--on-avatar:#e9d6bd;
+  --chip:rgba(255,246,232,.045);--row:rgba(255,246,232,.025);--lit:rgba(255,246,232,.035);--accent-ring:rgba(227,185,141,.22);
+  --glyph-ring:inset 0 1px 0 rgba(255,255,255,.07),inset 0 0 0 1px rgba(255,246,232,.06);
+  --inset:inset 0 1px 2px rgba(0,0,0,.22);--lift:0 4px 12px -4px rgba(0,0,0,.45);--deep:0 30px 60px -30px rgba(0,0,0,.6);
+  --top-shadow:0 16px 40px -30px rgba(0,0,0,.7);--knob:#f3f0ea;--knob-shadow:0 1px 3px rgba(0,0,0,.35);--sheen:rgba(255,255,255,.7);
   --sans:'Switzer',ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   --mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
   --ease:cubic-bezier(.2,.8,.2,1);
   color-scheme:dark;
 }
+/* light: the same warm family on paper. Ink-dark buttons instead of cream, caramel for the accent, soft brown shadows. */
+@media (prefers-color-scheme:light){:root{
+  --bg:#f6f2eb;--bg-1:#efe9df;--bg-2:#fbf8f3;--bg-3:#e8e0d3;--card:#fffdfa;
+  --line:rgba(70,48,24,.09);--line-2:rgba(70,48,24,.13);--line-3:rgba(70,48,24,.22);
+  --text:#1d1915;--text-2:#3e372f;--muted:#6e655a;--faint:#978e82;
+  --sand:#a3653a;--clay:#b5572e;--signal:#a3653a;--signal-dim:rgba(163,101,58,.12);
+  --ok:#3d7a4f;--warn:#a2650f;--bad:#bf422a;--info:#a3653a;--read:#2a7fb0;
+  --hover:rgba(70,48,24,.045);--ring:0 0 0 2px var(--bg),0 0 0 3.5px rgba(163,101,58,.6);
+  --frame:inset 0 1px 0 rgba(255,255,255,.9),0 0 0 1px rgba(70,48,24,.085),0 1px 2px rgba(70,48,24,.04),0 24px 56px -32px rgba(70,48,24,.26);
+  --shadow:0 24px 56px -24px rgba(70,48,24,.28);
+  --glass:linear-gradient(180deg,#fffefb,#f8f3ec);
+  --glass-hi:linear-gradient(180deg,#fff,#fcf9f4);
+  --glass-ring:inset 0 1px 0 rgba(255,255,255,.95),0 0 0 1px rgba(70,48,24,.12),0 1px 2px rgba(70,48,24,.06);
+  --well:rgba(70,48,24,.04);
+  --primary:linear-gradient(180deg,#3b2f26 0%,#241c16 55%,#18120e 100%);--on-primary:#fbf3e6;
+  --primary-shadow:inset 0 1px 0 rgba(255,232,200,.2),inset 0 -1px 0 rgba(0,0,0,.3),0 0 0 1px rgba(30,20,12,.9),0 10px 24px -10px rgba(60,36,16,.5);
+  --glow:rgba(214,160,104,.17);
+  --avatar:linear-gradient(160deg,#f1e6d6,#e3d3be);--on-avatar:#5e4733;
+  --chip:rgba(70,48,24,.05);--row:rgba(70,48,24,.025);--lit:rgba(255,255,255,.7);--accent-ring:rgba(163,101,58,.3);
+  --glyph-ring:inset 0 1px 0 rgba(255,255,255,.8),inset 0 0 0 1px rgba(70,48,24,.1);
+  --inset:inset 0 1px 2px rgba(70,48,24,.08);--lift:0 4px 12px -4px rgba(70,48,24,.22);--deep:0 30px 60px -32px rgba(70,48,24,.32);
+  --top-shadow:0 16px 40px -30px rgba(70,48,24,.35);--knob:#fff;--knob-shadow:0 1px 3px rgba(70,48,24,.3);--sheen:rgba(255,236,210,.3);
+  color-scheme:light;
+}}
 html,body{margin:0}
 body{position:relative;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:21px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;min-height:100vh}
 body::before{content:"";position:absolute;left:0;right:0;top:0;height:620px;background:radial-gradient(52% 72% at 50% -8%,var(--glow),transparent 72%);pointer-events:none}
@@ -196,16 +231,16 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .logo{display:inline-flex;align-items:center;gap:8px;font-weight:500;font-size:15px;letter-spacing:-.02em;color:var(--text)}
 .cm{flex:none;display:inline-block;vertical-align:-3px}
 .pdp{position:relative;flex:none;display:inline-block}
-.pdp img{display:block;width:100%;height:100%;border-radius:50%;object-fit:cover;box-shadow:inset 0 0 0 1px rgba(255,246,232,.08)}
+.pdp img{display:block;width:100%;height:100%;border-radius:50%;object-fit:cover;box-shadow:inset 0 0 0 1px var(--line-2)}
 .pdp .badge{position:absolute;top:-8%;right:-8%;display:grid;place-items:center;width:42%;height:42%;border-radius:50%;background:var(--card);box-shadow:0 0 0 1px var(--line-2)}
-.glyph{display:inline-grid;place-items:center;flex:none;border-radius:8px;font-size:11px;font-weight:500;color:var(--on-avatar);background:var(--avatar);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),inset 0 0 0 1px rgba(255,246,232,.06);letter-spacing:.01em}
+.glyph{display:inline-grid;place-items:center;flex:none;border-radius:8px;font-size:11px;font-weight:500;color:var(--on-avatar);background:var(--avatar);box-shadow:var(--glyph-ring);letter-spacing:.01em}
 .glyph.round{border-radius:50%}
 .glyph.brand{background:var(--glass);box-shadow:var(--glass-ring);color:var(--text)}
-.pmark{display:inline-grid;place-items:center;flex:none;border-radius:28%;background:linear-gradient(180deg,#fffaf3,#e6cfb0);color:#1b140e;box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 0 0 1px rgba(227,185,141,.45),0 10px 30px -10px rgba(227,185,141,.5)}
+.pmark{display:inline-grid;place-items:center;flex:none;border-radius:28%;background:var(--primary);color:var(--on-primary);box-shadow:var(--primary-shadow)}
 
 /* buttons: cream gradient with a band of light on hover (and now and then on large ones); glass for the rest */
 .btn{position:relative;isolation:isolate;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;font-size:13.5px;font-weight:500;letter-spacing:-.005em;border-radius:999px;border:0;background:var(--primary);color:var(--on-primary);box-shadow:var(--primary-shadow);cursor:pointer;white-space:nowrap;transition:filter .15s var(--ease),color .15s var(--ease),transform .15s var(--ease),box-shadow .15s var(--ease)}
-.btn::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.7) 50%,transparent 70%);transform:translateX(-130%);pointer-events:none}
+.btn::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(105deg,transparent 30%,var(--sheen) 50%,transparent 70%);transform:translateX(-130%);pointer-events:none}
 .btn:hover{filter:brightness(1.04)}.btn:hover::after{animation:sheen .9s var(--ease)}
 .btn:active{transform:scale(.98)}
 .btn.lg::after{animation:sheen-loop 7s var(--ease) 1.5s infinite}.btn.lg:hover::after{animation:sheen .9s var(--ease)}
@@ -221,7 +256,7 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .btn .ar{transition:transform .15s var(--ease)}.btn:hover .ar{transform:translateX(2px)}
 
 /* status: a quiet glass pill; the word says the state, tinted only when something needs a look. Never dots. */
-.st{display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--text-2);background:rgba(255,246,232,.045);box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap;line-height:1}
+.st{display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:-.005em;color:var(--text-2);background:var(--chip);box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap;line-height:1}
 .st.warn{color:color-mix(in srgb,var(--warn) 60%,var(--text-2))}.st.bad{color:color-mix(in srgb,var(--bad) 60%,var(--text-2))}.st.info{color:color-mix(in srgb,var(--sand) 70%,var(--text-2))}.st.idle{color:var(--muted)}
 .kind{font-size:12.5px;color:var(--muted)}
 .kind.open{color:var(--sand)}
@@ -247,13 +282,13 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 
 /* frame: the top bar sits clear over the page's glow, and turns to frosted glass once the page scrolls under it */
 .top{position:sticky;top:0;z-index:30;transition:background .25s var(--ease),box-shadow .25s var(--ease)}
-.top.scrolled{background:color-mix(in srgb,var(--bg) 74%,transparent);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px);box-shadow:0 1px 0 var(--line),0 16px 40px -30px rgba(0,0,0,.7)}
+.top.scrolled{background:color-mix(in srgb,var(--bg) 74%,transparent);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px);box-shadow:0 1px 0 var(--line),var(--top-shadow)}
 .top-in{position:relative;max-width:1200px;margin:0 auto;height:64px;padding:0 28px;display:flex;align-items:center;gap:16px}
 .top .home{display:inline-flex;align-items:center;height:34px;padding:0 6px;margin-left:-6px;border-radius:10px}
-.tabs{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line),inset 0 1px 2px rgba(0,0,0,.22)}
+.tabs{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line),var(--inset)}
 .tab{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:30px;padding:0 15px;border-radius:999px;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color .15s var(--ease),background .15s var(--ease),box-shadow .15s var(--ease)}
 .tab:hover{color:var(--text)}
-.tab.on{color:var(--text);background:var(--glass-hi);box-shadow:var(--glass-ring),0 4px 12px -4px rgba(0,0,0,.45)}
+.tab.on{color:var(--text);background:var(--glass-hi);box-shadow:var(--glass-ring),var(--lift)}
 .tab .n{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--hover);box-shadow:inset 0 0 0 1px var(--line);font-size:11px;font-weight:500;line-height:1;color:var(--text-2);font-variant-numeric:tabular-nums}
 .tab .n.q{background:color-mix(in srgb,var(--sand) 15%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 28%,transparent);color:var(--sand)}
 .top .right{margin-left:auto;display:flex;align-items:center;gap:8px}
@@ -277,6 +312,15 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .menu .sep{height:1px;background:var(--line);margin:5px 4px}
 .menu .out:hover{color:var(--bad)}.menu .out:hover svg{color:var(--bad)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* channels on their way: dimmed and grey until hovered or focused, then in full color with a "Coming soon" popover */
+.soon-x{position:relative;display:inline-flex;cursor:default}
+.soon-x > :not(.tip){transition:opacity .2s var(--ease),filter .2s var(--ease)}
+.soon-x:not(:hover):not(:focus-visible) > :not(.tip){opacity:.38;filter:grayscale(1)}
+.tip{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:20;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:10px;background:color-mix(in srgb,var(--bg-2) 94%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:var(--frame),var(--shadow);font-size:12px;line-height:16px;color:var(--muted);white-space:nowrap;pointer-events:none;opacity:0;transform:translate(-50%,4px) scale(.97);transform-origin:bottom center;transition:opacity .14s var(--ease),transform .14s var(--ease)}
+.tip b{font-weight:500;color:var(--text)}
+.soon-x:hover > .tip,.soon-x:focus-visible > .tip{opacity:1;transform:translate(-50%,0)}
+@media (prefers-reduced-motion:reduce){.tip{transform:translate(-50%,0)}}
 .arow{display:flex;flex-wrap:wrap;align-items:center;gap:22px;margin:0;padding:0;list-style:none;color:var(--muted)}
 .arow li{display:inline-flex;transition:color .2s var(--ease)}.arow li:hover{color:var(--text)}
 .av{border-radius:50%;object-fit:cover;flex:none;display:block;box-shadow:0 0 0 1px var(--line-2)}
@@ -387,7 +431,7 @@ document.querySelectorAll('tr[data-href]').forEach(r=>r.addEventListener('click'
 
 export function shell(title: string, body: string, opts: { css?: string; script?: string } = {}): string {
   return `<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="theme-color" content="#0d0c0a"><title>${esc(title)}</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0d0c0a" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#f6f2eb" media="(prefers-color-scheme: light)"><title>${esc(title)}</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0d0c0a"/><g transform="translate(11 9) scale(.68)"><path fill="#f3f0ea" fill-rule="evenodd" d="${MARK_PATH}"/></g></svg>`)}">
 <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap" rel="stylesheet">

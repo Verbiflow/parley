@@ -13,6 +13,8 @@ test("the app's sign-in page is the centered panel with one Google button", () =
   assert.match(local, /action="\/auth\/dev"/)
   assert.doesNotMatch(local, /WORKOS_|Sign-in isn't/)
   assert.doesNotMatch(html, /Messaging infrastructure<br>/)
+  assert.match(html, /<span title="WhatsApp">/)
+  for (const name of ["iMessage", "Slack", "LinkedIn", "Gmail"]) assert.match(html, new RegExp(`aria-label="${name}, coming soon"`))
 })
 
 test("the overview with two WhatsApp numbers lists both, offers another, and says which number sent what", () => {
@@ -27,12 +29,24 @@ test("the overview with two WhatsApp numbers lists both, offers another, and say
   assert.match(html, /\+65 9136 3557/)
   assert.match(html, /\+44 7700 900111/)
   assert.match(html, /class="acard add"/)
-  assert.match(html, /title="iMessage, coming soon"/)
+  assert.match(html, /class="soon-x" tabindex="0" aria-label="iMessage, coming soon">.*?<b>iMessage<\/b>Coming soon/s)
+  assert.doesNotMatch(html, /aria-label="WhatsApp, coming soon"/)
   assert.match(html, /action="\/app\/connect"/)
   assert.match(html, /<td class="fr">\+44 7700 900111<\/td>\s*<td class="to">\+44 7700 900999<\/td>/)
   assert.match(html, /data-live="\/app\/activity\/feed\?compact=1"/)
   const solo = dashboardPage({ user, connections: [conn("work", "6591363557:7@s.whatsapp.net")], agents: [agent], mcpUrl: "https://x/mcp", recent: [{ ...sent, connectionId: "work" }] })
   assert.doesNotMatch(solo, /class="fr"/)
+
+  // A link that was started and never scanned isn't an account: no card of its own, and "Connect" finishes it instead.
+  for (const status of ["linking", "closed"] as const) {
+    const started = { ...conn("new", ""), handle: null, status, linkedAt: null }
+    const withAccounts = dashboardPage({ user, connections: [conn("work", "6591363557:7@s.whatsapp.net"), started], agents: [agent], mcpUrl: "https://x/mcp" })
+    assert.doesNotMatch(withAccounts, /Waiting for the QR scan|waiting for scan/i)
+    assert.match(withAccounts, /You started linking a number.*href="\/link\/new">Finish linking/s)
+    const onlyThat = dashboardPage({ user, connections: [started], agents: [], mcpUrl: "https://x/mcp" })
+    assert.match(onlyThat, /class="conn ready">.*href="\/link\/new">Finish linking/s)
+    assert.doesNotMatch(onlyThat, /class="acard"|class="done-tag"/)
+  }
 })
 
 test("a number's card shows its profile picture with a small WhatsApp badge, else the WhatsApp logo", () => {

@@ -20,6 +20,108 @@
   --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* Surfaces the page's components share, beyond the color scale: cards, buttons, glass, fills and wells. */
+:root {
+  --card: #11100e;
+  --frame: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.065), 0 30px 80px -40px rgb(0 0 0 / 0.8);
+  --primary: linear-gradient(180deg, #fffaf3 0%, #f3e6d4 52%, #e6cfb0 100%);
+  --on-primary: #1b140e;
+  --primary-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 -1px 0 rgb(140 95 50 / 0.22), 0 0 0 1px rgb(227 185 141 / 0.55), 0 10px 28px -10px rgb(227 185 141 / 0.55);
+  --glass: linear-gradient(180deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.025));
+  --glass-hi: linear-gradient(180deg, rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.05));
+  --glass-ring: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 0 0 1px rgb(255 255 255 / 0.09);
+  --pill-ring: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --fill: rgb(255 255 255 / 0.035);
+  --fill-2: rgb(255 255 255 / 0.07);
+  --fill-ring: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  --pane: rgb(255 255 255 / 0.015);
+  --tile: #1d1b18;
+  --tile-ring: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --panel: #1a1916;
+  --panel-ring: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 0 0 1px rgb(255 255 255 / 0.08), 0 20px 40px -20px rgb(0 0 0 / 0.9);
+  --float: rgb(30 28 25 / 0.92);
+  --float-ring: inset 0 1px 0 rgb(255 255 255 / 0.09), 0 0 0 1px rgb(255 255 255 / 0.09), 0 24px 48px -16px rgb(0 0 0 / 0.95);
+  --banner: rgb(52 48 43 / 0.72);
+  --banner-ring: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 12px 30px -12px rgb(0 0 0 / 0.7);
+  --qr-shadow: 0 16px 40px -16px rgb(0 0 0 / 0.9), 0 0 0 1px rgb(255 255 255 / 0.1);
+  --dots: rgb(255 246 232 / 0.06);
+  --wire: rgb(255 246 232 / 0.12);
+  --pip: rgb(255 255 255 / 0.15);
+  --sheen: rgb(255 255 255 / 0.75);
+  --lock-glow: rgb(217 130 91 / 0.22);
+  --lock-glow-2: rgb(227 185 141 / 0.06);
+}
+
+/* Light: the same warm family on paper, following the system setting. Ink buttons, caramel accent, soft brown shadows. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg: #f6f2eb;
+    --color-bg-1: #efe9df;
+    --color-bg-2: #fbf8f3;
+    --color-bg-3: #e8e0d3;
+    --color-bg-4: #ddd3c4;
+    --color-line: rgb(70 48 24 / 0.09);
+    --color-line-2: rgb(70 48 24 / 0.13);
+    --color-line-3: rgb(70 48 24 / 0.22);
+    --color-ink: #1d1915;
+    --color-ink-2: #3e372f;
+    --color-muted: #6e655a;
+    --color-faint: #978e82;
+    --color-sand: #a3653a;
+    --color-clay: #b5572e;
+    --card: #fffdfa;
+    --frame: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 0 0 1px rgb(70 48 24 / 0.085), 0 1px 2px rgb(70 48 24 / 0.04), 0 30px 70px -40px rgb(70 48 24 / 0.3);
+    --primary: linear-gradient(180deg, #3b2f26 0%, #241c16 55%, #18120e 100%);
+    --on-primary: #fbf3e6;
+    --primary-shadow: inset 0 1px 0 rgb(255 232 200 / 0.2), inset 0 -1px 0 rgb(0 0 0 / 0.3), 0 0 0 1px rgb(30 20 12 / 0.9), 0 10px 24px -10px rgb(60 36 16 / 0.5);
+    --glass: linear-gradient(180deg, #fffefb, #f8f3ec);
+    --glass-hi: linear-gradient(180deg, #fff, #fcf9f4);
+    --glass-ring: inset 0 1px 0 rgb(255 255 255 / 0.95), 0 0 0 1px rgb(70 48 24 / 0.12), 0 1px 2px rgb(70 48 24 / 0.06);
+    --pill-ring: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 0 0 1px rgb(70 48 24 / 0.12), 0 1px 2px rgb(70 48 24 / 0.05);
+    --fill: rgb(70 48 24 / 0.04);
+    --fill-2: rgb(70 48 24 / 0.08);
+    --fill-ring: inset 0 0 0 1px rgb(70 48 24 / 0.08);
+    --pane: rgb(70 48 24 / 0.025);
+    --tile: #fffdfa;
+    --tile-ring: inset 0 1px 0 #fff, 0 0 0 1px rgb(70 48 24 / 0.12), 0 1px 2px rgb(70 48 24 / 0.06);
+    --panel: #fffdfa;
+    --panel-ring: inset 0 1px 0 #fff, 0 0 0 1px rgb(70 48 24 / 0.1), 0 20px 40px -24px rgb(70 48 24 / 0.35);
+    --float: rgb(255 253 250 / 0.94);
+    --float-ring: inset 0 1px 0 #fff, 0 0 0 1px rgb(70 48 24 / 0.1), 0 24px 48px -20px rgb(70 48 24 / 0.35);
+    --banner: rgb(255 253 250 / 0.84);
+    --banner-ring: inset 0 0 0 1px rgb(70 48 24 / 0.08), 0 12px 30px -14px rgb(70 48 24 / 0.35);
+    --qr-shadow: 0 16px 40px -18px rgb(70 48 24 / 0.35), 0 0 0 1px rgb(70 48 24 / 0.1);
+    --dots: rgb(70 48 24 / 0.1);
+    --wire: rgb(70 48 24 / 0.16);
+    --pip: rgb(70 48 24 / 0.18);
+    --sheen: rgb(255 236 210 / 0.3);
+    --lock-glow: rgb(214 160 104 / 0.14);
+    --lock-glow-2: rgb(227 185 141 / 0.05);
+    --banner: #fff;
+    --banner-ring: inset 0 0 0 1px rgb(70 48 24 / 0.07), 0 1px 2px rgb(70 48 24 / 0.06), 0 14px 32px -16px rgb(70 48 24 / 0.38);
+  }
+  html {
+    color-scheme: light;
+  }
+  /* White on a white card has no depth, so the notifications behind the newest turn to deeper paper with their text
+     gone: a physical stack, the way a phone shows one. */
+  .note-stack > [data-depth] {
+    transition: background-color 0.35s var(--ease-out-soft);
+  }
+  .note-stack > [data-depth] > * {
+    transition: opacity 0.25s var(--ease-out-soft);
+  }
+  .note-stack > [data-depth="1"] {
+    background: #f3ede4;
+  }
+  .note-stack > [data-depth="2"] {
+    background: #e9e1d4;
+  }
+  .note-stack > [data-depth]:not([data-depth="0"]) > * {
+    opacity: 0;
+  }
+}
+
 @layer base {
   html {
     overflow-x: clip;
@@ -72,7 +174,7 @@
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.75) 50%, transparent 70%);
+  background: linear-gradient(105deg, transparent 30%, var(--sheen) 50%, transparent 70%);
   transform: translateX(-130%);
   animation: sheen 7s var(--ease-out-soft) 1.5s infinite;
   pointer-events: none;

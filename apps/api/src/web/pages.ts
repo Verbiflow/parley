@@ -6,7 +6,7 @@ import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, profileMark, clock, copyLine, day, empty, esc, glyph, icon,
-  foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
+  foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, soonMark, soonTip, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
 export type { Viewer } from "./ui.ts"
@@ -76,7 +76,7 @@ export function landingPage(opts: { workos: boolean; dev: boolean }): string {
       <h1>Your messaging, ready for your agents.</h1>
       <p class="sub">Link your accounts once. Your agents text people as you, at a human pace, with every message on record.</p>
       <section class="panel">${panel}</section>
-      <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => `<span title="${c.live ? c.name : `${c.name}, coming soon`}">${channelMark(id, 18)}</span>`).join("")}</div>
+      <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => c.live ? `<span title="${c.name}">${channelMark(id, 18)}</span>` : soonMark(id, 18)).join("")}</div>
     </main>
     <p class="foot"><a href="https://itsparley.com">itsparley.com</a><span>·</span><a href="https://github.com/Verbiflow/parley">GitHub</a></p>`, { css: SIGNIN_CSS, script: THREADS_SCRIPT })
 }
@@ -104,16 +104,18 @@ body::before{display:none}
 const THREADS_SCRIPT = `(()=>{const c=document.querySelector('canvas.threads'),m=document.querySelector('.pmark');if(!c||!m)return;const x=c.getContext('2d');if(!x)return;
 const N=44,still=matchMedia('(prefers-reduced-motion: reduce)').matches;let w=0,h=0,px=0,py=0,f=0,last=performance.now();const t0=last;
 const pulses=Array.from({length:7},(_,k)=>({l:(k*23)%N,u:k/7,s:.05+(k%3)*.016}));
+const L=matchMedia('(prefers-color-scheme: light)');let P;const pal=()=>{P=L.matches?{a:'150,96,52',b:'128,76,38',p:'163,101,58',k:.8,op:'source-over'}:{a:'227,185,141',b:'240,205,165',p:'248,214,172',k:1,op:'lighter'}};pal();
+const rgba=(c,al)=>'rgba('+c+','+al*P.k+')';
 function size(){const d=Math.min(devicePixelRatio||1,2);w=innerWidth;h=innerHeight;c.width=w*d;c.height=h*d;x.setTransform(d,0,0,d,0,0);const r=m.getBoundingClientRect();px=r.left+r.width/2;py=r.top+r.height/2}
 function curve(i,t){const g=i/(N-1),s=Math.sin(t*.35+g*5.5)*.02,sp=(g-.5)*h;return[[-.06*w,h*(-.15+1.3*g+s)],[px-w*.2,py+sp*(.08+s)],[px+w*.2,py+sp*(.05-s)],[1.06*w,h*(-.2+1.35*g-s)]]}
 function at(p,u){const v=1-u;return[0,1].map(k=>v*v*v*p[0][k]+3*v*v*u*p[1][k]+3*v*u*u*p[2][k]+u*u*u*p[3][k])}
 function draw(now){const t=(now-t0)/1000+12,dt=Math.min((now-last)/1000,.05);last=now;x.clearRect(0,0,w,h);const q=px/w;
-const g=x.createLinearGradient(0,0,w,0);g.addColorStop(0,'rgba(227,185,141,0)');g.addColorStop(Math.max(q-.3,.02),'rgba(227,185,141,.06)');g.addColorStop(q,'rgba(240,205,165,.42)');g.addColorStop(Math.min(q+.3,.98),'rgba(227,185,141,.08)');g.addColorStop(1,'rgba(227,185,141,0)');
+const g=x.createLinearGradient(0,0,w,0);g.addColorStop(0,rgba(P.a,0));g.addColorStop(Math.max(q-.3,.02),rgba(P.a,.06));g.addColorStop(q,rgba(P.b,.42));g.addColorStop(Math.min(q+.3,.98),rgba(P.a,.08));g.addColorStop(1,rgba(P.a,0));
 x.strokeStyle=g;x.lineWidth=.75;x.beginPath();for(let i=0;i<N;i++){const p=curve(i,t);x.moveTo(p[0][0],p[0][1]);x.bezierCurveTo(p[1][0],p[1][1],p[2][0],p[2][1],p[3][0],p[3][1])}x.stroke();
-x.globalCompositeOperation='lighter';for(const p of pulses){if(!still)p.u+=p.s*dt;if(p.u>1.05){p.u=-.05;p.l=(p.l+17)%N}const cv=curve(p.l,t),hd=Math.min(Math.max(p.u,0),1),tl=Math.max(hd-.07,0),a=Math.sin(Math.PI*hd);
-for(const[lw,al]of[[3,.1],[1.2,.75]]){x.beginPath();for(let k=0;k<=10;k++){const[X,Y]=at(cv,tl+(hd-tl)*k/10);k?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle='rgba(248,214,172,'+al*a+')';x.lineWidth=lw;x.stroke()}}
+x.globalCompositeOperation=P.op;for(const p of pulses){if(!still)p.u+=p.s*dt;if(p.u>1.05){p.u=-.05;p.l=(p.l+17)%N}const cv=curve(p.l,t),hd=Math.min(Math.max(p.u,0),1),tl=Math.max(hd-.07,0),a=Math.sin(Math.PI*hd);
+for(const[lw,al]of[[3,.1],[1.2,.75]]){x.beginPath();for(let k=0;k<=10;k++){const[X,Y]=at(cv,tl+(hd-tl)*k/10);k?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle=rgba(P.p,al*a);x.lineWidth=lw;x.stroke()}}
 x.globalCompositeOperation='source-over';c.classList.add('on');if(!still&&!document.hidden)f=requestAnimationFrame(draw)}
-const go=()=>{cancelAnimationFrame(f);last=performance.now();f=requestAnimationFrame(draw)};size();go();addEventListener('resize',()=>{size();go()});document.addEventListener('visibilitychange',()=>!document.hidden&&go())})();`
+const go=()=>{cancelAnimationFrame(f);last=performance.now();f=requestAnimationFrame(draw)};size();go();addEventListener('resize',()=>{size();go()});document.addEventListener('visibilitychange',()=>!document.hidden&&go());L.addEventListener('change',()=>{pal();go()})})();`
 
 // ---- Overview -----------------------------------------------------------------------------------------------------
 
@@ -131,14 +133,14 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .conn b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;color:var(--text)}
 .conn small{display:block;font-size:12.5px;line-height:18px;color:var(--muted);margin-top:3px}
 .conn .cf{margin-top:auto}
-.conn.ready{box-shadow:var(--frame),0 0 0 1px rgba(227,185,141,.22)}
-.conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,rgba(255,236,210,.05),transparent 70%);pointer-events:none}
+.conn.ready{box-shadow:var(--frame),0 0 0 1px var(--accent-ring)}
+.conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,var(--lit),transparent 70%);pointer-events:none}
 .conn.ready .btn{width:100%}
-.conn.later{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
-.conn.later .cf{height:34px;display:flex;align-items:center}.conn.later .label{font-size:12px;color:var(--faint)}
+.conn.later{display:flex;background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
+.conn.later:hover,.conn.later:focus-visible{box-shadow:inset 0 0 0 1px var(--line-2)}
 .conns.compact .conn{flex-direction:row;align-items:center;padding:12px 14px;gap:12px}
 .conns.compact .conn .ct{width:34px;height:34px;border-radius:10px}.conns.compact .conn small{display:none}.conns.compact .conn b{font-size:13.5px}
-.conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}.conns.compact .conn.later .cf{height:auto}
+.conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}
 .stepn{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line-3);font-size:11.5px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;color:var(--text);margin-right:11px}
 .stepn.done{background:var(--primary);box-shadow:var(--primary-shadow);color:var(--on-primary)}
 .done-tag{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 8px;border-radius:999px;background:color-mix(in srgb,var(--sand) 12%,transparent);color:var(--sand);font-size:12px;font-weight:500}
@@ -151,11 +153,11 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .marks span{display:inline-grid;place-items:center;width:28px;height:28px;margin-left:-6px;border-radius:50%;background:var(--card);box-shadow:var(--glass-ring),0 0 0 2px var(--bg);color:var(--text)}.marks span:first-child{margin-left:0}
 .accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;padding-top:18px}
 .acard{position:relative;display:flex;flex-direction:column;gap:18px;padding:18px 18px 16px;border-radius:18px;background:var(--card);box-shadow:var(--frame);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
-.acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,rgba(255,246,232,.035),transparent 62%);pointer-events:none}
+.acard::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(90% 80% at 0% 0%,var(--lit),transparent 62%);pointer-events:none}
 .acard .cover{position:absolute;inset:0;border-radius:inherit;z-index:1}
 .acard .awh{position:relative;z-index:2;display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted);padding-top:12px;border-top:1px solid var(--line)}
 .acard .awh .m{font-family:var(--mono);color:var(--text-2)}.acard .awh .cfg{display:inline-flex;gap:5px;align-items:center;color:var(--text)}.acard .awh:hover .cfg,.acard .awh:hover .m{text-decoration:underline;text-underline-offset:3px}
-.acard:not(.add):hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
+.acard:not(.add):hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),var(--deep)}
 .acard .ah{position:relative;display:flex;align-items:center;gap:12px}
 .acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-ring)}
 .acard .grow{flex:1;min-width:0}
@@ -185,12 +187,12 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .atable{border-radius:18px;background:var(--card);box-shadow:var(--frame);overflow:hidden}
 .atbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
 .atbl col.c-t{width:90px}.atbl col.c-s{width:166px}.atbl col.c-ag{width:136px}.atbl col.c-fr{width:148px}.atbl col.c-to{width:160px}.atbl col.c-x{width:96px}
-.atbl th{height:40px;padding:0 12px;text-align:left;font-size:12px;font-weight:400;color:var(--faint);background:rgba(255,246,232,.02);border-bottom:1px solid var(--line);white-space:nowrap}
+.atbl th{height:40px;padding:0 12px;text-align:left;font-size:12px;font-weight:400;color:var(--faint);background:var(--row);border-bottom:1px solid var(--line);white-space:nowrap}
 .atbl td{height:50px;padding:0 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .atbl th:first-child,.atbl td:first-child{padding-left:20px}.atbl th:last-child,.atbl td:last-child{padding-right:20px}
 .atbl tbody tr:last-child td{border-bottom:0}
-.atbl tr.e{transition:background .15s var(--ease)}.atbl tr.e:hover{background:rgba(255,246,232,.025)}
-.atbl tr.dh td{height:36px;padding-top:12px;padding-bottom:6px;vertical-align:bottom;font-size:12px;font-weight:500;letter-spacing:.01em;color:var(--muted);background:linear-gradient(180deg,rgba(255,246,232,.018),transparent)}
+.atbl tr.e{transition:background .15s var(--ease)}.atbl tr.e:hover{background:var(--hover)}
+.atbl tr.dh td{height:36px;padding-top:12px;padding-bottom:6px;vertical-align:bottom;font-size:12px;font-weight:500;letter-spacing:.01em;color:var(--muted);background:linear-gradient(180deg,var(--row),transparent)}
 .atbl tr.none td{height:auto;padding:36px 20px;white-space:normal;text-align:center;font-size:13.5px;color:var(--muted)}
 .atbl .t{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .atbl .s{overflow:visible}.atbl .sw{margin-left:8px;font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -234,12 +236,18 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
-/** One card per channel, for the first link: the live ones get a Connect button, the rest say "Coming soon". */
-function connectorCards(): string {
-  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => `<div class="conn ${c.live ? "ready" : "later"}">
+/** One card per channel, for the first link: the live ones get a Connect button, the rest stay dim until hovered. */
+function connectorCards(resume: Connection | undefined): string {
+  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => c.live
+    ? `<div class="conn ready">
       <span class="ct">${channelMark(id, 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
-      <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">Coming soon</span>`}</div>
+      <div class="cf">${resume?.channel === id ? finishLink(resume, "btn") : connectForm(`Connect ${c.name}`, "btn")}</div>
+    </div>`
+    : `<div class="conn later soon-x" tabindex="0" aria-label="${c.name}, coming soon">
+      <span class="ct">${channelMark(id, 26)}</span>
+      <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
+      ${soonTip(id)}
     </div>`).join("")}</div>`
 }
 
@@ -268,10 +276,15 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
   </div>`
 }
 
-/** The last card in the grid: link another number now, and the channels that are on their way. */
-const addCard = () => `<div class="acard add">
-    <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>Link another number</small></div></div>
-    <div class="af">${connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id, c]) => `<span title="${c.name}, coming soon">${channelMark(id, 16)}</span>`).join("")}</span></div>
+/** A link someone started and never scanned: not an account yet, just where the next "Connect" picks up. */
+export const unfinishedLink = (c: Connection) => !c.handle && (c.status === "linking" || c.status === "closed")
+
+const finishLink = (c: Connection, cls: string) => `<a class="${cls}" href="/link/${esc(c.id)}">Finish linking<span class="ar">${icon("arrow", 13)}</span></a>`
+
+/** The last card in the grid: link another number now (or finish the one started), and the channels on their way. */
+const addCard = (resume: Connection | undefined) => `<div class="acard add">
+    <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>${resume ? "You started linking a number" : "Link another number"}</small></div></div>
+    <div class="af">${resume ? finishLink(resume, "btn sm") : connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id]) => soonMark(id, 16)).join("")}</span></div>
   </div>`
 
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
@@ -467,12 +480,14 @@ export function dashboardPage(opts: {
   user: Viewer; connections: Connection[]; agents: AgentView[]; mcpUrl: string; syncedCounts?: Map<string, number>
   summaries?: Map<string, ConnectionSummary>; queued?: number; recent?: ActivityEntry[]; webhookCounts?: Map<string, number>
 }): string {
-  const visible = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
+  const shown = opts.connections.filter((c) => c.status !== "logged_out" && c.status !== "error")
+  const visible = shown.filter((c) => !unfinishedLink(c))
+  const resume = shown.find(unfinishedLink)
   const live = visible.filter((c) => c.status === "connected")
   const sentToday = [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.sentToday, 0)
   const queued = opts.queued ?? [...(opts.summaries?.values() ?? [])].reduce((n, s) => n + s.queued, 0)
   const activeAgents = opts.agents.filter(isActive).length
-  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id), opts.webhookCounts?.get(c.id) ?? 0)).join("")}${addCard()}</div>`
+  const cards = `<div class="accounts">${visible.map((c) => accountCard(c, opts.summaries?.get(c.id), opts.syncedCounts?.get(c.id), opts.webhookCounts?.get(c.id) ?? 0)).join("")}${addCard(resume)}</div>`
   const attention = live.filter((c) => c.haltedReason)
   const alerts = attention.map((c) => `<div class="note bad" style="margin-bottom:16px"><div class="grow"><b>${esc(waNumber(c.handle) || channelName(c.channel))} stopped sending</b><p>${esc(HALT_TEXT[c.haltedReason!] ?? "Sending is halted until you resume it.")}</p></div><a class="btn line sm" href="/app/connections/${esc(c.id)}">Review</a></div>`).join("")
   const frame = (body: string) => appShell({
@@ -484,7 +499,7 @@ export function dashboardPage(opts: {
     const hasChannel = visible.length > 0
     return frame(`${pageHead({ title: "Welcome to Parley", sub: "Two steps and your agents can text people from your own account: connect an account, then connect your agent." })}
     ${alerts}
-    ${section("Connect an account", hasChannel ? cards : connectorCards(), hasChannel ? doneTag : "", hasChannel ? "" : "Parley links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
+    ${section("Connect an account", hasChannel ? cards : connectorCards(resume), hasChannel ? doneTag : "", hasChannel ? "" : "Parley links as a companion device, the way WhatsApp Web works. Everything syncs except the chats you ignore.", stepNo(1, hasChannel))}
     ${section("Connect your agent", agentSetup(opts.mcpUrl, opts.agents), opts.agents.length ? doneTag : "Streamable HTTP · OAuth", "", stepNo(2, opts.agents.length > 0))}`)
   }
 
@@ -812,7 +827,7 @@ const FOCUS_CSS = `
 .focus{position:relative;min-height:100vh;display:flex;flex-direction:column}
 .focus > header{height:60px;display:flex;align-items:center;padding:0 28px;border-bottom:1px solid var(--line)}
 .focus > main{flex:1;display:grid;place-items:center;padding:48px 20px}
-.fc{width:100%;max-width:440px;border-radius:20px;background:var(--card);box-shadow:var(--frame),0 40px 100px -40px rgba(0,0,0,.6);overflow:hidden}
+.fc{width:100%;max-width:440px;border-radius:20px;background:var(--card);box-shadow:var(--frame),var(--deep);overflow:hidden}
 .fc-h{padding:26px 28px 22px;border-bottom:1px solid var(--line)}
 .fc-h .label{display:inline-flex;align-items:center;gap:7px}
 .fc-h h1{margin:14px 0 0;font-size:26px;line-height:32px;font-weight:400;letter-spacing:-.03em}
@@ -844,7 +859,7 @@ export function linkPage(id: string): string {
       tick();
     </script>`, {
     css: FOCUS_CSS + `
-      .qr{align-self:center;width:260px;height:260px;background:#fff;border-radius:16px;display:grid;place-items:center;padding:14px;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 0 0 7px rgba(255,246,232,.04),0 24px 60px -24px rgba(227,185,141,.35)}
+      .qr{align-self:center;width:260px;height:260px;background:#fff;border-radius:16px;display:grid;place-items:center;padding:14px;box-shadow:0 0 0 1px var(--line-2),0 0 0 7px var(--chip),0 24px 60px -24px rgba(227,185,141,.35)}
       .qr svg{width:100%;height:100%;display:block}
       .ol{margin:0;padding:0;list-style:none;counter-reset:s;display:grid;gap:10px;font-size:13.5px;color:var(--text-2)}
       .ol li{counter-increment:s;display:flex;align-items:center;gap:12px}.ol li::before{content:counter(s);display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line-3);font-size:11.5px;font-weight:500;color:var(--text)}`,
@@ -863,7 +878,7 @@ const CHATS_CSS = `
 .sws{display:flex;gap:22px;align-items:center;height:36px;margin-left:12px}
 .sw{display:flex;gap:10px;align-items:center;cursor:pointer;font-size:13.5px;color:var(--text-2)}
 .sw input{appearance:none;flex:0 0 32px;width:32px;height:18px;margin:0;border-radius:9px;background:var(--bg-3);box-shadow:inset 0 0 0 1px var(--line-2);position:relative;cursor:pointer;transition:background .2s var(--ease)}
-.sw input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .25s var(--ease)}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--knob);box-shadow:var(--knob-shadow);transition:transform .25s var(--ease)}
 .sw input:checked{background:var(--primary);box-shadow:var(--primary-shadow)}.sw input:checked::after{transform:translateX(14px);background:var(--on-primary)}
 .sw input:focus-visible{box-shadow:var(--ring)}
 .lede{font-size:13.5px;line-height:21px;color:var(--muted);margin:0;max-width:80ch}

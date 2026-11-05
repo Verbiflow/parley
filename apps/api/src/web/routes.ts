@@ -5,7 +5,7 @@ import type { AppContext } from "../context.ts"
 import { currentSession, currentUserId, currentViewer, startSession, clearSession, rememberNext as rememberNextPath, takeNext } from "./session.ts"
 import { agentSessions, endAgentSession } from "../oauth/store.ts"
 import { workosClient, redirectUri } from "./workos.ts"
-import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, type ActivityFilter, type ConnectionSummary, type WebhooksView } from "./pages.ts"
+import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, unfinishedLink, type ActivityFilter, type ConnectionSummary, type WebhooksView } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
 import { MAX_DAILY_LIMIT, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
@@ -158,8 +158,8 @@ export function webRoutes(ctx: AppContext): Hono {
     const form = await c.req.formData().catch(() => undefined)
     const timezone = String(form?.get("timezone") ?? "")
     const country = String(form?.get("country") ?? "")
-    // A link still waiting for its scan is where "add a number" picks up, rather than a second pending link.
-    const pending = (await ctx.sessions.list(userId)).find((x) => x.channel === "whatsapp" && x.status === "linking" && !x.handle)
+    // A link never scanned (still waiting, or its QR timed out) is where "add a number" picks up, rather than a second one.
+    const pending = (await ctx.sessions.list(userId)).find((x) => x.channel === "whatsapp" && unfinishedLink(x))
     if (pending) return c.redirect(`/link/${pending.id}`)
     try {
       const started = await ctx.sessions.connect(userId, "whatsapp", {
