@@ -957,7 +957,7 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
 /** Why a visible chat says "no history yet". */
 const NO_HISTORY = "Parley has no message from this chat to count back from (it was ignored while they came in), so agents can't load its earlier messages from your phone yet. They can as soon as a new message arrives in it."
 /** Asked before a chat is ignored: what goes, and what comes back if it's turned on again. */
-const IGNORE_CONFIRM = "Ignore {name}?\n\nAgents won't see this chat. Parley deletes the messages it stored from it and won't keep new ones (only a bookmark of the latest, with no text).\n\nIf you turn it back on, those messages don't come back by themselves: agents can fetch up to the last 50 from your phone with load_history, and anything older only from a chat export."
+const IGNORE_CONFIRM = "Ignore {name}?\n\nAgents won't see this chat: they can't read it, search it, get its webhooks or send to it. Parley keeps its messages privately, so turning it back on brings its history back."
 
 export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number; webhooks: WebhooksView }): string {
   const { connection: conn } = opts
@@ -1017,7 +1017,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ${sendingPrefs(conn, opts.today, opts.queued)}
       ${webhooksSection(conn.id, number || name, opts.webhooks)}
       <div class="sec-h chats-h"><span class="label">Chats</span></div>
-      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages: only a bookmark of the latest one (no text), so if you turn it back on, agents can fetch its recent history from your phone.</p>
+      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Agents never see a chat you ignore: they can't read it, search it, get its webhooks or send to it. Parley keeps its messages privately, so if you turn it back on, its history is there.</p>
       ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
           <div class="tags" id="tags">

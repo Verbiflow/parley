@@ -175,6 +175,12 @@ export async function enqueue(
     const [backlog] = await sql<{ n: number }>(`select count(*)::int as n from parley.outbound where connection_id = $1 and status = 'scheduled'`, [c.id])
     if ((backlog?.n ?? 0) >= MAX_QUEUED) throw new OutboxError("queue_full", `this connection already has ${MAX_QUEUED} messages waiting to send`)
 
+    const [hidden] = await sql<{ yes: boolean }>(
+      `select exists (select 1 from parley.chat where connection_id = $1 and id = $2 and not synced)
+           or jsonb_exists((select ignored_chats from parley.connection where id = $1), $2) as yes`,
+      [c.id, req.to]
+    )
+    if (hidden?.yes) throw new OutboxError("forbidden", "the account holder ignored this chat in Parley, so agents can't send, react or delete in it")
     const [known] = await sql<{ yes: boolean }>(
       `select exists (select 1 from parley.chat where connection_id = $1 and id = $2 and last_message_at is not null)
            or exists (select 1 from parley.outbound where connection_id = $1 and chat_id = $2 and status = 'sent') as yes`,

@@ -76,7 +76,7 @@ test("an account page shows its chats with the daily limit and disconnect on top
   const row = (c: Partial<ChatRow>): ChatRow => ({ id: "g@g.us", kind: "group", name: "Family 2", synced: true, lastMessageAt: "2026-11-05T07:09:07Z", lastCallAt: null, lastCallKind: null, ...c })
   const listed = chatsPage({ user, connection: conn, chats: [row({ canLoadHistory: false }), row({ id: "h@g.us", name: "Hikes", canLoadHistory: true }), row({ id: "o@g.us", name: "Old", synced: false, canLoadHistory: false })], agentCount: 1, saved: false, today: null, queued: 0, webhooks: { webhooks: [], deliveries: [] } })
   assert.match(listed, /if\(ignored&&!confirm\("Ignore \{name\}\?/)
-  assert.match(listed, /load_history/)
+  assert.match(listed, /keeps its messages privately/)
   assert.equal(listed.match(/· no history yet<\/p>/g)?.length, 1)
   assert.match(listed, /data-id="g@g.us"[^>]*data-hist="0"[\s\S]*?class="s warn" title="Parley has no message from this chat/)
   assert.doesNotMatch(listed, /Hikes<\/p><p class="s warn"/)
