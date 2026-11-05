@@ -21,7 +21,7 @@ const post: WebhookPoster = async ({ url, body, headers }) => {
   return { status }
 }
 
-const { ctx, sql, base } = await testServer([fake.channel], { PUBLIC_URL: "https://app.parley.test" }, { postWebhook: post })
+const { ctx, sql, base } = await testServer([fake.channel], { PUBLIC_URL: "https://app.parley.test" }, { postWebhook: post, webhookTimer: false })
 const sessions = ctx.sessions
 
 async function linked(email: string, handle = "6591363557@s.whatsapp.net") {
