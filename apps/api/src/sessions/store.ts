@@ -11,6 +11,10 @@ export type Connection = {
   timezone: string; country: string | null; haltedReason: string | null; pausedUntil: string | null
   /** Sends a local day may hold, every kind together. */
   dailyLimit: number
+  /** Sends wait for the channel's local active hours (WhatsApp 8:00–21:00). Off unless the person turns it on. */
+  activeHours: boolean
+  /** Least seconds between two sends (up to twice that at random); null keeps the channel's default. */
+  gapSeconds: number | null
   /**
    * How agents behave on this number, both on unless the person turns them off: reading a chat marks it read on the
    * channel too (blue ticks, if the number's own WhatsApp setting allows), and a message shows "typing…" first. An
@@ -22,16 +26,17 @@ export type Connection = {
   typing: boolean
 }
 /**
- * Where the account appears to live (its active hours follow the time zone, its exit IP the country), and how many
- * messages it may send a day.
+ * Where the account appears to live (its active hours, when on, follow the time zone; its exit IP the country), how
+ * many messages it may send a day, whether it keeps to active hours, and the gap between sends (null for the
+ * channel's default; left out to keep it).
  */
-export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined }
+export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined }
 
 type Row = {
   id: string; account_id: string; channel: string; status: ConnectionStatus; handle: string | null; display_name: string | null; created_at: Date; linked_at: Date | null; chats_chosen_at: Date | null
   history_started_at: Date | null; history_progress: number | null; history_done_at: Date | null
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
-  daily_limit: number
+  daily_limit: number; active_hours: boolean; gap_seconds: number | null
   read_receipts: boolean; typing: boolean
   avatar: string | null
 }
@@ -40,9 +45,9 @@ const row = (r: Row): Connection => ({
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
-  dailyLimit: r.daily_limit, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, read_receipts, typing, avatar"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, active_hours, gap_seconds, read_receipts, typing, avatar"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(
@@ -103,7 +108,8 @@ const ACCOUNT_OF = (col: string) => `(case when ${col} like '%@%' then split_par
 
 /**
  * Older links of the same account (same person, channel and number) as this freshly opened one — what linking a
- * number again replaces. The new link takes over what the old ones ignored, so relinking never un-ignores a chat.
+ * number again replaces. The new link takes over what the old ones ignored, so relinking never un-ignores a chat, and
+ * the number's settings (daily limit, send gap, active hours, read receipts, typing, time zone), and what it stored.
  */
 export async function supersede(sql: Sql, id: string): Promise<string[]> {
   const rows = await sql<{ id: string }>(
@@ -113,18 +119,7 @@ export async function supersede(sql: Sql, id: string): Promise<string[]> {
       where n.id = $1 and n.handle is not null`,
     [id]
   )
-  if (rows.length) {
-    await sql(
-      `update parley.connection n set ignored_chats = coalesce((
-         select jsonb_agg(distinct x) from (
-           select jsonb_array_elements_text(n.ignored_chats) x
-           union select jsonb_array_elements_text(o.ignored_chats) from parley.connection o where o.id = any($2::uuid[])
-         ) s), '[]'::jsonb), updated_at = now()
-       where n.id = $1`,
-      [id, rows.map((r) => r.id)]
-    )
-    await moveWebhooks(sql, rows.map((r) => r.id), id)
-  }
+  if (rows.length) await carryOver(sql, id, rows.map((r) => r.id))
   return rows.map((r) => r.id)
 }
 
@@ -143,4 +138,60 @@ export async function setHistorySync(sql: Sql, id: string, progress: number | nu
 
 export async function setStatus(sql: Sql, id: string, status: ConnectionStatus): Promise<void> {
   await sql(`update parley.connection set status = $2, updated_at = now() where id = $1`, [id, status])
+}
+
+/**
+ * A new link of a number takes over from its old links (`old`): what they ignored (so relinking never un-ignores a
+ * chat), their webhooks, the number's settings, and what Parley stored (chats, messages, reactions; ignored chats stay
+ * ignored). Queued messages stay with the old links. Used when the same number links again, and by the Relink button.
+ */
+export async function carryOver(sql: Sql, id: string, old: string[]): Promise<void> {
+  if (!old.length) return
+  await sql(
+    `update parley.connection n set ignored_chats = coalesce((
+       select jsonb_agg(distinct x) from (
+         select jsonb_array_elements_text(n.ignored_chats) x
+         union select jsonb_array_elements_text(o.ignored_chats) from parley.connection o where o.id = any($2::uuid[])
+       ) s), '[]'::jsonb), updated_at = now()
+     where n.id = $1`,
+    [id, old]
+  )
+  await moveWebhooks(sql, old, id)
+  // The number's own settings belong to the number, not to one link: the newest old link's carry over. Its time
+  // zone too, unless this link was given one (a new link starts on UTC). What's queued stays with the old link.
+  await sql(
+    `update parley.connection n set
+       daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds,
+       read_receipts = o.read_receipts, typing = o.typing,
+       timezone = case when n.timezone = 'UTC' then o.timezone else n.timezone end,
+       country = coalesce(n.country, o.country), updated_at = now()
+     from (select * from parley.connection where id = any($2::uuid[]) order by created_at desc limit 1) o
+     where n.id = $1`,
+    [id, old]
+  )
+  // What the old links stored comes along (ignored chats stay ignored, kept privately), so nothing Parley had is lost
+  // while the phone sends history again. Anything the new link already has stays as it is.
+  await sql(
+    `insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind, anchor)
+     select distinct on (c.id) $1, c.id, c.kind, c.name, c.synced and not jsonb_exists(n.ignored_chats, c.id), c.last_message_at, c.last_call_at, c.last_call_kind, c.anchor
+       from parley.chat c, parley.connection n where n.id = $1 and c.connection_id = any($2::uuid[])
+      order by c.id, c.updated_at desc
+     on conflict (connection_id, id) do nothing`,
+    [id, old]
+  )
+  await sql(
+    `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at, media)
+     select $1, m.chat_id, m.id, m.sender, m.from_me, m.body, m.sent_at, m.media from parley.message m
+      where m.connection_id = any($2::uuid[]) order by m.sent_at, m.seq
+     on conflict (connection_id, chat_id, id) do nothing`,
+    [id, old]
+  )
+  await sql(
+    `insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
+     select distinct on (r.chat_id, r.message_id, r.reactor) $1, r.chat_id, r.message_id, r.reactor, r.emoji, r.reacted_at
+       from parley.reaction r where r.connection_id = any($2::uuid[])
+      order by r.chat_id, r.message_id, r.reactor, r.reacted_at desc
+     on conflict do nothing`,
+    [id, old]
+  )
 }

@@ -105,9 +105,11 @@ export async function deliverDue(ctx: { sql: Sql; webhooks: Webhooks; post: Webh
 async function sendOne(ctx: { sql: Sql; webhooks: Webhooks; post: WebhookPoster }, d: Claimed, now: Date): Promise<void> {
   let status: number | null = null
   let error: string | null = null
+  // When this request went (each attempt and each resend has its own), so a receiver can tell one send from another.
+  const sentBody = { ...(typeof d.payload === "string" ? JSON.parse(d.payload) : d.payload) as Record<string, unknown>, sent_at: new Date().toISOString() }
   try {
     const secret = await ctx.webhooks.secret(ctx.sql, d.account_id, d.webhook_id)
-    const body = JSON.stringify(d.payload)
+    const body = JSON.stringify(sentBody)
     const signature = await signWebhook(secret, body, Math.floor(Date.now() / 1000))
     const res = await ctx.post({
       url: d.url, body,
@@ -124,9 +126,9 @@ async function sendOne(ctx: { sql: Sql; webhooks: Webhooks; post: WebhookPoster 
   const retryAt = new Date(now.getTime() + (RETRY_DELAYS_MS[d.attempts - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]))
   await ctx.sql(
     `update parley.webhook_delivery set status = $2, last_status = $3, last_error = $4, lease_until = null,
-            delivered_at = case when $2::text = 'delivered' then $5::timestamptz else null end, next_attempt_at = $6::timestamptz
+            delivered_at = case when $2::text = 'delivered' then $5::timestamptz else null end, next_attempt_at = $6::timestamptz, payload = $7::jsonb
       where id = $1 and status = 'sending'`,
-    [d.id, ok ? "delivered" : last ? "failed" : "pending", status, error, now, ok || last ? now : retryAt]
+    [d.id, ok ? "delivered" : last ? "failed" : "pending", status, error, now, ok || last ? now : retryAt, JSON.stringify(sentBody)]
   )
   await ctx.sql(
     ok
@@ -164,11 +166,14 @@ export async function emitLiveEvents(
   conn: Pick<Connection, "id" | "accountId" | "channel">,
   change: { messages?: { stored: MessageKey[]; inbound: InboundMessage[] }; reactions?: ChangedReaction[]; deleted?: ForgottenMessage[] }
 ): Promise<number> {
-  const stored = change.messages?.stored ?? []
-  const reactions = change.reactions ?? []
-  const deleted = change.deleted ?? []
-  if (!stored.length && !reactions.length && !deleted.length) return 0
   if (!(await hasWebhooks(ctx.sql, conn.id))) return 0
+  // Only chats agents can see: an ignored chat's messages are stored (privately) but never sent anywhere.
+  const all = [...(change.messages?.stored ?? []).map((m) => m.chatId), ...(change.reactions ?? []).map((r) => r.chatId), ...(change.deleted ?? []).map((m) => m.chatId)]
+  const visible = new Set((await ctx.sql<{ id: string }>(`select id from parley.chat where connection_id = $1 and synced and id = any ($2::text[])`, [conn.id, [...new Set(all)]])).map((r) => r.id))
+  const stored = (change.messages?.stored ?? []).filter((m) => visible.has(m.chatId))
+  const reactions = (change.reactions ?? []).filter((r) => visible.has(r.chatId))
+  const deleted = (change.deleted ?? []).filter((m) => visible.has(m.chatId))
+  if (!stored.length && !reactions.length && !deleted.length) return 0
   const [{ handle } = { handle: null }] = await ctx.sql<{ handle: string | null }>(`select handle from parley.connection where id = $1`, [conn.id])
   const chats = await chatsOf(ctx.sql, conn.id, [...stored.map((m) => m.chatId), ...reactions.map((r) => r.chatId), ...deleted.map((m) => m.chatId)])
   const events: WebhookEventInput[] = []

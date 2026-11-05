@@ -28,7 +28,7 @@ Agents never send directly. `send_message` queues into `parley.outbound` and res
 human-paced slot (`packages/pacing` `planNext`), under a row lock on the connection so concurrent sends queue
 instead of colliding:
 
-- inside the account's local active hours (`parley.connection.timezone`), with random gaps, bursts and breaks
+- inside the account's local active hours (`parley.connection.timezone`) when `parley.connection.active_hours` is on (off by default), with random gaps (`parley.connection.gap_seconds` when set: that to twice that; else the channel policy), bursts and breaks
 - daily caps per action that start low and warm up (`warmup`), and halve on pushback
 - replies interleave ahead of conversation openers that hit their cap
 

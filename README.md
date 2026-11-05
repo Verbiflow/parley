@@ -38,8 +38,8 @@ Other clients that support remote MCP servers, such as Claude, ChatGPT and Codex
 
 **It sends at a human pace.** Messaging apps flag accounts that send like software. Agents never send directly. `send_message` puts the message in an outbox and reserves the account's next human-paced slot:
 
-- inside the account's active hours, in its own timezone
-- with random gaps between messages, plus bursts and breaks
+- inside the account's active hours, in its own timezone, if you turn them on for that number (off by default)
+- with random gaps between messages (set the seconds per number, or keep the channel default), plus bursts and breaks
 - under daily caps per kind of message, which start low, grow as the account warms up, and halve when the platform pushes back
 - with replies going ahead of new conversations once those hit their cap
 
@@ -54,7 +54,7 @@ When the platform answers with a rate limit or a checkpoint, Parley backs off, p
 | Area | Tools |
 | --- | --- |
 | Accounts | `list_channels`, `list_connections`, `connect`, `connection_status` |
-| Reading | `read_inbox`, `list_chats`, `get_notifications`, `load_history`, `get_media` |
+| Reading | `read_inbox`, `list_chats`, `search`, `get_notifications`, `load_history`, `get_media` |
 | Sending | `send_message`, `react_to_message`, `delete_message` |
 | Outbox | `send_availability`, `list_outbox`, `message_status`, `cancel_message` |
 | Webhooks | `create_webhook`, `list_webhooks`, `update_webhook`, `delete_webhook`, `test_webhook`, `resend_webhook_delivery` |

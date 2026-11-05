@@ -69,24 +69,32 @@ test("two numbers on one account: agents pick one by number, or let the chat dec
   assert.equal((await callTool(base, token, "list_chats", { connection_id: "+6591363557" })).result.chats.length, 0)
 })
 
-test("linking a number that is already linked replaces the old link and keeps what it ignored", async () => {
+test("linking a number that is already linked replaces the old link and keeps what it ignored and its settings", async () => {
   const email = "relinked@parley.test"
   const token = await agentToken(base, email, "Claude")
   const account = await store.upsertAccount(sql, { subject: `local:${email}`, email, name: "R", signedInWith: "local" })
-  const link = async (handle: string) => {
-    const id = (await callTool(base, token, "connect", { channel: "fake-wa", country: "sg" })).result.connection_id as string
+  const link = async (handle: string, args: Record<string, unknown> = {}) => {
+    const id = (await callTool(base, token, "connect", { channel: "fake-wa", country: "sg", ...args })).result.connection_id as string
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => Boolean(s.link))
     fake.simulator.completeLink(id, handle)
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => s.status === "connected")
     return id
   }
   const first = await link("6591363557:7@s.whatsapp.net")
-  await sql(`update parley.connection set ignored_chats = '["spam@g.us"]'::jsonb where id = $1`, [first])
+  await sql(`update parley.connection set ignored_chats = '["spam@g.us"]'::jsonb, daily_limit = 40, active_hours = true, gap_seconds = 90, read_receipts = false, typing = false, timezone = 'Asia/Singapore' where id = $1`, [first])
+  // What it stored comes along too.
+  fake.simulator.announceChats(first, [{ id: "ana", name: "Ana", kind: "direct" }])
+  await waitUntil(() => ctx.sessions.chats(account.id, first), (c) => c.length === 1)
+  fake.simulator.deliver(first, { id: "kept", threadId: "ana", from: "ana", text: "from the old link" })
+  await waitUntil(() => ctx.sessions.inbox(account.id, { limit: 5, connectionId: first }), (m) => m.length === 1)
   const second = await link("6591363557:9@s.whatsapp.net") // same number, a new device
 
   const old = await waitUntil(() => ctx.sessions.list(account.id), (cs) => cs.find((c) => c.id === first)?.status === "logged_out")
   assert.equal(old.find((c) => c.id === second)?.status, "connected")
   const [row] = await sql<{ ignored_chats: string[] }>(`select ignored_chats from parley.connection where id = $1`, [second])
   assert.deepEqual(row?.ignored_chats, ["spam@g.us"])
+  const kept = (await ctx.sessions.list(account.id)).find((c) => c.id === second)!
+  assert.deepEqual([kept.dailyLimit, kept.activeHours, kept.gapSeconds, kept.readReceipts, kept.typing, kept.timezone], [40, true, 90, false, false, "Asia/Singapore"])
+  assert.deepEqual((await ctx.sessions.inbox(account.id, { limit: 5 })).map((m) => [m.connectionId, m.text]), [[second, "from the old link"]])
   assert.equal((await callTool(base, token, "list_connections")).result.connections.length, 1)
 })

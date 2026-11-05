@@ -63,6 +63,8 @@ const seconds = (t: unknown): string | undefined => {
 
 /** A send in Baileys' terms: plain text, a file with its caption, a reaction to a stored message, or a deletion of one. */
 /** 50 words a minute at ~5 characters a word: 250 characters a minute, so ~24s per 100 characters. */
+/** How long the phone gets to answer a history request before it counts as ignored (Parley itself waits 20 s). */
+const HISTORY_ANSWER_MS = 25_000
 const TYPING_MS_PER_CHAR = 60_000 / 250
 /** Never longer than this (well inside the outbox lease), never shorter than a beat. */
 export const TYPING_MAX_MS = 60_000
@@ -317,6 +319,30 @@ export const whatsappChannel: Channel = {
       return reactionIn(canon(raw), r)
     }
     /**
+     * History requests to the phone not answered yet, by request id, with when they went. A request travels encrypted on
+     * Parley's own session with the phone; when that session goes stale (a restart can leave it so) the phone silently
+     * drops every request, while live messages (encrypted by their senders) keep arriving. So the first request on a
+     * socket, and any after one that went unanswered, starts a fresh session with the phone first (as a device does
+     * after a decryption failure). No relink: only Parley's side of the session with its own phone is renewed.
+     */
+    const unanswered = new Map<string, number>()
+    /** Recent history requests (id → when sent), so what comes back for them can be traced. Bounded. */
+    const historyRequests = new Map<string, number>()
+    let phoneSessionRenewed = false
+    const renewPhoneSession = async (why: "first request" | "unanswered request") => {
+      const me = sock.user
+      if (!me?.id) return
+      const jids = [jidNormalizedUser(me.id), ...(me.lid ? [jidNormalizedUser(me.lid)] : [])]
+      try {
+        await sock.assertSessions(jids, true)
+        phoneSessionRenewed = true
+        unanswered.clear()
+        console.log(JSON.stringify({ msg: "whatsapp: renewed session with own phone", why, addressing: jids.map((j) => (j.endsWith("@lid") ? "lid" : "pn")) }))
+      } catch (e) {
+        console.error(JSON.stringify({ msg: "whatsapp: could not renew session with own phone", error: e instanceof Error ? e.message : String(e) }))
+      }
+    }
+    /**
      * What the phone says back to our requests (history on demand, resends of messages that failed to decrypt). Baileys
      * acts on some answers and drops the rest silently; this logs every one, by type and counts only, never content.
      */
@@ -325,9 +351,11 @@ export const whatsappChannel: Channel = {
       if (!p || !m.key.fromMe) return
       if (p.type === proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION) {
         const h = p.historySyncNotification
+        if (h?.peerDataRequestSessionId) unanswered.delete(h.peerDataRequestSessionId)
         console.log(JSON.stringify({ msg: "whatsapp: history notification", syncType: h?.syncType, chunkOrder: h?.chunkOrder, requestId: h?.peerDataRequestSessionId || undefined, inline: Boolean(h?.initialHistBootstrapInlinePayload?.length) }))
       } else if (p.type === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE) {
         const r = p.peerDataOperationRequestResponseMessage
+        if (r?.stanzaId) unanswered.delete(r.stanzaId)
         const results = r?.peerDataOperationResult ?? []
         console.log(JSON.stringify({
           msg: "whatsapp: phone answered a request", requestType: r?.peerDataOperationRequestType, requestId: r?.stanzaId, results: results.length,
@@ -449,8 +477,9 @@ export const whatsappChannel: Channel = {
         markOnlineOnConnect: false,
         syncFullHistory: false,
         // With syncFullHistory off, Baileys skips *every* history batch, including the one-time recent-chats sync
-        // WhatsApp sends at link time. That's where one-to-one chats come from (groups are fetched separately), so
-        // without it the list is groups only. Take the recent sync; still decline the full archive.
+        // WhatsApp sends at link time (about the last three months). That's where one-to-one chats come from (groups are
+        // fetched separately), so without it the list is groups only. Take the recent sync; still decline the full
+        // archive. Ignored chats' messages from it are kept privately (agents never see them).
         shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncType.FULL,
         // Resend a message a recipient couldn't decrypt (see `sent` above).
         // Logged (ids only, no text) so a message stuck on "Waiting for this message" can be traced.
@@ -471,6 +500,22 @@ export const whatsappChannel: Channel = {
         (sock.ev as unknown as { on(e: string, f: (a: any) => void): void }).on(event, guard(event, fn))
       }
       on("creds.update", saveNow)
+
+      // What comes back for a history request: WhatsApp's server ack (with an error code if it refused it) and the
+      // phone's receipts (delivered, read, or "retry" when it couldn't decrypt it). Ids, types and codes only.
+      const traceRequest = (kind: "ack" | "receipt") => (node: { attrs?: Record<string, string> }) => {
+        const a = node.attrs ?? {}
+        const sent = a.id ? historyRequests.get(a.id) : undefined
+        if (sent === undefined) return
+        const from = a.from ?? ""
+        console.log(JSON.stringify({
+          msg: `whatsapp: history request ${kind}`, requestId: a.id, class: a.class, type: a.type ?? "delivery", error: a.error,
+          phash: a.phash ? true : undefined, device: from.includes(":") ? from.split(":")[1]!.split("@")[0] : from ? "0" : undefined,
+          addressing: from.endsWith("@lid") ? "lid" : from ? "pn" : undefined, ms: Date.now() - sent,
+        }))
+      }
+      sock.ws.on("CB:ack,class:message", traceRequest("ack"))
+      sock.ws.on("CB:receipt", traceRequest("receipt"))
 
       on("connection.update", (u) => {
         if (u.qr) emit({ type: "link", method: "qr", data: u.qr })
@@ -604,6 +649,8 @@ export const whatsappChannel: Channel = {
         // The phone answers with a history batch of the messages before this one (as WhatsApp Desktop does when you
         // scroll up). It has to be online; the answer comes through messaging-history.set like any history.
         const jid = toJid(anchor.threadId)
+        const ignored = [...unanswered.values()].some((at) => Date.now() - at > HISTORY_ANSWER_MS)
+        if (!phoneSessionRenewed || ignored) await renewPhoneSession(ignored ? "unanswered request" : "first request")
         // The phone files a person's chat under their private id or their number, depending on the chat: ask under
         // each form we know (an answer to both is harmless; stored messages are only filled in).
         const lids = isJidGroup(jid) ? [] : [...phoneOfLid].filter(([, pn]) => pn === jid).map(([lid]) => lid)
@@ -611,6 +658,9 @@ export const whatsappChannel: Channel = {
           const key: WAMessageKey = { remoteJid, id: anchor.messageId, fromMe: anchor.fromMe }
           if (isJidGroup(jid) && !anchor.fromMe && anchor.sender && anchor.sender !== "me") key.participant = toJid(anchor.sender)
           const requestId = await sock.fetchMessageHistory(Math.max(1, Math.min(50, count)), key, Date.parse(anchor.at))
+          unanswered.set(requestId, Date.now())
+          historyRequests.set(requestId, Date.now())
+          if (historyRequests.size > 100) historyRequests.delete(historyRequests.keys().next().value!)
           console.log(JSON.stringify({ msg: "whatsapp: history requested", requestId, addressing: remoteJid.endsWith("@lid") ? "lid" : isJidGroup(remoteJid) ? "group" : "pn", count }))
         }
       },

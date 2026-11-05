@@ -41,6 +41,11 @@ test("outside active hours it waits for the window, opening a few minutes after 
   assert.deepEqual(r.waits, ["outside_active_hours"])
 })
 
+test("with active hours off it sends at any hour, any day", () => {
+  const night = new Date("2026-11-07T08:00:00Z") // 3 AM on a Saturday in New York
+  assert.deepEqual(planNext({ policy: linkedin, timeZone: NY, seed: "a", now: night, reservations: [], activeHours: false }, "message"), { ok: true, at: night, waits: [] })
+})
+
 test("it skips days the policy doesn't work (LinkedIn on a Saturday)", () => {
   const r = planNext({ policy: linkedin, timeZone: NY, seed: "a", now: new Date("2026-11-07T17:00:00Z"), reservations: [] }, "message")
   assert.ok(r.ok)
