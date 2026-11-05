@@ -38,7 +38,7 @@ Other clients that support remote MCP servers, such as Claude, ChatGPT and Codex
 
 **It sends at a human pace.** Messaging apps flag accounts that send like software. Agents never send directly. `send_message` puts the message in an outbox and reserves the account's next human-paced slot:
 
-- inside the account's active hours, in its own timezone
+- inside the account's active hours, in its own timezone, if you turn them on for that number (off by default)
 - with random gaps between messages, plus bursts and breaks
 - under daily caps per kind of message, which start low, grow as the account warms up, and halve when the platform pushes back
 - with replies going ahead of new conversations once those hit their cap

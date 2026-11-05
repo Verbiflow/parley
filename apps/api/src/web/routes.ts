@@ -236,6 +236,8 @@ export function webRoutes(ctx: AppContext): Hono {
       timezone: isValidTimeZone(timezone) && timezone ? timezone : undefined,
       country: /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : undefined,
       dailyLimit: Number.isInteger(limit) && limit >= 1 && limit <= MAX_DAILY_LIMIT ? limit : undefined,
+      // An unchecked box sends nothing, so the active-hours form says it carries the switch.
+      activeHours: form.get("hours_form") === "1" ? form.get("active_hours") === "on" : undefined,
     }).catch((e) => {
       if (!(e instanceof OutboxError)) throw e
     })

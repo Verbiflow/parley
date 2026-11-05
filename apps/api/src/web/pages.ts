@@ -919,7 +919,7 @@ const CHATS_CSS = `
 .empty .orb{margin-bottom:16px}
 `
 
-/** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
+/** Today's sending, and this number's settings: how many messages a day, read receipts, typing, active hours. */
 /** A switch in form `form` that saves it as soon as it's flipped. */
 const toggle = (form: string, name: string, on: boolean, label: string) =>
   `<label class="sw"><input type="checkbox" form="${form}" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
@@ -927,6 +927,7 @@ const toggle = (form: string, name: string, on: boolean, label: string) =>
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
   // The switches sit in the daily limit's row but belong to their own form (forms can't nest).
   const behave = `behave-${esc(conn.id)}`
+  const hours = `hours-${esc(conn.id)}`
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
@@ -936,10 +937,12 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
         ${toggle(behave, "typing", conn.typing, "Typing")}
+        ${toggle(hours, "active_hours", conn.activeHours, "Active hours")}
         <noscript><button class="btn line sm" type="submit" form="${behave}">Save</button></noscript>
       </span>
     </form>
     <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" id="${behave}" hidden></form>
+    <form method="post" action="/app/connections/${esc(conn.id)}/locale" id="${hours}" hidden><input type="hidden" name="hours_form" value="1"></form>
   </div>`
 }
 

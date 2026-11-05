@@ -142,6 +142,26 @@ test("the daily limit counts every kind together; lowering it moves the overflow
   assert.equal((await availability(sql, accountId, connectionId, T0)).today.dailyLimit, 3)
 })
 
+test("active hours are off unless turned on for the number; switching them replans the queue", async () => {
+  const { accountId, connectionId } = await linked("hours@parley.test")
+  // 3 AM in Los Angeles: outside WhatsApp's 8:00–21:00 window.
+  const night = new Date("2026-11-03T11:00:00Z")
+  await sessions.setLocale(accountId, connectionId, { timezone: "America/Los_Angeles" }, night)
+  const m = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "late" }, night)
+  assert.equal(m.message.scheduledFor, night.toISOString())
+  assert.deepEqual(m.message.waits, [])
+
+  await sessions.setLocale(accountId, connectionId, { activeHours: true }, night)
+  const held = await getOutbound(sql, accountId, m.message.id)
+  assert.ok(Date.parse(held.scheduledFor!) >= Date.parse("2026-11-03T16:00:00Z"))
+  // Saving other settings leaves the switch alone.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 50 }, night)
+  assert.equal((await getOutbound(sql, accountId, m.message.id)).scheduledFor, held.scheduledFor)
+
+  await sessions.setLocale(accountId, connectionId, { activeHours: false }, night)
+  assert.equal((await getOutbound(sql, accountId, m.message.id)).scheduledFor, night.toISOString())
+})
+
 test("typing is per message: off unless asked, and handed to the channel with the send", async () => {
   const { accountId, connectionId } = await linked("typing@parley.test")
   const plain = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "no typing" }, T0)
