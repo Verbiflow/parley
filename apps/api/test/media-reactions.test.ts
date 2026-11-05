@@ -343,7 +343,8 @@ test("deleting a sent message for everyone: by its outbox id or its inbox id, pa
   fake.simulator.deliver(connectionId, { id: "mine", threadId: "ana", from: "me", fromMe: true, text: "typo", at: new Date(Date.now() - hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "hers", threadId: "ana", from: "ana", text: "hi", at: at(-hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "me", fromMe: true, text: "ages ago", at: at(-49 * hour).toISOString() })
-  fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: at(-2 * hour).toISOString() })
+  // "edge" is queued after that deletion took the real clock's slot, so its window has to outlast that slot, whatever today is.
+  fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: new Date(Date.now() - 2 * hour).toISOString() })
   await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 4)
   const dispatch = async (q: { message: { scheduledFor: string | null } }) => sessions.dispatchDue(new Date(Date.parse(q.message.scheduledFor!) + 1000))
 
