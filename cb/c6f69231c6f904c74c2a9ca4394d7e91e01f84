@@ -1,0 +1,38 @@
+apps/api/src/sessions/outbox.ts
+  s_c3da177c4ad4af::t_a24a02903a9e7e 178-183
+apps/api/src/web/pages.ts
+  s_c3da177c4ad4af::t_a2979ab450c744 960,1020
+packages/channels/src/whatsapp/index.ts
+  s_c3da177c4ad4af::t_a24a02903a9e7e 475-478,481-483
+apps/api/test/multi-account.test.ts
+  s_c3da177c4ad4af::t_fcfcb186980b15 72,84,91-92
+apps/api/test/media-reactions.test.ts
+  s_c3da177c4ad4af::t_a4af333e31cde4 300-301,304,306-317,319-321,324-325
+apps/api/test/pages.test.ts
+  s_c3da177c4ad4af::t_a4af333e31cde4 79
+apps/api/src/sessions/store.ts
+  s_c3da177c4ad4af::t_fcfcb186980b15 111,133-143,170
+  s_c3da177c4ad4af::t_a2979ab450c744 112,144-169
+apps/api/src/sessions/chats.ts
+  s_c3da177c4ad4af::t_a24a02903a9e7e 4-8,218,235,237-238,248-249,280,291
+apps/api/test/chats.test.ts
+  s_c3da177c4ad4af::t_a4af333e31cde4 32,51,59-60,71,74-75,264,268-269,272,287-288
+apps/api/src/sessions/webhook-delivery.ts
+  s_c3da177c4ad4af::t_a24a02903a9e7e 170-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "cbc6f69231c6f904c74c2a9ca4394d7e91e01f84",
+  "prompts": {},
+  "sessions": {
+    "s_c3da177c4ad4af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "40482d77-7c44-4346-84bc-534b78619b91",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
