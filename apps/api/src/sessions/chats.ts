@@ -380,10 +380,33 @@ export type InboxFilter = {
 }
 
 /**
- * The account's inbox: messages from every synced chat on every connected connection, newest first. Narrow it by
- * channel, connection, or one chat. Only synced chats ever have stored messages, so nothing else can appear here.
+ * Narrowing the inbox to a search. `words`: every one must appear in the text, case-insensitively, anywhere and in any
+ * order (a media caption or placeholder like "[document: invoice.pdf]" is the text). `after`: sent at or after.
+ * `media`: only messages carrying an attachment (of that kind, or `any`). `links`: only messages with a link.
+ * `fromMe`: only the account's own (true) or only the other side's (false). `onlyNew`: only ones not yet read.
  */
-export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { limit: number; before?: string | undefined }): Promise<InboxMessage[]> {
+export type MessageSearch = {
+  words?: string[] | undefined; after?: string | undefined; media?: "any" | MediaInfo["kind"] | undefined
+  links?: boolean | undefined; fromMe?: boolean | undefined; onlyNew?: boolean | undefined
+}
+export type InboxQuery = InboxFilter & { limit: number; before?: string | undefined; search?: MessageSearch | undefined }
+
+/** `word` as an ILIKE pattern matching it anywhere, its own `%`, `_` and `\` taken literally. */
+const containing = (word: string) => `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+/** A link in a message's text, roughly as WhatsApp's "Links" filter finds them. */
+const LINK = String.raw`(https?://|www\.)[^\s]`
+
+/**
+ * The account's inbox: messages from every synced chat on every connected connection, newest first. Narrow it by
+ * channel, connection, or one chat, and with `search` to what matches. Only synced chats ever have stored messages, so
+ * nothing else can appear here.
+ */
+export async function inbox(sql: Sql, accountId: string, opts: InboxQuery): Promise<InboxMessage[]> {
+  const s = opts.search ?? {}
+  const words = (s.words ?? []).filter(Boolean)
+  // The longest word is matched on its own as well, so the trigram index can find the candidates; the rest are checked
+  // on those (an `ilike all` over an array can't use the index).
+  const longest = words.reduce<string | null>((a, w) => (a === null || w.length > a.length ? w : a), null)
   const rows = await sql<RawMessage & { channel: string; connection_id: string; name: string | null; kind: "direct" | "group" }>(
     `select ${MESSAGE_COLS}, k.channel, k.id as connection_id, c.name, c.kind
        from parley.message m
@@ -395,10 +418,43 @@ export async function inbox(sql: Sql, accountId: string, opts: InboxFilter & { l
         and ($3::uuid is null or k.id = $3)
         and ($4::text is null or m.chat_id = $4)
         and ($5::timestamptz is null or m.sent_at < $5)
+        and ($7::text is null or m.body ilike $7)
+        and (cardinality($8::text[]) = 0 or m.body ilike all($8::text[]))
+        and ($9::timestamptz is null or m.sent_at >= $9)
+        and ($10::text is null or ($10 = 'any' and m.media is not null) or m.media->>'kind' = $10)
+        and ($11::boolean is not true or m.body ~* $12)
+        and ($13::boolean is null or m.from_me = $13)
+        and ($14::boolean is not true or ${NEW_MESSAGE})
       order by m.sent_at desc, m.seq desc limit $6`,
-    [accountId, opts.channel ?? null, opts.connectionId ?? null, opts.chatId ?? null, opts.before ?? null, opts.limit]
+    [
+      accountId, opts.channel ?? null, opts.connectionId ?? null, opts.chatId ?? null, opts.before ?? null, opts.limit,
+      longest === null ? null : containing(longest), words.map(containing), s.after ?? null, s.media ?? null, s.links ?? null, LINK,
+      s.fromMe ?? null, s.onlyNew ?? null,
+    ]
   )
   return rows.map((r) => ({ ...messageView(r), channel: r.channel, connectionId: r.connection_id, chatName: r.name, chatKind: r.kind }))
+}
+
+export type FoundChat = { channel: string; connectionId: string; id: string; name: string | null; kind: "direct" | "group"; lastMessageAt: string | null }
+
+/**
+ * Synced chats on the account's connected connections whose name has every one of `words` in it (case-insensitively),
+ * or whose id holds `digits` (a phone number, or part of one). Most recent first, at most `limit`.
+ */
+export async function searchChats(sql: Sql, accountId: string, opts: { channel?: string | undefined; connectionId?: string | undefined; words: string[]; digits?: string | undefined; limit: number }): Promise<FoundChat[]> {
+  const words = opts.words.filter(Boolean)
+  if (!words.length && !opts.digits) return []
+  const rows = await sql<{ channel: string; connection_id: string; id: string; name: string | null; kind: "direct" | "group"; last_message_at: Date | null }>(
+    `select k.channel, k.id as connection_id, c.id, c.name, c.kind, c.last_message_at
+       from parley.chat c join parley.connection k on k.id = c.connection_id
+      where k.account_id = $1 and k.status = 'connected' and c.synced
+        and ($2::text is null or k.channel = $2) and ($3::uuid is null or k.id = $3)
+        and ((cardinality($4::text[]) > 0 and c.name ilike all($4::text[])) or ($5::text is not null and split_part(c.id, '@', 1) like $5))
+      order by c.last_message_at desc nulls last, c.name nulls last
+      limit $6`,
+    [accountId, opts.channel ?? null, opts.connectionId ?? null, words.map(containing), opts.digits ? `%${opts.digits}%` : null, opts.limit]
+  )
+  return rows.map((r) => ({ channel: r.channel, connectionId: r.connection_id, id: r.id, name: r.name, kind: r.kind, lastMessageAt: r.last_message_at?.toISOString() ?? null }))
 }
 
 /** Synced chats across the account's connected connections, most recent first. `awaitingReply` keeps those whose last message was theirs. */

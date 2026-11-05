@@ -11,7 +11,7 @@ import { Webhooks } from "./webhooks.ts"
 import { deliverDue, emitLiveEvents, postWebhook, pruneDeliveries, type WebhookPoster } from "./webhook-delivery.ts"
 import type { InboundMessage, MediaInfo } from "@parley/channels"
 import { createConnection, getConnection, listConnections, connectedConnections, markConnected, setAvatar, setStatus, supersede, setHistorySync, type Connection, type Locale } from "./store.ts"
-import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { upsertChats, nameChats, mergeChats, touchChats, listChats, getChat, setSyncedChats, chatsChosen, saveMessages, saveReactions, forgetMessages, messageMedia, newestMessage, readMessages, inbox, inboxChats, type ChatRow, type StoredMessage, type InboxFilter, type InboxQuery, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CREDS_KIND = "channel-creds" as const
 const encoder = new TextEncoder()
@@ -625,7 +625,7 @@ export class Sessions {
   }
 
   /** Messages across all the account's synced chats on connected channels, newest first (see `inbox`). */
-  async inbox(accountId: string, opts: InboxFilter & { limit: number; before?: string | undefined }): Promise<InboxMessage[]> {
+  async inbox(accountId: string, opts: InboxQuery): Promise<InboxMessage[]> {
     if (opts.connectionId) await this.#owned(accountId, opts.connectionId)
     return inbox(this.ctx.sql, accountId, opts)
   }

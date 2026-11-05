@@ -4,7 +4,7 @@ import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { getConnection } from "../sessions/store.ts"
-import { markRead, newByChat, newReactions, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
+import { markRead, newByChat, newReactions, searchChats, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
 import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -126,6 +126,26 @@ function splitNews(list: NewInChat[], here?: { chatId: string; connectionId?: st
   return { this_chat: { chat_id: here.chatId, name: mine[0]?.name ?? null, messages, reactions }, other_chats: tally(list.filter((c) => !isHere(c))) }
 }
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
+
+/** A search's words: each "quoted phrase" stays whole, everything else splits on spaces. */
+export function searchWords(query: string): string[] {
+  const words: string[] = []
+  for (const [, phrase, word] of query.matchAll(/"([^"]*)"|(\S+)/g)) {
+    const w = (phrase ?? word ?? "").trim().replace(/\s+/g, " ")
+    if (w && !words.includes(w)) words.push(w.slice(0, 100))
+  }
+  return words.slice(0, 10)
+}
+/** A query that is a phone number (or part of one, at least 3 digits): its digits, to find the chat it names. */
+export const numberIn = (query: string) => (/^[\d\s+().-]+$/.test(query) && query.replace(/\D/g, "").length >= 3 ? query.replace(/\D/g, "") : undefined)
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+/** A search bound as an ISO time: a date alone is the start of that day (UTC), or with `end`, of the day after it. */
+export function bound(value: string, end = false): string {
+  if (!DAY.test(value)) return new Date(value).toISOString()
+  const d = new Date(`${value}T00:00:00.000Z`)
+  if (end) d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString()
+}
 
 /** What send_message, react_to_message and delete_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
@@ -469,6 +489,62 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not list chats")
+      }
+    }
+  )
+
+  const WHEN = z.union([z.string().date(), z.string().datetime({ offset: true })])
+  server.registerTool(
+    "search",
+    {
+      title: "Search chats and messages",
+      description: "Search like WhatsApp's search bar, across all your connected accounts (or one, or one chat): `chats` whose name (or number) matches, and `messages` whose text matches, newest first. Every word in `query` must appear, in any order, case-insensitively and anywhere in a word (\"inv\" finds \"invoice\"); put a \"quoted phrase\" in quotes to keep it whole. A photo, video or document's caption counts as its text, and a document without one matches on its file name. Narrow it by date (`after`, `before`), by who sent it (`from_me`), to attachments (`media`), to messages with links (`links`), or to ones not yet read (`only_new`); filters work without a query too (e.g. every document in a chat last week). It searches what Parley has stored: everything in the chats the account holder didn't ignore since the account was linked, plus the history WhatsApp sent at linking and anything load_history fetched. Older messages that are only on the phone aren't found; load_history fetches a chat's older ones. Searching never marks anything read or sends read receipts. To read the conversation around a match, read_inbox with its chat_id and `before` (page back to it), or load_history.",
+      inputSchema: {
+        query: z.string().max(200).optional().describe("Words to find (all of them must appear). \"Quoted phrases\" match whole. A phone number finds that person's chat."),
+        ...filters,
+        chat_id: z.string().optional().describe("Only in this chat (chat_id from list_chats or an earlier result)."),
+        after: WHEN.optional().describe("Only messages sent on or after this: a date (\"2026-10-01\", that whole day included, UTC) or an ISO time."),
+        before: WHEN.optional().describe("Only messages sent before this: a date (\"2026-10-31\", that whole day included, UTC) or an ISO time. To page back, pass the `at` of the oldest match you have."),
+        from_me: z.boolean().optional().describe("true: only what the account holder sent. false: only what others sent. Omit for both."),
+        media: z.enum(["any", "image", "video", "audio", "document", "sticker"]).optional().describe("Only messages with an attachment: \"any\", or one kind (image = photos, audio = voice notes and audio)."),
+        links: z.boolean().optional().describe("Only messages with a link in them."),
+        only_new: z.boolean().optional().describe("Only messages from the other side not yet read."),
+        limit: z.number().int().min(1).max(100).optional().describe("How many messages (default 25)."),
+      },
+    },
+    async ({ query, channel, connection_id, chat_id, after, before, from_me, media, links, only_new, limit }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const words = searchWords(query ?? "")
+        if (!words.length && !after && !before && from_me === undefined && !media && !links && !only_new) {
+          return fail("give a `query`, or a filter (after, before, from_me, media, links, only_new): with neither, read_inbox lists recent messages")
+        }
+        const from = after ? bound(after) : undefined
+        const to = before ? bound(before, true) : undefined
+        if (from && to && from >= to) return fail("`after` must be earlier than `before`")
+        const where = { ...(await scope(userId, { channel, connection_id })), chatId: chat_id }
+        const max = limit ?? 25
+        const digits = query ? numberIn(query) : undefined
+        const [messages, chats, account] = await Promise.all([
+          ctx.sessions.inbox(userId, { ...where, limit: max, before: to, search: { words, after: from, media, links, fromMe: from_me, onlyNew: only_new } }),
+          // Matching chats are only worth listing for a search across chats by words or number, as WhatsApp lists them.
+          (words.length || digits) && !chat_id ? searchChats(ctx.sql, userId, { ...where, words, digits, limit: 20 }) : Promise.resolve([]),
+          labels(userId),
+        ])
+        const oldest = messages.at(-1)?.at
+        return json({
+          ...(words.length || digits ? {
+            chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt })),
+          } : {}),
+          messages: messages.map((m) => ({
+            channel: m.channel, connection_id: m.connectionId, account: account.get(m.connectionId) ?? null, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
+            ...messageOut(m),
+          })),
+          ...(messages.length === max && oldest ? { more: `There may be more matches: search again with before: "${oldest}" for older ones.` } : {}),
+          ...(!messages.length && !chats.length ? { note: "Nothing matched in the messages Parley has stored. Older messages may only be on the phone: load_history fetches a chat's older ones, then search again." } : {}),
+        })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not search")
       }
     }
   )
