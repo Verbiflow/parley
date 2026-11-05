@@ -119,56 +119,7 @@ export async function supersede(sql: Sql, id: string): Promise<string[]> {
       where n.id = $1 and n.handle is not null`,
     [id]
   )
-  if (rows.length) {
-    await sql(
-      `update parley.connection n set ignored_chats = coalesce((
-         select jsonb_agg(distinct x) from (
-           select jsonb_array_elements_text(n.ignored_chats) x
-           union select jsonb_array_elements_text(o.ignored_chats) from parley.connection o where o.id = any($2::uuid[])
-         ) s), '[]'::jsonb), updated_at = now()
-       where n.id = $1`,
-      [id, rows.map((r) => r.id)]
-    )
-    await moveWebhooks(sql, rows.map((r) => r.id), id)
-    // The number's own settings belong to the number, not to one link: the newest old link's carry over. Its time
-    // zone too, unless this link was given one (a new link starts on UTC). What's queued stays with the old link.
-    await sql(
-      `update parley.connection n set
-         daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds,
-         read_receipts = o.read_receipts, typing = o.typing,
-         timezone = case when n.timezone = 'UTC' then o.timezone else n.timezone end,
-         country = coalesce(n.country, o.country), updated_at = now()
-       from (select * from parley.connection where id = any($2::uuid[]) order by created_at desc limit 1) o
-       where n.id = $1`,
-      [id, rows.map((r) => r.id)]
-    )
-    // What the old links stored comes along (ignored chats stay ignored, kept privately), so nothing Parley had is lost
-    // while the phone sends history again. Anything the new link already has stays as it is.
-    const old = rows.map((r) => r.id)
-    await sql(
-      `insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind, anchor)
-       select distinct on (c.id) $1, c.id, c.kind, c.name, c.synced and not jsonb_exists(n.ignored_chats, c.id), c.last_message_at, c.last_call_at, c.last_call_kind, c.anchor
-         from parley.chat c, parley.connection n where n.id = $1 and c.connection_id = any($2::uuid[])
-        order by c.id, c.updated_at desc
-       on conflict (connection_id, id) do nothing`,
-      [id, old]
-    )
-    await sql(
-      `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at, media)
-       select $1, m.chat_id, m.id, m.sender, m.from_me, m.body, m.sent_at, m.media from parley.message m
-        where m.connection_id = any($2::uuid[]) order by m.sent_at, m.seq
-       on conflict (connection_id, chat_id, id) do nothing`,
-      [id, old]
-    )
-    await sql(
-      `insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
-       select distinct on (r.chat_id, r.message_id, r.reactor) $1, r.chat_id, r.message_id, r.reactor, r.emoji, r.reacted_at
-         from parley.reaction r where r.connection_id = any($2::uuid[])
-        order by r.chat_id, r.message_id, r.reactor, r.reacted_at desc
-       on conflict do nothing`,
-      [id, old]
-    )
-  }
+  if (rows.length) await carryOver(sql, id, rows.map((r) => r.id))
   return rows.map((r) => r.id)
 }
 
@@ -187,4 +138,60 @@ export async function setHistorySync(sql: Sql, id: string, progress: number | nu
 
 export async function setStatus(sql: Sql, id: string, status: ConnectionStatus): Promise<void> {
   await sql(`update parley.connection set status = $2, updated_at = now() where id = $1`, [id, status])
+}
+
+/**
+ * A new link of a number takes over from its old links (`old`): what they ignored (so relinking never un-ignores a
+ * chat), their webhooks, the number's settings, and what Parley stored (chats, messages, reactions; ignored chats stay
+ * ignored). Queued messages stay with the old links. Used when the same number links again, and by the Relink button.
+ */
+export async function carryOver(sql: Sql, id: string, old: string[]): Promise<void> {
+  if (!old.length) return
+  await sql(
+    `update parley.connection n set ignored_chats = coalesce((
+       select jsonb_agg(distinct x) from (
+         select jsonb_array_elements_text(n.ignored_chats) x
+         union select jsonb_array_elements_text(o.ignored_chats) from parley.connection o where o.id = any($2::uuid[])
+       ) s), '[]'::jsonb), updated_at = now()
+     where n.id = $1`,
+    [id, old]
+  )
+  await moveWebhooks(sql, old, id)
+  // The number's own settings belong to the number, not to one link: the newest old link's carry over. Its time
+  // zone too, unless this link was given one (a new link starts on UTC). What's queued stays with the old link.
+  await sql(
+    `update parley.connection n set
+       daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds,
+       read_receipts = o.read_receipts, typing = o.typing,
+       timezone = case when n.timezone = 'UTC' then o.timezone else n.timezone end,
+       country = coalesce(n.country, o.country), updated_at = now()
+     from (select * from parley.connection where id = any($2::uuid[]) order by created_at desc limit 1) o
+     where n.id = $1`,
+    [id, old]
+  )
+  // What the old links stored comes along (ignored chats stay ignored, kept privately), so nothing Parley had is lost
+  // while the phone sends history again. Anything the new link already has stays as it is.
+  await sql(
+    `insert into parley.chat (connection_id, id, kind, name, synced, last_message_at, last_call_at, last_call_kind, anchor)
+     select distinct on (c.id) $1, c.id, c.kind, c.name, c.synced and not jsonb_exists(n.ignored_chats, c.id), c.last_message_at, c.last_call_at, c.last_call_kind, c.anchor
+       from parley.chat c, parley.connection n where n.id = $1 and c.connection_id = any($2::uuid[])
+      order by c.id, c.updated_at desc
+     on conflict (connection_id, id) do nothing`,
+    [id, old]
+  )
+  await sql(
+    `insert into parley.message (connection_id, chat_id, id, sender, from_me, body, sent_at, media)
+     select $1, m.chat_id, m.id, m.sender, m.from_me, m.body, m.sent_at, m.media from parley.message m
+      where m.connection_id = any($2::uuid[]) order by m.sent_at, m.seq
+     on conflict (connection_id, chat_id, id) do nothing`,
+    [id, old]
+  )
+  await sql(
+    `insert into parley.reaction (connection_id, chat_id, message_id, reactor, emoji, reacted_at)
+     select distinct on (r.chat_id, r.message_id, r.reactor) $1, r.chat_id, r.message_id, r.reactor, r.emoji, r.reacted_at
+       from parley.reaction r where r.connection_id = any($2::uuid[])
+      order by r.chat_id, r.message_id, r.reactor, r.reacted_at desc
+     on conflict do nothing`,
+    [id, old]
+  )
 }

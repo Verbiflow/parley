@@ -472,15 +472,15 @@ export const whatsappChannel: Channel = {
       sock = makeWASocket({
         auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, SILENT) },
         logger: SILENT,
-        // Linked as a desktop app with full history: the phone sends its whole history copy at link time, as it does
-        // for WhatsApp's own desktop app (a browser identity only gets the last few weeks). WhatsApp sends full history
-        // only to "Mac OS"/"Windows" + "Desktop".
-        browser: ["Mac OS", "Desktop", "14.5.0"],
+        browser: ["Parley", "Chrome", "1.0"],
         // Don't mark the account online on connect, or the phone stops getting notifications.
         markOnlineOnConnect: false,
-        syncFullHistory: true,
-        // Every history batch, the full archive included. Ignored chats' messages are kept privately (agents never see them).
-        shouldSyncHistoryMessage: () => true,
+        syncFullHistory: false,
+        // With syncFullHistory off, Baileys skips *every* history batch, including the one-time recent-chats sync
+        // WhatsApp sends at link time (about the last three months). That's where one-to-one chats come from (groups are
+        // fetched separately), so without it the list is groups only. Take the recent sync; still decline the full
+        // archive. Ignored chats' messages from it are kept privately (agents never see them).
+        shouldSyncHistoryMessage: (h) => h.syncType !== proto.Message.HistorySyncType.FULL,
         // Resend a message a recipient couldn't decrypt (see `sent` above).
         // Logged (ids only, no text) so a message stuck on "Waiting for this message" can be traced.
         getMessage: async (key) => {
