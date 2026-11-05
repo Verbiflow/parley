@@ -922,8 +922,8 @@ const CHATS_CSS = `
 
 /** Today's sending, and this number's settings: how many messages a day, the gap between them, read receipts, typing, active hours. */
 /** What the Full history switch does, and what turning it off costs. Both only matter when the number links. */
-const FULL_HISTORY_HINT = "When you link or relink, your phone sends Parley its whole WhatsApp history, as it does for WhatsApp's desktop app, so agents can search it. Ignored chats stay hidden from agents. Takes effect the next time you link."
-const FULL_HISTORY_OFF = "Full history is off: when you link or relink, your phone sends only the last few weeks, so agents may not be able to search conversations from before this number was linked. Takes effect the next time you link."
+const FULL_HISTORY_HINT = "When on, linking this number sends Parley all your past messages so agents can search them. Changes apply the next time you link."
+const FULL_HISTORY_OFF = "Full history is off. Agents can only search about the last few weeks before you linked this number. To give them all your past messages, turn this on and relink."
 /** A switch in form `form` that saves it as soon as it's flipped. */
 const toggle = (form: string, name: string, on: boolean, label: string) =>
   `<label class="sw"><input type="checkbox" form="${form}" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`

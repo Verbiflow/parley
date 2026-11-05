@@ -82,7 +82,7 @@ test("an account page shows its chats with the daily limit and disconnect on top
   assert.doesNotMatch(html, /Full history is off/)
   const off = chatsPage({ user, connection: { ...conn, fullHistory: false }, chats: [], agentCount: 1, saved: false, today: null, queued: 0, webhooks: { webhooks: [], deliveries: [] } })
   assert.match(off, /name="full_history" value="on" onchange/)
-  assert.match(off, /Full history is off: .*agents may not be able to search conversations from before this number was linked/)
+  assert.match(off, /Full history is off\. Agents can only search about the last few weeks before you linked this number\./)
   assert.equal(listed.match(/· no history yet<\/p>/g)?.length, 1)
   assert.match(listed, /data-id="g@g.us"[^>]*data-hist="0"[\s\S]*?class="s warn" title="Parley has no message from this chat/)
   assert.doesNotMatch(listed, /Hikes<\/p><p class="s warn"/)
