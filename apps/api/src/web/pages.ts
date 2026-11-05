@@ -893,7 +893,7 @@ const CHATS_CSS = `
 .chat .s{font-size:12.5px;color:var(--faint);margin-top:1px}
 .chat .when{font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap}
 .chat.off .t,.chat.off .glyph{opacity:.45}
-.prefs .fh{margin-top:8px;font-size:12.5px;line-height:18px}.prefs .fh.warn{color:var(--warn)}.chat .s.miss{color:var(--bad)}.chat .s.warn{color:var(--warn)}
+.chat .s.miss{color:var(--bad)}.chat .s.warn{color:var(--warn)}
 .ign{font:inherit;font-size:12.5px;font-weight:500;height:28px;padding:0 12px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease)}
 .ign:hover{color:var(--text);background:var(--glass-hi)}
 .chat.off .ign{background:color-mix(in srgb,var(--sand) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 35%,transparent);color:var(--sand)}
@@ -921,9 +921,6 @@ const CHATS_CSS = `
 `
 
 /** Today's sending, and this number's settings: how many messages a day, the gap between them, read receipts, typing, active hours. */
-/** What the Full history switch does, and what turning it off costs. Both only matter when the number links. */
-const FULL_HISTORY_HINT = "When on, linking this number sends Parley all your past messages so agents can search them. Changes apply the next time you link."
-const FULL_HISTORY_OFF = "Full history is off. Agents can only search about the last few weeks before you linked this number. To give them all your past messages, turn this on and relink."
 /** A switch in form `form` that saves it as soon as it's flipped. */
 const toggle = (form: string, name: string, on: boolean, label: string) =>
   `<label class="sw"><input type="checkbox" form="${form}" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
@@ -943,12 +940,10 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
         ${toggle(behave, "typing", conn.typing, "Typing")}
-        <span title="${esc(FULL_HISTORY_HINT)}">${toggle(behave, "full_history", conn.fullHistory, "Full history")}</span>
         ${toggle(hours, "active_hours", conn.activeHours, "Active hours")}
         <noscript><button class="btn line sm" type="submit" form="${behave}">Save</button></noscript>
       </span>
     </form>
-    ${conn.fullHistory ? "" : `<p class="fh warn">${esc(FULL_HISTORY_OFF)}</p>`}
     <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" id="${behave}" hidden></form>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" id="${hours}" hidden><input type="hidden" name="hours_form" value="1"></form>
   </div>`

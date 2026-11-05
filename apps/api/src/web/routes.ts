@@ -215,12 +215,12 @@ export function webRoutes(ctx: AppContext): Hono {
     return c.redirect(`/app/connections/${c.req.param("id")}`)
   })
 
-  // Read receipts, typing and full history for this number. An unchecked box isn't sent at all: absent means off.
+  // Read receipts and typing for this number. An unchecked box isn't sent at all: absent means off.
   app.post("/app/connections/:id/behaviour", async (c) => {
     const userId = await currentUserId(c, ctx)
     if (!userId) return c.redirect("/")
     const form = await c.req.formData()
-    const ok = await setBehaviour(ctx.sql, userId, c.req.param("id"), { readReceipts: form.get("read_receipts") === "on", typing: form.get("typing") === "on", fullHistory: form.get("full_history") === "on" })
+    const ok = await setBehaviour(ctx.sql, userId, c.req.param("id"), { readReceipts: form.get("read_receipts") === "on", typing: form.get("typing") === "on" })
     if (!ok) return c.text("Unknown connection.", 404)
     return c.redirect(`/app/connections/${c.req.param("id")}`)
   })
@@ -394,7 +394,7 @@ export function webRoutes(ctx: AppContext): Hono {
     if (!old) return c.text("Unknown connection.", 404)
     await ctx.sessions.logout(userId, old.id).catch(() => {})
     try {
-      const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined, fullHistory: old.fullHistory })
+      const started = await ctx.sessions.connect(userId, old.channel, { timezone: old.timezone || undefined, country: old.country ?? undefined })
       // The new link takes over what was ignored, the webhooks, the number's settings and what Parley stored.
       await carryOver(ctx.sql, started.connectionId, [old.id])
       return c.redirect(`/link/${started.connectionId}`)

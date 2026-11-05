@@ -21,14 +21,12 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
   const failSend = new Map<string, SendOutcome>()
   const holdSend = new Map<string, Promise<void>>()
   const proxies = new Map<string, string | undefined>()
-  const fullHistory = new Map<string, boolean | undefined>()
 
   const channel: Channel = {
     id,
     capabilities: caps,
-    async open({ connectionId, state, proxy, emit, sentMessage, fullHistory: full }: OpenOptions): Promise<LiveConnection> {
+    async open({ connectionId, state, proxy, emit, sentMessage }: OpenOptions): Promise<LiveConnection> {
       proxies.set(connectionId, proxy)
-      fullHistory.set(connectionId, full)
       if (failNext.has(connectionId)) {
         failNext.delete(connectionId)
         emit({ type: "closed", reason: "forced failure" })
@@ -143,9 +141,6 @@ export function makeFakeChannel(id = "fake", capabilities?: Partial<Capabilities
       let release!: () => void
       holdSend.set(connectionId, new Promise<void>((r) => (release = r)))
       return release
-    },
-    fullHistoryOf(connectionId) {
-      return fullHistory.get(connectionId)
     },
     proxyOf(connectionId) {
       return proxies.get(connectionId)

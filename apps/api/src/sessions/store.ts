@@ -24,22 +24,20 @@ export type Connection = {
   /** The number's own profile picture (a small `data:` image URL), null when it has none or we haven't seen it yet. */
   avatar: string | null
   typing: boolean
-  /** Linking (or relinking) asks the phone for the whole history, not only the last few weeks. On by default. */
-  fullHistory: boolean
 }
 /**
  * Where the account appears to live (its active hours, when on, follow the time zone; its exit IP the country), how
  * many messages it may send a day, whether it keeps to active hours, and the gap between sends (null for the
  * channel's default; left out to keep it).
  */
-export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined; fullHistory?: boolean | undefined }
+export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined }
 
 type Row = {
   id: string; account_id: string; channel: string; status: ConnectionStatus; handle: string | null; display_name: string | null; created_at: Date; linked_at: Date | null; chats_chosen_at: Date | null
   history_started_at: Date | null; history_progress: number | null; history_done_at: Date | null
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
   daily_limit: number; active_hours: boolean; gap_seconds: number | null
-  read_receipts: boolean; typing: boolean; full_history: boolean
+  read_receipts: boolean; typing: boolean
   avatar: string | null
 }
 const row = (r: Row): Connection => ({
@@ -47,23 +45,23 @@ const row = (r: Row): Connection => ({
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
-  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar, fullHistory: r.full_history,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, active_hours, gap_seconds, read_receipts, typing, avatar, full_history"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, active_hours, gap_seconds, read_receipts, typing, avatar"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(
-    `insert into parley.connection (account_id, channel, timezone, country, full_history) values ($1, $2, coalesce($3, 'UTC'), $4, coalesce($5, true)) returning ${COLUMNS}`,
-    [accountId, channel, locale.timezone ?? null, locale.country?.toUpperCase() ?? null, locale.fullHistory ?? null]
+    `insert into parley.connection (account_id, channel, timezone, country) values ($1, $2, coalesce($3, 'UTC'), $4) returning ${COLUMNS}`,
+    [accountId, channel, locale.timezone ?? null, locale.country?.toUpperCase() ?? null]
   )
   return row(r!)
 }
 
 /** Turn read receipts and typing on or off for one number. Only the account's own connections. */
-export async function setBehaviour(sql: Sql, accountId: string, connectionId: string, b: { readReceipts: boolean; typing: boolean; fullHistory?: boolean | undefined }): Promise<boolean> {
+export async function setBehaviour(sql: Sql, accountId: string, connectionId: string, b: { readReceipts: boolean; typing: boolean }): Promise<boolean> {
   const rows = await sql<{ id: string }>(
-    `update parley.connection set read_receipts = $3, typing = $4, full_history = coalesce($5, full_history) where id = $2 and account_id = $1 returning id`,
-    [accountId, connectionId, b.readReceipts, b.typing, b.fullHistory ?? null]
+    `update parley.connection set read_receipts = $3, typing = $4 where id = $2 and account_id = $1 returning id`,
+    [accountId, connectionId, b.readReceipts, b.typing]
   )
   return rows.length > 0
 }
@@ -164,7 +162,7 @@ export async function carryOver(sql: Sql, id: string, old: string[]): Promise<vo
   await sql(
     `update parley.connection n set
        daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds,
-       read_receipts = o.read_receipts, typing = o.typing, full_history = o.full_history,
+       read_receipts = o.read_receipts, typing = o.typing,
        timezone = case when n.timezone = 'UTC' then o.timezone else n.timezone end,
        country = coalesce(n.country, o.country), updated_at = now()
      from (select * from parley.connection where id = any($2::uuid[]) order by created_at desc limit 1) o

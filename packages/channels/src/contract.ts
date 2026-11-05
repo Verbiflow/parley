@@ -154,8 +154,6 @@ export type OpenOptions = {
   emit: Emit
   /** A message this connection sent earlier (from a `sent` event), to send again when a device asks for it. */
   sentMessage?: ((id: string) => Promise<Uint8Array | undefined>) | undefined
-  /** When linking, ask for the account's whole history (as a desktop app) rather than the last few weeks. Default true. */
-  fullHistory?: boolean | undefined
 }
 
 /**
@@ -222,8 +220,6 @@ export interface ChannelSimulator {
   holdNextSend(connectionId: string): () => void
   /** The proxy the connection was last opened through. */
   proxyOf(connectionId: string): string | undefined
-  /** The `fullHistory` the connection was opened with. */
-  fullHistoryOf(connectionId: string): boolean | undefined
 }
 
 export interface ChannelFake {
