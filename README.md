@@ -54,7 +54,7 @@ When the platform answers with a rate limit or a checkpoint, Parley backs off, p
 | Area | Tools |
 | --- | --- |
 | Accounts | `list_channels`, `list_connections`, `connect`, `connection_status` |
-| Reading | `read_inbox`, `list_chats`, `get_notifications`, `load_history`, `get_media` |
+| Reading | `read_inbox`, `list_chats`, `search`, `get_notifications`, `load_history`, `get_media` |
 | Sending | `send_message`, `react_to_message`, `delete_message` |
 | Outbox | `send_availability`, `list_outbox`, `message_status`, `cancel_message` |
 | Webhooks | `create_webhook`, `list_webhooks`, `update_webhook`, `delete_webhook`, `test_webhook`, `resend_webhook_delivery` |

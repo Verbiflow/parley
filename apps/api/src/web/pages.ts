@@ -552,7 +552,7 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; connecti
 // ---- Agents -------------------------------------------------------------------------------------------------------
 
 const TOOL_LABEL: Record<string, string> = {
-  read_inbox: "read your inbox", list_chats: "listed your chats", send_message: "queued a message", connect: "started linking a channel",
+  read_inbox: "read your inbox", list_chats: "listed your chats", search: "searched your chats", send_message: "queued a message", connect: "started linking a channel",
   connection_status: "checked a connection", list_connections: "listed connections", list_channels: "listed channels",
   send_availability: "checked when it can send", list_outbox: "read the outbox", cancel_message: "canceled a message",
   react_to_message: "queued a reaction", delete_message: "deleted a sent message", get_media: "opened a photo or file", message_status: "checked on a queued message",

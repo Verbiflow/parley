@@ -3,7 +3,7 @@ import type { LinkMethod } from "@parley/channels"
 import { ConnectError, type LiveOp, type MediaDetails, type MediaFile, type MediaStream, type Sessions, type SessionsApi, type StatusView, type LinkView } from "./actor.ts"
 import { OutboxError, type Queued } from "./outbox.ts"
 import { getConnection, listConnections, type Connection, type Locale } from "./store.ts"
-import { listChats, getChat, readMessages, inbox, inboxChats, messageMedia, type ChatRow, type StoredMessage, type InboxFilter, type InboxMessage, type InboxChat } from "./chats.ts"
+import { listChats, getChat, readMessages, inbox, inboxChats, messageMedia, type ChatRow, type StoredMessage, type InboxFilter, type InboxQuery, type InboxMessage, type InboxChat } from "./chats.ts"
 
 const CONNECT_ERRORS = new Set(["unknown_channel", "not_found", "forbidden", "not_connected", "not_synced", "no_exit"])
 type EnqueueRequest = Parameters<Sessions["enqueue"]>[2]
@@ -129,7 +129,7 @@ export class RemoteSessions implements SessionsApi {
     return { chat, messages: await readMessages(this.#sql, connectionId, chatId, opts) }
   }
 
-  async inbox(accountId: string, opts: InboxFilter & { limit: number; before?: string | undefined }): Promise<InboxMessage[]> {
+  async inbox(accountId: string, opts: InboxQuery): Promise<InboxMessage[]> {
     if (opts.connectionId) await this.#owned(accountId, opts.connectionId)
     return inbox(this.#sql, accountId, opts)
   }
