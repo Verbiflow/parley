@@ -57,6 +57,7 @@ When the platform answers with a rate limit or a checkpoint, Parley backs off, p
 | Reading | `read_inbox`, `list_chats`, `get_notifications`, `load_history`, `get_media` |
 | Sending | `send_message`, `react_to_message`, `delete_message` |
 | Outbox | `send_availability`, `list_outbox`, `message_status`, `cancel_message` |
+| Webhooks | `create_webhook`, `list_webhooks`, `update_webhook`, `delete_webhook`, `test_webhook`, `resend_webhook_delivery` |
 
 With several accounts linked, tools take a `connection_id` (or just the account's number), so one agent can work across a personal and a work number. Reading tools cover every account unless you filter. `send_availability` tells the agent when it can next send and why, so it can plan instead of guessing.
 
