@@ -53,3 +53,21 @@ test("session ids are distinct and narrow", () => {
   assert.equal(ids.size, 200)
   for (const id of ids) assert.match(id, /^[a-z0-9]{8}$/)
 })
+
+test("session ids skip the bytes that would favor some letters (252–255 for a 36-letter alphabet)", () => {
+  const real = crypto.getRandomValues.bind(crypto)
+  // First draw: only bytes a plain modulo would map onto "a"–"d" a little too often; then 0, 1, 2, …
+  let call = 0
+  crypto.getRandomValues = (<T extends ArrayBufferView | null>(a: T): T => {
+    const bytes = a as unknown as Uint8Array
+    bytes.forEach((_, i) => (bytes[i] = call === 0 ? 252 + (i % 4) : i))
+    call++
+    return a
+  }) as typeof crypto.getRandomValues
+  try {
+    assert.equal(newSessionId(), "abcdefgh")
+    assert.equal(call, 2, "the whole first draw was set aside")
+  } finally {
+    crypto.getRandomValues = real
+  }
+})

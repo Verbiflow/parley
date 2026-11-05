@@ -23,5 +23,13 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "@workos-inc/node": {
+      "qs": "^6.17.1"
+    },
+    "iron-session": {
+      "cookie": "^0.7.2"
+    }
   }
 }

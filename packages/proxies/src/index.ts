@@ -52,9 +52,18 @@ export const PRESET_IDS = Object.keys(PRESETS) as PresetId[]
 
 const SESSION_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-/** Eight lowercase alphanumerics: the narrowest format any preset accepts. */
+/** The largest multiple of the alphabet's size a byte can hold: bytes at or above it would favor the first letters. */
+const UNBIASED_BELOW = 256 - (256 % SESSION_ALPHABET.length)
+
+/** Eight lowercase alphanumerics, each as likely as any other: the narrowest format any preset accepts. */
 export function newSessionId(): string {
-  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => SESSION_ALPHABET[b % SESSION_ALPHABET.length]).join("")
+  let id = ""
+  while (id.length < 8) {
+    for (const b of crypto.getRandomValues(new Uint8Array(16))) {
+      if (b < UNBIASED_BELOW && id.length < 8) id += SESSION_ALPHABET[b % SESSION_ALPHABET.length]
+    }
+  }
+  return id
 }
 
 function fill(template: string, values: Record<string, string>): string {
