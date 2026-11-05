@@ -38,7 +38,7 @@ export const RETRY_DELAYS_MS = [30_000, 5 * 60_000] as const
 export const DELIVERY_RETENTION_DAYS = 7
 
 export class WebhookError extends Error {
-  readonly code: "invalid" | "not_found" | "limit"
+  readonly code: "invalid" | "not_found" | "limit" | "exists"
   constructor(code: WebhookError["code"], message: string) {
     super(message)
     this.name = "WebhookError"
@@ -118,7 +118,8 @@ export function parseWebhookUrl(raw: string, opts: { allowHttp: boolean }): { ur
   if (!url.hostname || isPrivateHost(url.hostname)) throw new WebhookError("invalid", "the URL must be on the public internet (not a private, local or internal address)")
   let authorization: string | null = null
   if (url.username || url.password) {
-    const pair = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`
+    let pair: string
+    try { pair = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}` } catch { throw new WebhookError("invalid", "the user or password in the URL isn't validly %-encoded") }
     authorization = `Basic ${toBase64(enc.encode(pair))}`
     url.username = ""
     url.password = ""
@@ -190,7 +191,8 @@ export function checkHeaders(input: readonly WebhookHeaderInput[], existing: Rec
   for (const h of input) {
     const name = h.name.trim()
     if (!name && !h.value?.trim()) continue
-    if (!HEADER_NAME.test(name)) throw new WebhookError("invalid", `"${name.slice(0, 100)}" isn't a valid header name (letters, digits and - only, like X-Api-Key)`)
+    // What was typed isn't repeated: a whole "Authorization: Bearer …" line in the name field would put the key in the error.
+    if (!HEADER_NAME.test(name)) throw new WebhookError("invalid", "a header name is letters, digits and - only (like X-Api-Key), with its value in the value field")
     const lower = name.toLowerCase()
     if (reserved(lower)) throw new WebhookError("invalid", `Parley sets ${name} itself; use another header (Authorization or X-Api-Key, say)`)
     if (seen.has(lower)) throw new WebhookError("invalid", `${name} is there twice`)
@@ -225,6 +227,27 @@ const binding = (accountId: string, id: string, version: string) => ({ userId: a
 /** The headers and the URL are sealed apart from the signing secret, each under its own purpose, so none opens as another. */
 const headersBinding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook-headers", name: id, version })
 const urlBinding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook-url", name: id, version })
+
+const fingerprintKeys = new Map<string, Promise<Awaited<ReturnType<typeof crypto.subtle.importKey>>>>()
+/**
+ * A URL's keyed fingerprint, for telling whether a number already has a webhook to it without keeping the URL in the
+ * clear: HMAC-SHA256 of the account and the whole URL, under its own key derived from the sign-in key (so it's the
+ * same on the Worker and the sessions service, and no use for guessing a URL).
+ */
+async function urlFingerprint(signInKey: string, accountId: string, url: string): Promise<string> {
+  let key = fingerprintKeys.get(signInKey)
+  if (!key) {
+    key = crypto.subtle.digest("SHA-256", enc.encode(`parley webhook urls\0${signInKey}`))
+      .then((raw) => crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]))
+    fingerprintKeys.set(signInKey, key)
+  }
+  return hex(await crypto.subtle.sign("HMAC", await key, enc.encode(`${accountId}\0${url}`)))
+}
+
+/** A Postgres unique violation: here, the number already has a webhook to that URL (two creates at once). */
+const isDuplicate = (e: unknown) => (e as { code?: unknown } | null)?.code === "23505"
+const duplicateUrl = (id: string) =>
+  new WebhookError("exists", `this number already has a webhook to that URL (${id}): change it with update_webhook, or list_webhooks to see it (rotate_secret makes a new signing secret if you lost it)`)
 
 /** Headers with the Authorization a `user:password@` URL stands for added (refused if they carry one of their own). */
 function withBasicAuth(headers: Array<{ name: string; value: string }>, authorization: string | null, replacing = false): Array<{ name: string; value: string }> {
@@ -298,7 +321,14 @@ export class Webhooks {
 
   /** The columns a URL is kept in: the whole URL sealed, and what's shown in the clear (its keys masked). */
   async #sealUrl(accountId: string, id: string, url: string) {
-    return { shown: maskWebhookUrl(url), ...(await this.#sealValue(urlBinding(accountId, id, crypto.randomUUID()), url)) }
+    const [sealed, fingerprint] = await Promise.all([this.#sealValue(urlBinding(accountId, id, crypto.randomUUID()), url), urlFingerprint(this.#config.signInKey, accountId, url)])
+    return { shown: maskWebhookUrl(url), fingerprint, ...sealed }
+  }
+
+  /** The webhook on this number (other than `except`) that already calls the URL with this fingerprint, if any. */
+  async #sameUrl(sql: Sql, connectionId: string, fingerprint: string, except: string | null): Promise<string | undefined> {
+    const [r] = await sql<{ id: string }>(`select id from parley.webhook where connection_id = $1 and url_fingerprint = $2 and ($3::uuid is null or id <> $3)`, [connectionId, fingerprint, except])
+    return r?.id
   }
 
   async #openHeaders(accountId: string, id: string, row: SealedHeadersRow): Promise<Record<string, string>> {
@@ -308,7 +338,7 @@ export class Webhooks {
     return Object.fromEntries(list.map((h) => [h.name, h.value]))
   }
 
-  /** A webhook made before URLs were sealed keeps its URL in the clear until `sealPlainUrls` gets to it. */
+  /** A webhook made before URLs were sealed keeps its URL in the clear until `backfillUrls` gets to it. */
   async #openUrl(accountId: string, id: string, row: SealedUrlRow): Promise<string> {
     if (!row.url_sealed_version) return row.url
     return this.#open(urlBinding(accountId, id, row.url_sealed_version), { keyId: row.url_sealed_key_id, iv: row.url_sealed_iv, sealed: row.url_sealed }, "URL")
@@ -351,17 +381,31 @@ export class Webhooks {
   }
 
   /**
-   * Seal the URLs of webhooks made before URLs were sealed, a batch at a time (the sessions service calls this now and
-   * then). A URL's keys then stop being kept in the clear. Answers how many it sealed.
+   * Bring webhooks made before URLs were sealed and fingerprinted up to date, a batch at a time (the sessions service
+   * calls this now and then): the URL sealed (its keys stop being kept in the clear) and fingerprinted. A duplicate
+   * that was already there keeps working, just without a fingerprint. Answers how many it looked at.
    */
-  async sealPlainUrls(sql: Sql, limit = 100): Promise<number> {
-    const rows = await sql<{ id: string; account_id: string; url: string }>(`select id, account_id, url from parley.webhook where url_sealed is null limit $1`, [limit])
+  async backfillUrls(sql: Sql, limit = 100): Promise<number> {
+    const rows = await sql<SealedUrlRow & { id: string; account_id: string }>(
+      `select id, account_id, url, url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed from parley.webhook
+        where url_sealed is null or url_fingerprint is null order by created_at limit $1`,
+      [limit]
+    )
     for (const r of rows) {
-      const u = await this.#sealUrl(r.account_id, r.id, r.url)
-      await sql(
-        `update parley.webhook set url = $2, url_sealed_version = $3, url_sealed_key_id = $4, url_sealed_iv = $5, url_sealed = $6 where id = $1 and url_sealed is null and url = $7`,
-        [r.id, u.shown, u.version, u.keyId, u.iv, u.sealed, r.url]
-      )
+      if (!r.url_sealed) {
+        const u = await this.#sealUrl(r.account_id, r.id, r.url)
+        await sql(
+          `update parley.webhook set url = $2, url_sealed_version = $3, url_sealed_key_id = $4, url_sealed_iv = $5, url_sealed = $6 where id = $1 and url_sealed is null and url = $7`,
+          [r.id, u.shown, u.version, u.keyId, u.iv, u.sealed, r.url]
+        )
+      }
+      const url = await this.#openUrl(r.account_id, r.id, r)
+      const fingerprint = await urlFingerprint(this.#config.signInKey, r.account_id, url)
+      await sql(`update parley.webhook set url_fingerprint = $2 where id = $1 and url_fingerprint is null`, [r.id, fingerprint]).catch(async (e: unknown) => {
+        if (!isDuplicate(e)) throw e
+        // A duplicate from before: it gets a fingerprint of its own (its id mixed in), so it's done with and matches nothing.
+        await sql(`update parley.webhook set url_fingerprint = $2 where id = $1 and url_fingerprint is null`, [r.id, await urlFingerprint(this.#config.signInKey, r.account_id, `${url}\0${r.id}`)])
+      })
     }
     return rows.length
   }
@@ -410,16 +454,21 @@ export class Webhooks {
     const id = crypto.randomUUID()
     const secret = newWebhookSecret()
     const [s, h, u] = await Promise.all([this.#sealSecret(accountId, id, secret), this.#sealHeaders(accountId, id, headers), this.#sealUrl(accountId, id, url)])
+    const twin = await this.#sameUrl(sql, req.connectionId, u.fingerprint, null)
+    if (twin) throw duplicateUrl(twin)
     const [row] = await sql<Row>(
       `insert into parley.webhook (id, account_id, connection_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint,
                                    header_hints, headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed,
-                                   url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed)
-       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14, $15, $16, $17, $18, $19, $20, $21, $22
+                                   url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed, url_fingerprint)
+       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
         where (select count(*) from parley.webhook where connection_id = $13) < $12
        returning ${COLS}`,
       [id, accountId, u.shown, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId,
-        h.hints, h.version, h.keyId, h.iv, h.sealed, u.version, u.keyId, u.iv, u.sealed]
-    )
+        h.hints, h.version, h.keyId, h.iv, h.sealed, u.version, u.keyId, u.iv, u.sealed, u.fingerprint]
+    ).catch(async (e: unknown) => {
+      if (isDuplicate(e)) throw duplicateUrl((await this.#sameUrl(sql, req.connectionId, u.fingerprint, null)) ?? "another one")
+      throw e
+    })
     if (!row) throw new WebhookError("limit", `a number can have at most ${MAX_WEBHOOKS} webhooks; remove one first`)
     return { webhook: view(row), secret }
   }
@@ -433,7 +482,7 @@ export class Webhooks {
     url?: string | undefined; events?: readonly string[] | undefined; description?: string | null | undefined; enabled?: boolean | undefined
     headers?: readonly WebhookHeaderInput[] | undefined
   }): Promise<Webhook> {
-    await this.get(sql, accountId, id)
+    const hook = await this.get(sql, accountId, id)
     const parsed = req.url === undefined ? null : parseWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = req.events === undefined ? null : checkEvents(req.events)
     const authorization = parsed?.authorization ?? null
@@ -445,6 +494,8 @@ export class Webhooks {
       ? withBasicAuth(checkHeaders(req.headers, existing), authorization, !typedAuth)
       : authorization ? withBasicAuth(Object.entries(existing).map(([name, value]) => ({ name, value })), authorization, true) : null
     const [h, u] = await Promise.all([list ? this.#sealHeaders(accountId, id, list) : null, parsed ? this.#sealUrl(accountId, id, parsed.url) : null])
+    const twin = u && (await this.#sameUrl(sql, hook.connectionId, u.fingerprint, id))
+    if (twin) throw duplicateUrl(twin)
     const [row] = await sql<Row>(
       `update parley.webhook set events = coalesce($4, events),
               description = case when $5 then $6 else description end, enabled = coalesce($7, enabled),
@@ -458,12 +509,16 @@ export class Webhooks {
               url_sealed_key_id = case when $3::text is null then url_sealed_key_id else $15 end,
               url_sealed_iv = case when $3::text is null then url_sealed_iv else $16 end,
               url_sealed = case when $3::text is null then url_sealed else $17 end,
+              url_fingerprint = case when $3::text is null then url_fingerprint else $18 end,
               updated_at = now()
         where id = $1 and account_id = $2 returning ${COLS}`,
       [id, accountId, u?.shown ?? null, events, req.description !== undefined, cleanDescription(req.description), req.enabled ?? null,
         h !== null, h?.hints ?? null, h?.version ?? null, h?.keyId ?? null, h?.iv ?? null, h?.sealed ?? null,
-        u?.version ?? null, u?.keyId ?? null, u?.iv ?? null, u?.sealed ?? null]
-    )
+        u?.version ?? null, u?.keyId ?? null, u?.iv ?? null, u?.sealed ?? null, u?.fingerprint ?? null]
+    ).catch(async (e: unknown) => {
+      if (isDuplicate(e) && u) throw duplicateUrl((await this.#sameUrl(sql, hook.connectionId, u.fingerprint, id)) ?? "another one")
+      throw e
+    })
     if (!row) throw new WebhookError("not_found", "no such webhook")
     if (req.enabled === false) {
       await sql(
@@ -587,7 +642,18 @@ export async function hasWebhooks(sql: Sql, connectionId: string): Promise<boole
 /** A number relinked: its webhooks (and their secrets, bound to the webhook, not the link) move to the new connection. */
 export async function moveWebhooks(sql: Sql, from: string[], to: string): Promise<void> {
   if (!from.length) return
-  await sql(`update parley.webhook set connection_id = $1, updated_at = now() where connection_id = any ($2::uuid[])`, [to, from])
+  // One per URL on the new connection: the oldest of any that call the same URL comes along; the others stay where
+  // they were (on a link that's gone, so nothing reaches them) rather than being deleted.
+  await sql(
+    `with movable as (
+       select distinct on (coalesce(w.url_fingerprint, w.id::text)) w.id from parley.webhook w
+        where w.connection_id = any ($2::uuid[])
+          and (w.url_fingerprint is null or not exists (select 1 from parley.webhook x where x.connection_id = $1 and x.url_fingerprint = w.url_fingerprint))
+        order by coalesce(w.url_fingerprint, w.id::text), w.created_at
+     )
+     update parley.webhook set connection_id = $1, updated_at = now() where id in (select id from movable)`,
+    [to, from]
+  )
 }
 
 /**

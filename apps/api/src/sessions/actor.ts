@@ -184,7 +184,7 @@ export class Sessions {
         if (now.getTime() - this.#prunedAt > WEBHOOK_PRUNE_MS) {
           this.#prunedAt = now.getTime()
           await pruneDeliveries(this.ctx.sql, now)
-          await this.webhooks.sealPlainUrls(this.ctx.sql)
+          await this.webhooks.backfillUrls(this.ctx.sql)
         }
         return sent
       } finally {

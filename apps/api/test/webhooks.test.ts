@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { makeWebhookPoster, type WebhookPoster } from "../src/sessions/webhook-delivery.ts"
-import { checkHeaders, checkWebhookUrl, maskWebhookUrl, parseWebhookUrl, signStandardWebhook, signWebhook, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
+import { checkHeaders, checkWebhookUrl, maskWebhookUrl, moveWebhooks, parseWebhookUrl, signStandardWebhook, signWebhook, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
 import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
@@ -325,7 +325,7 @@ test("headers of a webhook's own: valid names, one each, none of Parley's, value
     [{ name: "Parley-Signature", value: "x" }, /Parley sets Parley-Signature itself/],
     [{ name: "content-type", value: "text/plain" }, /sets content-type itself/],
     [{ name: "Host", value: "evil.example" }, /sets Host itself/],
-    [{ name: "Bad Name", value: "x" }, /isn't a valid header name/],
+    [{ name: "Bad Name", value: "x" }, /a header name is letters, digits and -/],
     [{ name: "X-Key", value: "a\r\nX-Injected: 1" }, /plain characters on one line/],
     [{ name: "X-Key", value: "" }, /give X-Key a value/],
   ] as const) assert.throws(() => checkHeaders([h]), why)
@@ -404,6 +404,9 @@ test("a user:password@ URL becomes an Authorization: Basic header, and the URL l
   assert.equal(url, "https://hooks.example.com/in")
   assert.equal(authorization, `Basic ${Buffer.from("parley:p@ss:word").toString("base64")}`)
   assert.equal(parseWebhookUrl("https://hooks.example.com/in", { allowHttp: false }).authorization, null)
+  assert.throws(() => parseWebhookUrl("https://user:%zz@hooks.example.com/in", { allowHttp: false }), /isn't validly %-encoded/)
+  // A key typed into the name field isn't repeated back in the error.
+  assert.throws(() => checkHeaders([{ name: "Authorization: Bearer leaked-key-123", value: "x" }]), (e: Error) => !e.message.includes("leaked-key"))
 })
 
 test("every request is also signed the Standard Webhooks way, which a receiver checks with the secret alone", async () => {
@@ -411,7 +414,7 @@ test("every request is also signed the Standard Webhooks way, which a receiver c
   // The way the spec (and its libraries) verify: HMAC-SHA256 keyed with the base64-decoded secret.
   const expected = (secret: string, id: string, t: number) =>
     `v1,${createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64")).update(`${id}.${t}.${body}`).digest("base64")}`
-  const fresh = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+  const fresh = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64")}`
   assert.equal(await signStandardWebhook(fresh, "evt_1", 1_700_000_000, body), expected(fresh, "evt_1", 1_700_000_000))
   // A secret made before the format changed (base64url) signs with the same bytes.
   const old = "whsec_" + Buffer.from(Array.from({ length: 32 }, (_, i) => i * 7 + 251)).toString("base64url")
@@ -454,11 +457,11 @@ test("a webhook's URL is kept sealed: requests go to the whole URL, everything e
   assert.equal(saved.status, 302)
   assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), full)
 
-  // A webhook from before URLs were sealed: shown masked straight away, still sent to, and sealed by the delivery loop.
+  // A webhook from before URLs were sealed: shown masked straight away, still sent to, and sealed by the backfill.
   await sql(`update parley.webhook set url = $2, url_sealed_version = null, url_sealed_key_id = null, url_sealed_iv = null, url_sealed = null where id = $1`, [id, full])
   assert.equal((await ctx.webhooks.get(sql, accountId, id)).url, "https://hooks.example.com/catch/123/…9xyz?token=…1234")
   assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), full)
-  assert.ok((await ctx.webhooks.sealPlainUrls(sql)) >= 1)
+  assert.ok((await ctx.webhooks.backfillUrls(sql)) >= 1)
   const [after] = await sql<{ url: string; url_sealed: string | null }>(`select url, url_sealed from parley.webhook where id = $1`, [id])
   assert.equal(after!.url, "https://hooks.example.com/catch/123/…9xyz?token=…1234")
   assert.ok(after!.url_sealed)
@@ -514,6 +517,58 @@ test("the URL as Parley shows it (keys masked) can't be given back as the URL", 
   assert.match(String(back.result), /with its keys masked: give the whole URL/)
   assert.equal(await ctx.webhooks.fullUrl(sql, accountId, webhook.id), "https://hooks.example.com/in?token=supersecretvalue1234")
   await assert.rejects(ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/in?token=%E2%80%A61234" }), /keys masked/)
+})
+
+test("one webhook per URL on a number: a retried create is refused with the one there, even two at once", async () => {
+  const email = "retry-create@parley.test"
+  const { accountId, connectionId } = await linked(email)
+  const { connectionId: other } = await linked(email, "6591110001@s.whatsapp.net")
+  const token = await agentToken(base, email, "Retry Agent")
+  const url = "https://hooks.example.com/once?token=supersecretvalue1234"
+  const first = await callTool(base, token, "create_webhook", { connection_id: connectionId, url })
+  assert.equal(first.isError, false, JSON.stringify(first.result))
+  const again = await callTool(base, token, "create_webhook", { connection_id: connectionId, url })
+  assert.equal(again.isError, true)
+  assert.match(String(again.result), new RegExp(`already has a webhook to that URL \\(${first.result.id}\\): change it with update_webhook`))
+  // The same URL with the credentials moved into a header, or a trailing #fragment, is still the same URL.
+  await assert.rejects(ctx.webhooks.create(sql, accountId, { connectionId, url: `${url}#x` }), /already has a webhook/)
+  // Another number, or another URL, is fine.
+  assert.equal((await callTool(base, token, "create_webhook", { connection_id: other, url })).isError, false)
+  const second = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/once?token=anothersecretvalue99" })
+  // Changing one to a URL the number already has is refused too; giving it its own URL again is not.
+  await assert.rejects(ctx.webhooks.update(sql, accountId, second.webhook.id, { url }), new RegExp(`already has a webhook to that URL \\(${first.result.id}\\)`))
+  await ctx.webhooks.update(sql, accountId, second.webhook.id, { url: "https://hooks.example.com/once?token=anothersecretvalue99" })
+
+  // Two creates at the same moment: one webhook.
+  const racing = "https://hooks.example.com/race"
+  const results = await Promise.allSettled([1, 2, 3].map(() => ctx.webhooks.create(sql, accountId, { connectionId, url: racing })))
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1)
+  for (const r of results) if (r.status === "rejected") assert.match(String(r.reason), /already has a webhook to that URL/)
+})
+
+test("webhooks from before fingerprints get one (duplicates from then keep working), and a relink moves one per URL", async () => {
+  const email = "old-dupes@parley.test"
+  const { accountId, connectionId } = await linked(email)
+  const url = "https://hooks.example.com/old"
+  const a = await ctx.webhooks.create(sql, accountId, { connectionId, url })
+  const b = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/old-b" })
+  // Both as they'd have been stored before: plain URL, no seal, no fingerprint (the same URL twice).
+  await sql(`update parley.webhook set url = $2, url_sealed_version = null, url_sealed_key_id = null, url_sealed_iv = null, url_sealed = null, url_fingerprint = null where id = any ($1::uuid[])`, [[a.webhook.id, b.webhook.id], url])
+  for (let i = 0; i < 3 && (await ctx.webhooks.backfillUrls(sql)) > 0; i++);
+  const rows = await sql<{ id: string; url_fingerprint: string | null; url_sealed: string | null }>(`select id, url_fingerprint, url_sealed from parley.webhook where id = any ($1::uuid[])`, [[a.webhook.id, b.webhook.id]])
+  assert.ok(rows.every((r) => r.url_fingerprint && r.url_sealed), "both sealed and fingerprinted, so neither is picked up again")
+  assert.equal(await ctx.webhooks.backfillUrls(sql), 0)
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, b.webhook.id), url, "the duplicate still calls its URL")
+  await assert.rejects(ctx.webhooks.create(sql, accountId, { connectionId, url }), /already has a webhook/)
+
+  // Relinking onto a connection that has the URL already: the one there stays the only one; the others aren't deleted.
+  const { connectionId: next } = await linked(email, "6591110002@s.whatsapp.net")
+  const there = await ctx.webhooks.create(sql, accountId, { connectionId: next, url })
+  await moveWebhooks(sql, [connectionId], next)
+  const after = await sql<{ id: string; connection_id: string }>(`select id, connection_id from parley.webhook where id = any ($1::uuid[])`, [[a.webhook.id, b.webhook.id, there.webhook.id]])
+  assert.equal(after.length, 3, "nothing deleted")
+  assert.equal(after.filter((r) => r.connection_id === next).length, 2, "the one already there, and the duplicate whose fingerprint is its own")
+  assert.equal(after.find((r) => r.id === a.webhook.id)!.connection_id, connectionId, "the one that would make two stays behind")
 })
 
 test("a test that's refused (401/403) says how to give the receiver its key", async () => {
