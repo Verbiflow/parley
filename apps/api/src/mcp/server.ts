@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { ACTIONS, isValidTimeZone } from "@parley/pacing"
+import { ACTIONS, isValidTimeZone, policyFor } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { getConnection } from "../sessions/store.ts"
 import { markRead, newByChat, newReactions, searchChats, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
-import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
+import { MAX_GAP_SECONDS, OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
 import { AccountError, accountLabel, findConnection, pickConnection } from "./accounts.ts"
@@ -24,6 +24,12 @@ const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSO
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError || e instanceof AccountError || e instanceof WebhookError
+
+/** The gap a connection keeps between two sends, in seconds, and whether the person chose it. */
+function sendGap(channel: string, gapSeconds: number | null) {
+  const g = gapSeconds === null ? policyFor(channel).gapSeconds : { min: gapSeconds, max: gapSeconds * 2 }
+  return { min_seconds: g.min, max_seconds: g.max, custom: gapSeconds !== null }
+}
 
 const WAIT_TEXT: Record<string, string> = {
   paused: "the connection is paused",
@@ -781,13 +787,37 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json({
           connection_id: conn.id, account: accountLabel(conn), timezone: connection.timezone, halted: connection.haltedReason,
           paused_until: connection.pausedUntil && connection.pausedUntil > new Date() ? connection.pausedUntil.toISOString() : null,
-          sent_today: today.sentToday, daily_limit: today.dailyLimit,
+          sent_today: today.sentToday, daily_limit: today.dailyLimit, gap: sendGap(connection.channel, connection.gapSeconds),
           actions: Object.fromEntries(Object.entries(actions).map(([k, a]) => [k, {
             can_send_now: a!.canSendNow, earliest_at: a!.earliestAt, waits: a!.waits, reason: a!.reason, used_today: a!.usedToday,
           }])),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not read availability")
+      }
+    }
+  )
+
+  server.registerTool(
+    "set_send_gap",
+    {
+      title: "Set the gap between sends",
+      description:
+        `Set how long a connection waits between two sends: at least \`gap_seconds\`, up to twice that at random so it doesn't look scripted. 0 sends back to back; null goes back to the channel's default (WhatsApp 30–150s). Messages already queued are rescheduled on the new gap. A short gap makes the account look less human and raises the chance the platform restricts it, so change it only when the person asks. Openers to new contacts, breaks after bursts and the daily limit still apply.`,
+      inputSchema: {
+        connection_id: z.string().optional().describe(ACCOUNT_REF),
+        gap_seconds: z.number().int().min(0).max(MAX_GAP_SECONDS).nullable().describe(`Least seconds between two sends, 0–${MAX_GAP_SECONDS}; null for the channel's default.`),
+      },
+    },
+    async ({ connection_id, gap_seconds }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const conn = await pickConnection(ctx, userId, connection_id)
+        await ctx.sessions.setLocale(userId, conn.id, { gapSeconds: gap_seconds })
+        const { connection } = await availability(ctx.sql, userId, conn.id, new Date())
+        return json({ connection_id: conn.id, account: accountLabel(conn), gap: sendGap(connection.channel, connection.gapSeconds) })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not set the gap")
       }
     }
   )

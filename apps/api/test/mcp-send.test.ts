@@ -39,6 +39,13 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   assert.equal(avail.result.timezone, "Europe/London")
   assert.ok("first_message" in avail.result.actions)
   assert.equal(avail.result.daily_limit, 100)
+  assert.deepEqual(avail.result.gap, { min_seconds: 30, max_seconds: 150, custom: false })
+  const set = await callTool(base, token, "set_send_gap", { connection_id: connectionId, gap_seconds: 10 })
+  assert.equal(set.isError, false)
+  assert.deepEqual(set.result.gap, { min_seconds: 10, max_seconds: 20, custom: true })
+  assert.equal((await callTool(base, token, "set_send_gap", { connection_id: connectionId, gap_seconds: -1 })).isError, true)
+  const reset = await callTool(base, token, "set_send_gap", { connection_id: connectionId, gap_seconds: null })
+  assert.deepEqual(reset.result.gap, { min_seconds: 30, max_seconds: 150, custom: false })
 
   const second = await callTool(base, token, "send_message", { connection_id: connectionId, to: "+447700900456", text: "Later", not_before: later })
   // Typing is on by default (the account holder's setting); an agent can skip it.
