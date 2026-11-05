@@ -1,0 +1,43 @@
+apps/api/src/sessions/outbox.ts
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 35-36,42,44,48,133,406-408,410,415,417
+apps/api/src/web/routes.ts
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 239-240
+packages/auth/migrations/0028_active_hours.sql
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 1-3
+packages/pacing/src/plan.ts
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 30-31,81
+README.md
+  s_c0fab6495a4d3f::t_905e16d2e80dd1 41
+apps/api/src/web/pages.ts
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 922,930,940,945
+apps/api/src/sessions/store.ts
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 14-15,27-28,30,36,45,47
+DEVELOPING.md
+  s_c0fab6495a4d3f::t_905e16d2e80dd1 31
+apps/api/test/outbox.test.ts
+  s_c0fab6495a4d3f::t_df7b43b3aac5dc 145-158,160-164
+  s_c0fab6495a4d3f::t_499bf4820548f4 159
+apps/api/src/mcp/server.ts
+  s_c0fab6495a4d3f::t_905e16d2e80dd1 505
+packages/pacing/test/pacing.test.ts
+  s_c0fab6495a4d3f::t_df7b43b3aac5dc 44-48
+apps/api/test/pages.test.ts
+  s_c0fab6495a4d3f::t_df7b43b3aac5dc 75-76
+  s_c0fab6495a4d3f::t_4c5b23165dce5a 23,55,69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c31a63816b10e87940ebbb9f1398471a1b24c56e",
+  "prompts": {},
+  "sessions": {
+    "s_c0fab6495a4d3f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c2d67b34-b85c-4d63-9b55-909384ee2dd5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
