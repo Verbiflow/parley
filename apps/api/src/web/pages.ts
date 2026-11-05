@@ -5,7 +5,7 @@ import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityS
 import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
-  CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
+  CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, profileMark, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
@@ -158,9 +158,6 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .acard:not(.add):hover{transform:translateY(-2px);box-shadow:var(--frame),0 0 0 1px var(--line-2),0 30px 60px -30px rgba(0,0,0,.6)}
 .acard .ah{position:relative;display:flex;align-items:center;gap:12px}
 .acard .ct{display:inline-grid;place-items:center;flex:none;width:40px;height:40px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-ring)}
-.acard .ct.dp{position:relative;background:none;box-shadow:none}
-.acard .ct.dp img{width:40px;height:40px;border-radius:50%;object-fit:cover;box-shadow:inset 0 0 0 1px rgba(255,246,232,.08)}
-.acard .ct.dp .badge{position:absolute;top:-3px;right:-3px;display:grid;place-items:center;width:17px;height:17px;border-radius:50%;background:var(--card);box-shadow:0 0 0 1px var(--line-2)}
 .acard .grow{flex:1;min-width:0}
 .acard b{display:block;font-size:15px;font-weight:500;letter-spacing:-.01em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .acard small{display:block;font-size:12.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -264,7 +261,7 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
     : ""
   return `<div class="acard"><a class="cover" href="${href}" aria-label="${esc(number)}"></a>
     <div class="ah">${c.avatar
-      ? `<span class="ct dp"><img src="${esc(c.avatar)}" alt="" width="40" height="40"><span class="badge">${channelMark(c.channel, 11)}</span></span>`
+      ? profileMark(c.channel, c.avatar, 40)
       : `<span class="ct">${channelMark(c.channel, 20)}</span>`}<div class="grow"><b>${esc(number)}</b><small>${channelName(c.channel)}${c.displayName ? ` · ${esc(c.displayName)}` : ""} · ${esc(cityOf(c.timezone))}</small></div>${status(st.tone, st.text)}</div>
     ${body}
     ${hooks}
@@ -981,7 +978,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
   return appShell({
     title: number || name, active: "overview", user: opts.user, counts: { agents: opts.agentCount }, css: CHATS_CSS + WEBHOOKS_CSS,
     body: `${pageHead({
-      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: channelMark(conn.channel, 28),
+      title: number || name, crumb: { href: "/app", label: "Overview" }, lead: conn.avatar ? profileMark(conn.channel, conn.avatar, 44) : channelMark(conn.channel, 28),
       sub: `${status(st.tone, st.text)}&nbsp;&nbsp;<span class="faint">${name}${conn.displayName ? ` · ${esc(conn.displayName)}` : ""} · linked ${conn.linkedAt ? ago(conn.linkedAt) : "—"}</span>`,
       actions: `${conn.status === "connected" ? "" : `<a class="btn" href="/link/${esc(conn.id)}">Finish linking</a>`}
         <form method="post" action="/app/connections/${esc(conn.id)}/disconnect" data-confirm="Disconnect ${esc(number ? `${name} ${number}` : name)}? Your agents will lose access to it."><button class="btn warn" type="submit">Disconnect</button></form>`,

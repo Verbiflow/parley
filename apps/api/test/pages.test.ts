@@ -43,9 +43,9 @@ test("a number's card shows its profile picture with a small WhatsApp badge, els
   const user = { name: "R", email: "r@parley.test", image: null, signedInWith: "local", createdAt: "2026-11-01T00:00:00Z" }
   const page = (avatar: string | null) => dashboardPage({ user, connections: [conn(avatar)], agents: [], mcpUrl: "https://x/mcp", recent: [] })
   const withDp = page("data:image/jpeg;base64,AAAA")
-  assert.match(withDp, /<span class="ct dp"><img src="data:image\/jpeg;base64,AAAA"[^>]*><span class="badge"><svg class="cm"/)
+  assert.match(withDp, /<span class="pdp"[^>]*><img src="data:image\/jpeg;base64,AAAA"[^>]*><span class="badge"><svg class="cm"/)
   const without = page(null)
-  assert.doesNotMatch(without, /class="ct dp"/)
+  assert.doesNotMatch(without, /class="pdp"/)
   assert.match(without, /<div class="ah"><span class="ct"><svg class="cm"/)
 })
 
@@ -62,4 +62,7 @@ test("an account page shows its chats with the daily limit and disconnect on top
   assert.match(html, /action="\/app\/connections\/work\/disconnect"/)
   assert.doesNotMatch(html, /<input(?![^>]*type="hidden")[^>]*name="(timezone|country)"/)
   assert.doesNotMatch(html, /New conversations/)
+  assert.doesNotMatch(html, /class="pdp"/)
+  const withDp = chatsPage({ user, connection: { ...conn, avatar: "data:image/jpeg;base64,AAAA" }, chats: [], agentCount: 1, saved: false, today: { sentToday: 7, dailyLimit: 100 }, queued: 2, webhooks: { webhooks: [], deliveries: [] } })
+  assert.match(withDp, /<h1><span class="pdp"[^>]*><img src="data:image\/jpeg;base64,AAAA"/)
 })
