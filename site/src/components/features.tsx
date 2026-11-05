@@ -117,15 +117,16 @@ function Identity() {
   const shown = [0, 1, 2].map((k) => ({ ...NOTES[(n - k + NOTES.length * 10) % NOTES.length]!, key: n - k })).filter((x) => x.key >= 0)
   return (
     <div ref={ref} className="absolute inset-0 flex items-start justify-center pt-12">
-      <div className="absolute left-1/2 top-[-140px] h-[420px] w-[520px] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,rgb(217_130_91/0.22),rgb(227_185_141/0.06)_60%,transparent)] blur-2xl" />
+      <div className="absolute left-1/2 top-[-140px] h-[420px] w-[520px] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,var(--lock-glow),var(--lock-glow-2)_60%,transparent)] blur-2xl" />
       <div className="relative w-[300px] sm:w-[340px]">
         <p className="text-center font-[-apple-system,BlinkMacSystemFont,sans-serif] text-[44px] font-semibold leading-none tracking-[-0.02em] text-ink/90 tabular-nums">08:12</p>
         <p className="mt-1 text-center text-[11.5px] text-muted">Maya&apos;s phone</p>
-        <div className="relative mt-5 h-[150px]">
+        <div className="note-stack relative mt-5 h-[150px]">
           <AnimatePresence initial={false}>
             {shown.map((note, i) => (
               <motion.div
                 key={note.key}
+                data-depth={i}
                 layout
                 initial={{ opacity: 0, y: -24, scale: 1.02 }}
                 animate={{ opacity: i === 0 ? 1 : i === 1 ? 0.75 : 0.45, y: i * 22, scale: 1 - i * 0.06, zIndex: 10 - i }}

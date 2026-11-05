@@ -48,6 +48,8 @@
   --wire: rgb(255 246 232 / 0.12);
   --pip: rgb(255 255 255 / 0.15);
   --sheen: rgb(255 255 255 / 0.75);
+  --lock-glow: rgb(217 130 91 / 0.22);
+  --lock-glow-2: rgb(227 185 141 / 0.06);
 }
 
 /* Light: the same warm family on paper, following the system setting. Ink buttons, caramel accent, soft brown shadows. */
@@ -93,9 +95,30 @@
     --wire: rgb(70 48 24 / 0.16);
     --pip: rgb(70 48 24 / 0.18);
     --sheen: rgb(255 236 210 / 0.3);
+    --lock-glow: rgb(214 160 104 / 0.14);
+    --lock-glow-2: rgb(227 185 141 / 0.05);
+    --banner: #fff;
+    --banner-ring: inset 0 0 0 1px rgb(70 48 24 / 0.07), 0 1px 2px rgb(70 48 24 / 0.06), 0 14px 32px -16px rgb(70 48 24 / 0.38);
   }
   html {
     color-scheme: light;
+  }
+  /* White on a white card has no depth, so the notifications behind the newest turn to deeper paper with their text
+     gone: a physical stack, the way a phone shows one. */
+  .note-stack > [data-depth] {
+    transition: background-color 0.35s var(--ease-out-soft);
+  }
+  .note-stack > [data-depth] > * {
+    transition: opacity 0.25s var(--ease-out-soft);
+  }
+  .note-stack > [data-depth="1"] {
+    background: #f3ede4;
+  }
+  .note-stack > [data-depth="2"] {
+    background: #e9e1d4;
+  }
+  .note-stack > [data-depth]:not([data-depth="0"]) > * {
+    opacity: 0;
   }
 }
 
