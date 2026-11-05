@@ -1,0 +1,40 @@
+apps/api/src/sessions/chats.ts
+  s_c3da177c4ad4af::t_6df6ed96017214 6-10
+  s_c3da177c4ad4af::t_877fdc779ea051 201-202,204,308
+  s_c3da177c4ad4af::t_0d471eb9c2c359 110-111,114-116
+  s_c3da177c4ad4af::t_7fba754c5f9a44 191-193,198,203,205-214
+  s_c3da177c4ad4af::t_b6c09d81da7f61 385-397,400
+  s_c3da177c4ad4af::t_4e7e346abd7699 253,258
+  s_c3da177c4ad4af::t_56ab9b3799bf6c 305-307,309-313
+  s_c3da177c4ad4af::t_09767ca1202309 231-232,235-245
+apps/api/src/sessions/actor.ts
+  s_c3da177c4ad4af::t_2a0d850f9a9052 449
+  s_c3da177c4ad4af::t_2449065f705f24 470-473
+apps/api/test/media-reactions.test.ts
+  s_c3da177c4ad4af::t_877fdc779ea051 304
+  s_c3da177c4ad4af::t_df517f25b1f962 5,262,293-303,305-340
+apps/api/test/pages.test.ts
+  s_c3da177c4ad4af::t_df517f25b1f962 1,75-82
+packages/auth/migrations/0031_chat_anchor.sql
+  s_c3da177c4ad4af::t_246c9e2c659a37 1-4
+apps/api/src/web/pages.ts
+  s_c3da177c4ad4af::t_078773568e9925 957-961,989-990,992-993,995,1020,1065,1070-1073
+  s_c3da177c4ad4af::t_44aa11c5d5315b 991
+  s_c3da177c4ad4af::t_b7b57267077f51 896
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b77330c0e4344315fd1928d6183b185fc4d40e9c",
+  "prompts": {},
+  "sessions": {
+    "s_c3da177c4ad4af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "40482d77-7c44-4346-84bc-534b78619b91",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
