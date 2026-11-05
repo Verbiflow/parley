@@ -66,6 +66,13 @@ export function channelMark(id: string, size = 16): string {
 
 export const channelName = (id: string) => CHANNELS[id]?.name ?? id.replace(/^./, (c) => c.toUpperCase())
 
+/** The popover a channel that isn't live yet shows when it's hovered or focused. */
+export const soonTip = (id: string) => `<span class="tip" role="tooltip"><b>${channelName(id)}</b>Coming soon</span>`
+
+/** A channel that isn't live yet: its mark dimmed until it's hovered or focused, then lit with a "Coming soon" popover. */
+export const soonMark = (id: string, size = 16) =>
+  `<span class="soon-x" tabindex="0" aria-label="${channelName(id)}, coming soon">${channelMark(id, size)}${soonTip(id)}</span>`
+
 /** Initials in a hairline square: for a contact, a provider, an agent app without a known mark. */
 export function glyph(name: string, size = 24, round = false): string {
   const words = name.replace(/@.*/, "").replace(/^\+/, "").split(/[\s._-]+/).filter(Boolean)
@@ -269,6 +276,15 @@ code,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em}
 .menu .sep{height:1px;background:var(--line);margin:5px 4px}
 .menu .out:hover{color:var(--bad)}.menu .out:hover svg{color:var(--bad)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* channels on their way: dimmed and grey until hovered or focused, then in full color with a "Coming soon" popover */
+.soon-x{position:relative;display:inline-flex;cursor:default}
+.soon-x > :not(.tip){transition:opacity .2s var(--ease),filter .2s var(--ease)}
+.soon-x:not(:hover):not(:focus-visible) > :not(.tip){opacity:.38;filter:grayscale(1)}
+.tip{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:20;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:10px;background:color-mix(in srgb,var(--bg-2) 94%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:var(--frame),var(--shadow);font-size:12px;line-height:16px;color:var(--muted);white-space:nowrap;pointer-events:none;opacity:0;transform:translate(-50%,4px) scale(.97);transform-origin:bottom center;transition:opacity .14s var(--ease),transform .14s var(--ease)}
+.tip b{font-weight:500;color:var(--text)}
+.soon-x:hover > .tip,.soon-x:focus-visible > .tip{opacity:1;transform:translate(-50%,0)}
+@media (prefers-reduced-motion:reduce){.tip{transform:translate(-50%,0)}}
 .arow{display:flex;flex-wrap:wrap;align-items:center;gap:22px;margin:0;padding:0;list-style:none;color:var(--muted)}
 .arow li{display:inline-flex;transition:color .2s var(--ease)}.arow li:hover{color:var(--text)}
 .av{border-radius:50%;object-fit:cover;flex:none;display:block;box-shadow:0 0 0 1px var(--line-2)}

@@ -6,7 +6,7 @@ import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, clock, copyLine, day, empty, esc, glyph, icon,
-  foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, stamp, status, until, type Tone, type Viewer,
+  foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, soonMark, soonTip, stamp, status, until, type Tone, type Viewer,
 } from "./ui.ts"
 
 export type { Viewer } from "./ui.ts"
@@ -76,7 +76,7 @@ export function landingPage(opts: { workos: boolean; dev: boolean }): string {
       <h1>Your messaging, ready for your agents.</h1>
       <p class="sub">Link your accounts once. Your agents text people as you, at a human pace, with every message on record.</p>
       <section class="panel">${panel}</section>
-      <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => `<span title="${c.live ? c.name : `${c.name}, coming soon`}">${channelMark(id, 18)}</span>`).join("")}</div>
+      <div class="chans"><span class="label">Channels</span>${Object.entries(CHANNELS).map(([id, c]) => c.live ? `<span title="${c.name}">${channelMark(id, 18)}</span>` : soonMark(id, 18)).join("")}</div>
     </main>
     <p class="foot"><a href="https://itsparley.com">itsparley.com</a><span>·</span><a href="https://github.com/Verbiflow/parley">GitHub</a></p>`, { css: SIGNIN_CSS, script: THREADS_SCRIPT })
 }
@@ -134,11 +134,11 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 .conn.ready{box-shadow:var(--frame),0 0 0 1px rgba(227,185,141,.22)}
 .conn.ready::before{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(80% 60% at 20% 0%,rgba(255,236,210,.05),transparent 70%);pointer-events:none}
 .conn.ready .btn{width:100%}
-.conn.later{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
-.conn.later .cf{height:34px;display:flex;align-items:center}.conn.later .label{font-size:12px;color:var(--faint)}
+.conn.later{display:flex;background:transparent;box-shadow:inset 0 0 0 1px var(--line)}.conn.later b{color:var(--text-2)}.conn.later small{color:var(--faint)}
+.conn.later:hover,.conn.later:focus-visible{box-shadow:inset 0 0 0 1px var(--line-2)}
 .conns.compact .conn{flex-direction:row;align-items:center;padding:12px 14px;gap:12px}
 .conns.compact .conn .ct{width:34px;height:34px;border-radius:10px}.conns.compact .conn small{display:none}.conns.compact .conn b{font-size:13.5px}
-.conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}.conns.compact .conn.later .cf{height:auto}
+.conns.compact .conn .cf{margin:0 0 0 auto}.conns.compact .conn.ready .btn{width:auto}
 .stepn{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line-3);font-size:11.5px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;color:var(--text);margin-right:11px}
 .stepn.done{background:var(--primary);box-shadow:var(--primary-shadow);color:var(--on-primary)}
 .done-tag{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 8px;border-radius:999px;background:color-mix(in srgb,var(--sand) 12%,transparent);color:var(--sand);font-size:12px;font-weight:500}
@@ -234,12 +234,18 @@ button.chtag{cursor:pointer;transition:background .15s var(--ease),color .15s va
 
 const connectForm = (label: string, cls = "btn") => `<form method="post" action="/app/connect" data-locale style="display:contents"><input type="hidden" name="timezone"><input type="hidden" name="country"><button class="${cls}" type="submit">${icon("plus", 13)}${label}</button></form>`
 
-/** One card per channel, for the first link: the live ones get a Connect button, the rest say "Coming soon". */
+/** One card per channel, for the first link: the live ones get a Connect button, the rest stay dim until hovered. */
 function connectorCards(): string {
-  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => `<div class="conn ${c.live ? "ready" : "later"}">
+  return `<div class="conns">${Object.entries(CHANNELS).map(([id, c]) => c.live
+    ? `<div class="conn ready">
       <span class="ct">${channelMark(id, 26)}</span>
       <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
-      <div class="cf">${c.live ? connectForm(`Connect ${c.name}`, "btn") : `<span class="label">Coming soon</span>`}</div>
+      <div class="cf">${connectForm(`Connect ${c.name}`, "btn")}</div>
+    </div>`
+    : `<div class="conn later soon-x" tabindex="0" aria-label="${c.name}, coming soon">
+      <span class="ct">${channelMark(id, 26)}</span>
+      <div><b>${c.name}</b><small>${esc(c.tagline)}</small></div>
+      ${soonTip(id)}
     </div>`).join("")}</div>`
 }
 
@@ -269,7 +275,7 @@ function accountCard(c: Connection, s: ConnectionSummary | undefined, chats: num
 /** The last card in the grid: link another number now, and the channels that are on their way. */
 const addCard = () => `<div class="acard add">
     <div class="ah"><span class="ct">${icon("plus", 18)}</span><div class="grow"><b>Connect an account</b><small>Link another number</small></div></div>
-    <div class="af">${connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id, c]) => `<span title="${c.name}, coming soon">${channelMark(id, 16)}</span>`).join("")}</span></div>
+    <div class="af">${connectForm("Connect WhatsApp", "btn sm")}<span class="soon">${Object.entries(CHANNELS).filter(([, c]) => !c.live).map(([id]) => soonMark(id, 16)).join("")}</span></div>
   </div>`
 
 const stepNo = (n: number, done: boolean) => `<span class="stepn${done ? " done" : ""}">${done ? icon("check", 11, 2.5) : n}</span>`
