@@ -652,7 +652,7 @@ const WEBHOOKS_CSS = `
 .edit summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted)}.edit[open]{padding:14px 0 4px}.edit[open] summary{margin-bottom:14px}
 .note.reveal{margin-bottom:20px}.secret{display:flex;flex-direction:column;gap:10px;width:100%}.secret .term{margin:0}
 .plrow td{padding-top:4px}.plrow .term{margin:0;max-height:420px;overflow:auto}.plmeta{font-size:12px;margin-bottom:8px}.plmeta .mono{font-family:var(--mono)}
-.tbl tbody tr.plrow:hover{background:none}
+.tbl tbody tr.plrow:hover{background:none}.tbl tr.dlrow{cursor:pointer}.tbl tr.dlrow[aria-expanded="true"]{background:var(--hover)}.tbl tr.dlrow[aria-expanded="true"] td{border-bottom-color:transparent}
 .health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
 `
 
@@ -726,7 +726,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
     const done = d.status === "delivered" || d.status === "failed"
     const hook = hooks.get(d.webhookId)
     const canResend = done && hook && (hook.enabled || d.event === "webhook.test")
-    return `<tr>
+    return `<tr class="dlrow" data-toggle="pl-${esc(d.id)}" aria-expanded="false" title="Show the payload">
       <td class="m faint">${esc(ago(d.createdAt))}</td>
       <td class="m">${esc(d.event)}</td>
       <td class="clip m">${esc(shortUrl(hook?.url ?? ""))}</td>
@@ -734,7 +734,6 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
       <td class="m">${d.attempts}<span class="faint">/${MAX_ATTEMPTS}</span></td>
       <td class="clip" title="${esc(deliveryResult(d))}">${esc(deliveryResult(d))}</td>
       <td class="r"><div class="acts-row">
-        <button class="btn quiet sm" type="button" data-toggle="pl-${esc(d.id)}" aria-expanded="false">Payload</button>
         ${canResend ? `<form method="post" action="${at}/deliveries/${esc(d.id)}/resend"><button class="btn quiet sm" type="submit">Resend</button></form>` : ""}
       </div></td>
     </tr>
