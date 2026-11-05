@@ -9,7 +9,7 @@ import { publicOnlyLookup } from "./fetch-media.ts"
 import type { ChangedReaction, ForgottenMessage, MessageKey } from "./chats.ts"
 import type { Connection } from "./store.ts"
 import {
-  DELIVERY_RETENTION_DAYS, MAX_ATTEMPTS, RETRY_DELAYS_MS, hasWebhooks, queueEvents, signWebhook,
+  DELIVERY_RETENTION_DAYS, MAX_ATTEMPTS, RETRY_DELAYS_MS, hasWebhooks, queueEvents, signStandardWebhook, signWebhook,
   type WebhookEventInput, type Webhooks,
 } from "./webhooks.ts"
 
@@ -68,7 +68,7 @@ export function makeWebhookPoster(opts: { allowPrivate?: boolean; timeoutMs?: nu
 
 export const postWebhook: WebhookPoster = makeWebhookPoster()
 
-type Claimed = { id: string; webhook_id: string; event_id: string; event: string; payload: unknown; attempts: number; url: string; account_id: string }
+type Claimed = { id: string; webhook_id: string; event_id: string; event: string; payload: unknown; attempts: number; account_id: string }
 
 /**
  * Send what's due, from any worker (rows are claimed with SKIP LOCKED, so two never send the same one at once).
@@ -95,7 +95,7 @@ export async function deliverDue(ctx: { sql: Sql; webhooks: Webhooks; post: Webh
      update parley.webhook_delivery d set status = 'sending', attempts = d.attempts + 1, lease_until = $3
        from due, parley.webhook w
       where d.id = due.id and w.id = d.webhook_id
-     returning d.id, d.webhook_id, d.event_id, d.event, d.payload, d.attempts, w.url, w.account_id`,
+     returning d.id, d.webhook_id, d.event_id, d.event, d.payload, d.attempts, w.account_id`,
     [now, BATCH, new Date(now.getTime() + LEASE_MS)]
   )
   await Promise.all(claimed.map((d) => sendOne(ctx, d, now)))
@@ -106,12 +106,18 @@ async function sendOne(ctx: { sql: Sql; webhooks: Webhooks; post: WebhookPoster 
   let status: number | null = null
   let error: string | null = null
   try {
-    const [secret, own] = await Promise.all([ctx.webhooks.secret(ctx.sql, d.account_id, d.webhook_id), ctx.webhooks.headers(ctx.sql, d.account_id, d.webhook_id)])
+    const hook = await ctx.webhooks.forSending(ctx.sql, d.account_id, d.webhook_id)
     const body = JSON.stringify(d.payload)
-    const signature = await signWebhook(secret, body, Math.floor(Date.now() / 1000))
+    const t = Math.floor(Date.now() / 1000)
+    const [signature, standard] = await Promise.all([signWebhook(hook.secret, body, t), signStandardWebhook(hook.secret, d.event_id, t, body)])
     const res = await ctx.post({
-      url: d.url, body,
-      headers: { ...own, "parley-event": d.event, "parley-event-id": d.event_id, "parley-delivery-id": d.id, "parley-attempt": String(d.attempts), "parley-signature": signature },
+      url: hook.url, body,
+      headers: {
+        ...hook.headers,
+        "parley-event": d.event, "parley-event-id": d.event_id, "parley-delivery-id": d.id, "parley-attempt": String(d.attempts), "parley-signature": signature,
+        // The same, the Standard Webhooks way (standardwebhooks.com), for receivers verifying with its libraries.
+        "webhook-id": d.event_id, "webhook-timestamp": String(t), "webhook-signature": standard,
+      },
     })
     status = res.status
     if (status < 200 || status >= 300) error = status >= 300 && status < 400 ? `answered HTTP ${status} (redirects aren't followed)` : `answered HTTP ${status}`

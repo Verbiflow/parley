@@ -1,4 +1,4 @@
-import { SignInKey, serverSeal, type IdentityConfig, type SecretSeal, type Sql } from "@parley/auth"
+import { SignInKey, serverSeal, type IdentityConfig, type SecretBinding, type SecretSeal, type Sql } from "@parley/auth"
 import { isPrivateHost } from "../mcp/media.ts"
 import { accountLabel } from "../mcp/accounts.ts"
 import { signMediaLink } from "../media-link.ts"
@@ -54,6 +54,7 @@ export type Delivery = {
   payload: unknown
 }
 export type Webhook = {
+  /** `url` is what's shown: the address with any keys in it masked (the whole URL is kept sealed). */
   id: string; connectionId: string; url: string; events: WebhookEvent[]; description: string | null; enabled: boolean; createdBy: string
   /** The secret's last few characters, so a person can tell which one their receiver has. */
   secretHint: string
@@ -69,20 +70,23 @@ export type WebhookHeaderInput = { name: string; value: string | null }
 
 type Row = {
   id: string; account_id: string; connection_id: string; url: string; events: string[]; description: string | null; enabled: boolean; created_by: string; secret_hint: string
-  header_hints: WebhookHeader[] | string
+  header_hints: WebhookHeader[] | string; url_sealed_set: boolean
   last_success_at: Date | null; last_failure_at: Date | null; last_error: string | null; created_at: Date; updated_at: Date
 }
 type SealedRow = Row & { sealed_version: string; sealed_key_id: string; sealed_iv: string; sealed: string }
 type SealedHeadersRow = { headers_sealed_version: string | null; headers_sealed_key_id: string | null; headers_sealed_iv: string | null; headers_sealed: string | null }
+type SealedUrlRow = { url: string; url_sealed_version: string | null; url_sealed_key_id: string | null; url_sealed_iv: string | null; url_sealed: string | null }
+type Sealed = { version: string; keyId: string; iv: string; sealed: string }
 type DeliveryRow = {
   id: string; webhook_id: string; event_id: string; event: string; status: DeliveryStatus; attempts: number; next_attempt_at: Date | null
   last_status: number | null; last_error: string | null; created_at: Date; delivered_at: Date | null; payload: unknown
 }
 
-const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, header_hints, last_success_at, last_failure_at, last_error, created_at, updated_at`
+const COLS = `id, account_id, connection_id, url, events, description, enabled, created_by, secret_hint, header_hints, url_sealed is not null as url_sealed_set,
+  last_success_at, last_failure_at, last_error, created_at, updated_at`
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null)
 const view = (r: Row): Webhook => ({
-  id: r.id, connectionId: r.connection_id, url: r.url, events: r.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)),
+  id: r.id, connectionId: r.connection_id, url: r.url_sealed_set ? r.url : maskWebhookUrl(r.url), events: r.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)),
   description: r.description, enabled: r.enabled, createdBy: r.created_by, secretHint: r.secret_hint,
   headers: typeof r.header_hints === "string" ? JSON.parse(r.header_hints) : r.header_hints,
   lastSuccessAt: iso(r.last_success_at), lastFailureAt: iso(r.last_failure_at), lastError: r.last_error,
@@ -98,20 +102,53 @@ export const deliveryView = (r: DeliveryRow): Delivery => ({
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
- * A webhook URL as it's kept, or why it can't be one: http(s) only (https outside local development), no credentials
- * in it, and not a private, loopback or link-local host. The sessions service checks what the name resolves to again
- * on every request (a name can point anywhere later).
+ * A webhook URL as it's kept, or why it can't be one: http(s) only (https outside local development), and not a
+ * private, loopback or link-local host. The sessions service checks what the name resolves to again on every request
+ * (a name can point anywhere later). A `user:password@` in front of the host is taken out and answered as the
+ * `Authorization: Basic …` value it stands for, since that's what the receiver will check.
  */
-export function checkWebhookUrl(raw: string, opts: { allowHttp: boolean }): string {
+export function parseWebhookUrl(raw: string, opts: { allowHttp: boolean }): { url: string; authorization: string | null } {
   const text = raw.trim()
   if (!text || text.length > 2000) throw new WebhookError("invalid", "the URL must be 1–2000 characters")
+  // What Parley shows back has its keys masked with "…": that can't be where requests go.
+  if (/…|%E2%80%A6/i.test(text)) throw new WebhookError("invalid", "that's the URL as Parley shows it, with its keys masked: give the whole URL (or leave the URL out to keep it)")
   let url: URL
   try { url = new URL(text) } catch { throw new WebhookError("invalid", "that isn't a valid URL") }
   if (url.protocol !== "https:" && !(opts.allowHttp && url.protocol === "http:")) throw new WebhookError("invalid", opts.allowHttp ? "the URL must be http(s)" : "the URL must be https")
-  if (url.username || url.password) throw new WebhookError("invalid", "put credentials in the URL's path or query, not before the host")
   if (!url.hostname || isPrivateHost(url.hostname)) throw new WebhookError("invalid", "the URL must be on the public internet (not a private, local or internal address)")
+  let authorization: string | null = null
+  if (url.username || url.password) {
+    const pair = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`
+    authorization = `Basic ${toBase64(enc.encode(pair))}`
+    url.username = ""
+    url.password = ""
+  }
   url.hash = ""
-  return url.href
+  return { url: url.href, authorization }
+}
+
+/** The URL a webhook will call (credentials taken out, see `parseWebhookUrl`), or why it can't. */
+export const checkWebhookUrl = (raw: string, opts: { allowHttp: boolean }): string => parseWebhookUrl(raw, opts).url
+
+/** A part of a URL that's probably a key: long, or a mix of letters and digits (a token, an id, a hash). */
+const looksLikeKey = (s: string) => s.length >= 16 || (s.length >= 8 && /\d/.test(s) && /[A-Za-z]/.test(s))
+const maskPart = (s: string) => (s.startsWith("…") ? s : s.length >= 12 ? `…${s.slice(-4)}` : "…")
+const decodePart = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+
+/**
+ * A webhook URL as it's shown: the host and the plain parts of the path as they are, every query value and every
+ * path segment that looks like a key reduced to its last four characters (Slack's /services/T…/B…/…, a Discord
+ * token, ?token=…). The whole URL stays sealed; this is only for telling webhooks apart.
+ */
+export function maskWebhookUrl(href: string): string {
+  let u: URL
+  try { u = new URL(href) } catch { return href }
+  const path = u.pathname.split("/").map((seg) => {
+    const part = decodePart(seg)
+    return looksLikeKey(part) ? maskPart(part) : part
+  }).join("/")
+  const query = [...u.searchParams].map(([k, v]) => (v ? `${k}=${maskPart(v)}` : k)).join("&")
+  return `${u.origin}${path}${query ? `?${query}` : ""}`
 }
 
 function checkEvents(events: readonly string[] | undefined): WebhookEvent[] {
@@ -137,7 +174,7 @@ const RESERVED_HEADERS = new Set([
   "host", "content-type", "content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive", "te", "trailer",
   "upgrade", "expect", "user-agent", "proxy-authorization", "proxy-connection",
 ])
-const reserved = (lower: string) => RESERVED_HEADERS.has(lower) || lower.startsWith("parley-") || lower.startsWith("sec-")
+const reserved = (lower: string) => RESERVED_HEADERS.has(lower) || lower.startsWith("parley-") || lower.startsWith("webhook-") || lower.startsWith("sec-")
 
 /** A header's value, as shown back: its last four characters when it's long enough not to give itself away. */
 const headerHint = (value: string) => (value.length >= 12 ? value.slice(-4) : "")
@@ -167,15 +204,37 @@ export function checkHeaders(input: readonly WebhookHeaderInput[], existing: Rec
   return out
 }
 
-/** A fresh signing secret: `whsec_` and 32 random bytes, base64url. */
+const toBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
+
+/**
+ * A fresh signing secret, in the Standard Webhooks format: `whsec_` and 24 random bytes in base64, so a receiver's
+ * Standard Webhooks library takes it as it is. (Secrets made before were base64url; both keep working.)
+ */
 function newWebhookSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return `whsec_${btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`
+  return `whsec_${toBase64(crypto.getRandomValues(new Uint8Array(24)))}`
+}
+
+/** The key bytes behind a `whsec_…` secret, for the Standard Webhooks signature (base64 or the older base64url). */
+function secretKeyBytes(secret: string): Uint8Array {
+  const b64 = secret.replace(/^whsec_/, "").replace(/-/g, "+").replace(/_/g, "/")
+  const bin = atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="))
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0))
 }
 
 const binding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook", name: id, version })
-/** The headers are sealed apart from the signing secret, under their own purpose, so neither opens as the other. */
+/** The headers and the URL are sealed apart from the signing secret, each under its own purpose, so none opens as another. */
 const headersBinding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook-headers", name: id, version })
+const urlBinding = (accountId: string, id: string, version: string) => ({ userId: accountId, kind: "webhook-secret" as const, purpose: "webhook-url", name: id, version })
+
+/** Headers with the Authorization a `user:password@` URL stands for added (refused if they carry one of their own). */
+function withBasicAuth(headers: Array<{ name: string; value: string }>, authorization: string | null, replacing = false): Array<{ name: string; value: string }> {
+  if (!authorization) return headers
+  const own = headers.some((h) => h.name.toLowerCase() === "authorization")
+  if (own && !replacing) throw new WebhookError("invalid", "the URL has a user and password and the headers have an Authorization too: give one or the other")
+  const out = [...headers.filter((h) => h.name.toLowerCase() !== "authorization"), { name: "Authorization", value: authorization }]
+  if (out.length > MAX_WEBHOOK_HEADERS) throw new WebhookError("invalid", `a webhook can send at most ${MAX_WEBHOOK_HEADERS} headers of its own`)
+  return out
+}
 
 const enc = new TextEncoder()
 const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("")
@@ -188,6 +247,16 @@ const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16)
 export async function signWebhook(secret: string, body: string, timestamp: number): Promise<string> {
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
   return `t=${timestamp},v1=${hex(await crypto.subtle.sign("HMAC", key, enc.encode(`${timestamp}.${body}`)))}`
+}
+
+/**
+ * The `webhook-signature` header of the Standard Webhooks spec (standardwebhooks.com), sent beside Parley's own so a
+ * receiver can verify with an off-the-shelf library: `v1,<base64 HMAC-SHA256 of "<id>.<timestamp>.<body>">`, keyed
+ * with the secret's decoded bytes.
+ */
+export async function signStandardWebhook(secret: string, id: string, timestamp: number, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", secretKeyBytes(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+  return `v1,${toBase64(new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(`${id}.${timestamp}.${body}`))))}`
 }
 
 /** Webhooks: one per environment, like `Exits` (it holds the sealing key). */
@@ -203,19 +272,46 @@ export class Webhooks {
     return (this.#seal ??= serverSeal(await SignInKey.from(this.#config.signInKey)))
   }
 
+  async #sealValue(b: SecretBinding, value: string): Promise<Sealed> {
+    const s = await (await this.#sealer()).seal(b, enc.encode(value))
+    return { version: b.version, keyId: s.keyId, iv: s.iv, sealed: s.sealed }
+  }
+
+  async #open(b: SecretBinding, row: { keyId: string | null; iv: string | null; sealed: string | null }, what: string): Promise<string> {
+    const bytes = row.keyId && row.iv && row.sealed
+      ? await (await this.#sealer()).open(b, { scheme: "server.v1", keyId: row.keyId, iv: row.iv, sealed: row.sealed })
+      : undefined
+    if (!bytes) throw new Error(`webhook ${b.name}'s ${what} doesn't open`)
+    return new TextDecoder().decode(bytes)
+  }
+
   async #sealSecret(accountId: string, id: string, secret: string) {
-    const version = crypto.randomUUID()
-    const s = await (await this.#sealer()).seal(binding(accountId, id, version), enc.encode(secret))
-    return { version, keyId: s.keyId, iv: s.iv, sealed: s.sealed, hint: secret.slice(-4) }
+    return { ...(await this.#sealValue(binding(accountId, id, crypto.randomUUID()), secret)), hint: secret.slice(-4) }
   }
 
   /** The columns a set of headers is kept in: sealed values and the hints shown back (all null/empty for none). */
   async #sealHeaders(accountId: string, id: string, headers: Array<{ name: string; value: string }>) {
     const hints = JSON.stringify(headers.map((h) => ({ name: h.name, hint: headerHint(h.value) })))
     if (!headers.length) return { hints, version: null, keyId: null, iv: null, sealed: null }
-    const version = crypto.randomUUID()
-    const s = await (await this.#sealer()).seal(headersBinding(accountId, id, version), enc.encode(JSON.stringify(headers)))
-    return { hints, version, keyId: s.keyId, iv: s.iv, sealed: s.sealed }
+    return { hints, ...(await this.#sealValue(headersBinding(accountId, id, crypto.randomUUID()), JSON.stringify(headers))) }
+  }
+
+  /** The columns a URL is kept in: the whole URL sealed, and what's shown in the clear (its keys masked). */
+  async #sealUrl(accountId: string, id: string, url: string) {
+    return { shown: maskWebhookUrl(url), ...(await this.#sealValue(urlBinding(accountId, id, crypto.randomUUID()), url)) }
+  }
+
+  async #openHeaders(accountId: string, id: string, row: SealedHeadersRow): Promise<Record<string, string>> {
+    if (!row.headers_sealed_version) return {}
+    const list = JSON.parse(await this.#open(headersBinding(accountId, id, row.headers_sealed_version),
+      { keyId: row.headers_sealed_key_id, iv: row.headers_sealed_iv, sealed: row.headers_sealed }, "headers")) as Array<{ name: string; value: string }>
+    return Object.fromEntries(list.map((h) => [h.name, h.value]))
+  }
+
+  /** A webhook made before URLs were sealed keeps its URL in the clear until `sealPlainUrls` gets to it. */
+  async #openUrl(accountId: string, id: string, row: SealedUrlRow): Promise<string> {
+    if (!row.url_sealed_version) return row.url
+    return this.#open(urlBinding(accountId, id, row.url_sealed_version), { keyId: row.url_sealed_key_id, iv: row.url_sealed_iv, sealed: row.url_sealed }, "URL")
   }
 
   /** The headers a webhook sends of its own, opened: name to value, in the order they were given. */
@@ -226,13 +322,48 @@ export class Webhooks {
       [id, accountId]
     )
     if (!row) throw new WebhookError("not_found", "no such webhook")
-    if (!row.headers_sealed_version || !row.headers_sealed_key_id || !row.headers_sealed_iv || !row.headers_sealed) return {}
-    const bytes = await (await this.#sealer()).open(headersBinding(accountId, id, row.headers_sealed_version), {
-      scheme: "server.v1", keyId: row.headers_sealed_key_id, iv: row.headers_sealed_iv, sealed: row.headers_sealed,
-    })
-    if (!bytes) throw new Error(`webhook ${id}'s headers don't open`)
-    const list = JSON.parse(new TextDecoder().decode(bytes)) as Array<{ name: string; value: string }>
-    return Object.fromEntries(list.map((h) => [h.name, h.value]))
+    return this.#openHeaders(accountId, id, row)
+  }
+
+  /** The URL a webhook calls, whole (keys and all), opened. */
+  async fullUrl(sql: Sql, accountId: string, id: string): Promise<string> {
+    if (!UUID.test(id)) throw new WebhookError("not_found", "no such webhook")
+    const [row] = await sql<SealedUrlRow>(`select url, url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed from parley.webhook where id = $1 and account_id = $2`, [id, accountId])
+    if (!row) throw new WebhookError("not_found", "no such webhook")
+    return this.#openUrl(accountId, id, row)
+  }
+
+  /** Everything a request to the webhook needs, opened in one read: where it goes, what signs it, the headers it adds. */
+  async forSending(sql: Sql, accountId: string, id: string): Promise<{ url: string; secret: string; headers: Record<string, string> }> {
+    const [row] = await sql<SealedRow & SealedHeadersRow & SealedUrlRow>(
+      `select url, sealed_version, sealed_key_id, sealed_iv, sealed, headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed,
+              url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed
+         from parley.webhook where id = $1 and account_id = $2`,
+      [id, accountId]
+    )
+    if (!row) throw new WebhookError("not_found", "no such webhook")
+    const [url, secret, headers] = await Promise.all([
+      this.#openUrl(accountId, id, row),
+      this.#open(binding(accountId, id, row.sealed_version), { keyId: row.sealed_key_id, iv: row.sealed_iv, sealed: row.sealed }, "secret"),
+      this.#openHeaders(accountId, id, row),
+    ])
+    return { url, secret, headers }
+  }
+
+  /**
+   * Seal the URLs of webhooks made before URLs were sealed, a batch at a time (the sessions service calls this now and
+   * then). A URL's keys then stop being kept in the clear. Answers how many it sealed.
+   */
+  async sealPlainUrls(sql: Sql, limit = 100): Promise<number> {
+    const rows = await sql<{ id: string; account_id: string; url: string }>(`select id, account_id, url from parley.webhook where url_sealed is null limit $1`, [limit])
+    for (const r of rows) {
+      const u = await this.#sealUrl(r.account_id, r.id, r.url)
+      await sql(
+        `update parley.webhook set url = $2, url_sealed_version = $3, url_sealed_key_id = $4, url_sealed_iv = $5, url_sealed = $6 where id = $1 and url_sealed is null and url = $7`,
+        [r.id, u.shown, u.version, u.keyId, u.iv, u.sealed, r.url]
+      )
+    }
+    return rows.length
   }
 
   /** Plain http is only for local development (a receiver on this machine still needs to be public, though). */
@@ -262,29 +393,32 @@ export class Webhooks {
     return view(row)
   }
 
-  /** Register a webhook on one of the account's connections. Answers it with its signing secret, the one time the secret is handed over unasked. */
+  /**
+   * Register a webhook on one of the account's connections. Answers it with its signing secret, the one time the
+   * secret is handed over unasked. A `user:password@` URL becomes an Authorization header.
+   */
   async create(sql: Sql, accountId: string, req: {
     connectionId: string; url: string; events?: readonly string[] | undefined; description?: string | null | undefined; createdBy?: string | undefined
     headers?: readonly WebhookHeaderInput[] | undefined
   }): Promise<{ webhook: Webhook; secret: string }> {
-    const url = checkWebhookUrl(req.url, { allowHttp: this.allowHttp })
+    const { url, authorization } = parseWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = checkEvents(req.events)
-    const headers = checkHeaders(req.headers ?? [])
+    const headers = withBasicAuth(checkHeaders(req.headers ?? []), authorization)
     if (!UUID.test(req.connectionId)) throw new WebhookError("not_found", "no such connection")
     const [conn] = await sql<{ id: string }>(`select id from parley.connection where id = $1 and account_id = $2`, [req.connectionId, accountId])
     if (!conn) throw new WebhookError("not_found", "no such connection")
     const id = crypto.randomUUID()
     const secret = newWebhookSecret()
-    const s = await this.#sealSecret(accountId, id, secret)
-    const h = await this.#sealHeaders(accountId, id, headers)
+    const [s, h, u] = await Promise.all([this.#sealSecret(accountId, id, secret), this.#sealHeaders(accountId, id, headers), this.#sealUrl(accountId, id, url)])
     const [row] = await sql<Row>(
       `insert into parley.webhook (id, account_id, connection_id, url, events, description, created_by, sealed_version, sealed_key_id, sealed_iv, sealed, secret_hint,
-                                   header_hints, headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed)
-       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14, $15, $16, $17, $18
+                                   header_hints, headers_sealed_version, headers_sealed_key_id, headers_sealed_iv, headers_sealed,
+                                   url_sealed_version, url_sealed_key_id, url_sealed_iv, url_sealed)
+       select $1, $2, $13, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14, $15, $16, $17, $18, $19, $20, $21, $22
         where (select count(*) from parley.webhook where connection_id = $13) < $12
        returning ${COLS}`,
-      [id, accountId, url, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId,
-        h.hints, h.version, h.keyId, h.iv, h.sealed]
+      [id, accountId, u.shown, events, cleanDescription(req.description), (req.createdBy ?? "dashboard").slice(0, 200), s.version, s.keyId, s.iv, s.sealed, s.hint, MAX_WEBHOOKS, req.connectionId,
+        h.hints, h.version, h.keyId, h.iv, h.sealed, u.version, u.keyId, u.iv, u.sealed]
     )
     if (!row) throw new WebhookError("limit", `a number can have at most ${MAX_WEBHOOKS} webhooks; remove one first`)
     return { webhook: view(row), secret }
@@ -292,31 +426,43 @@ export class Webhooks {
 
   /**
    * Change a webhook's URL, events, description, headers, or whether it's on. `headers` replaces the whole set (empty
-   * removes them all). Turning one off fails what it still had waiting (nothing is held back to flood it when it
-   * comes back on).
+   * removes them all). A new `user:password@` URL replaces the Authorization header. Turning one off fails what it
+   * still had waiting (nothing is held back to flood it when it comes back on).
    */
   async update(sql: Sql, accountId: string, id: string, req: {
     url?: string | undefined; events?: readonly string[] | undefined; description?: string | null | undefined; enabled?: boolean | undefined
     headers?: readonly WebhookHeaderInput[] | undefined
   }): Promise<Webhook> {
     await this.get(sql, accountId, id)
-    const url = req.url === undefined ? null : checkWebhookUrl(req.url, { allowHttp: this.allowHttp })
+    const parsed = req.url === undefined ? null : parseWebhookUrl(req.url, { allowHttp: this.allowHttp })
     const events = req.events === undefined ? null : checkEvents(req.events)
-    const h = req.headers === undefined
-      ? null
-      : await this.#sealHeaders(accountId, id, checkHeaders(req.headers, req.headers.some((x) => x.value === null) ? await this.headers(sql, accountId, id) : {}))
+    const authorization = parsed?.authorization ?? null
+    const keepsAny = req.headers?.some((x) => x.value === null) ?? false
+    const existing = keepsAny || (authorization && req.headers === undefined) ? await this.headers(sql, accountId, id) : {}
+    // A new user:password@ URL replaces an Authorization that's only being kept; one typed in afresh beside it is ambiguous.
+    const typedAuth = req.headers?.some((x) => x.name.trim().toLowerCase() === "authorization" && x.value !== null && x.value.trim() !== "") ?? false
+    const list = req.headers !== undefined
+      ? withBasicAuth(checkHeaders(req.headers, existing), authorization, !typedAuth)
+      : authorization ? withBasicAuth(Object.entries(existing).map(([name, value]) => ({ name, value })), authorization, true) : null
+    const [h, u] = await Promise.all([list ? this.#sealHeaders(accountId, id, list) : null, parsed ? this.#sealUrl(accountId, id, parsed.url) : null])
     const [row] = await sql<Row>(
-      `update parley.webhook set url = coalesce($3, url), events = coalesce($4, events),
+      `update parley.webhook set events = coalesce($4, events),
               description = case when $5 then $6 else description end, enabled = coalesce($7, enabled),
               header_hints = case when $8 then $9::jsonb else header_hints end,
               headers_sealed_version = case when $8 then $10::uuid else headers_sealed_version end,
               headers_sealed_key_id = case when $8 then $11 else headers_sealed_key_id end,
               headers_sealed_iv = case when $8 then $12 else headers_sealed_iv end,
               headers_sealed = case when $8 then $13 else headers_sealed end,
+              url = coalesce($3, url),
+              url_sealed_version = case when $3::text is null then url_sealed_version else $14::uuid end,
+              url_sealed_key_id = case when $3::text is null then url_sealed_key_id else $15 end,
+              url_sealed_iv = case when $3::text is null then url_sealed_iv else $16 end,
+              url_sealed = case when $3::text is null then url_sealed else $17 end,
               updated_at = now()
         where id = $1 and account_id = $2 returning ${COLS}`,
-      [id, accountId, url, events, req.description !== undefined, cleanDescription(req.description), req.enabled ?? null,
-        h !== null, h?.hints ?? null, h?.version ?? null, h?.keyId ?? null, h?.iv ?? null, h?.sealed ?? null]
+      [id, accountId, u?.shown ?? null, events, req.description !== undefined, cleanDescription(req.description), req.enabled ?? null,
+        h !== null, h?.hints ?? null, h?.version ?? null, h?.keyId ?? null, h?.iv ?? null, h?.sealed ?? null,
+        u?.version ?? null, u?.keyId ?? null, u?.iv ?? null, u?.sealed ?? null]
     )
     if (!row) throw new WebhookError("not_found", "no such webhook")
     if (req.enabled === false) {
@@ -343,14 +489,12 @@ export class Webhooks {
     return { webhook: view(row), secret }
   }
 
-  /** The signing secret, opened (for the account holder to copy on the dashboard, and to sign with). */
+  /** The signing secret, opened (for the account holder to copy on the dashboard). */
   async secret(sql: Sql, accountId: string, id: string): Promise<string> {
     if (!UUID.test(id)) throw new WebhookError("not_found", "no such webhook")
     const [row] = await sql<SealedRow>(`select ${COLS}, sealed_version, sealed_key_id, sealed_iv, sealed from parley.webhook where id = $1 and account_id = $2`, [id, accountId])
     if (!row) throw new WebhookError("not_found", "no such webhook")
-    const bytes = await (await this.#sealer()).open(binding(accountId, id, row.sealed_version), { scheme: "server.v1", keyId: row.sealed_key_id, iv: row.sealed_iv, sealed: row.sealed })
-    if (!bytes) throw new Error(`webhook ${id}'s secret doesn't open`)
-    return new TextDecoder().decode(bytes)
+    return this.#open(binding(accountId, id, row.sealed_version), { keyId: row.sealed_key_id, iv: row.sealed_iv, sealed: row.sealed }, "secret")
   }
 
   async remove(sql: Sql, accountId: string, id: string): Promise<void> {

@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
 import { makeWebhookPoster, type WebhookPoster } from "../src/sessions/webhook-delivery.ts"
-import { checkHeaders, checkWebhookUrl, signWebhook, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
+import { checkHeaders, checkWebhookUrl, maskWebhookUrl, parseWebhookUrl, signStandardWebhook, signWebhook, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS } from "../src/sessions/webhooks.ts"
 import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
 const fake = makeFakeChannel("fake-wa", { media: true, groups: true })
@@ -21,7 +21,9 @@ const post: WebhookPoster = async ({ url, body, headers }) => {
   return { status }
 }
 
-const { ctx, sql, base } = await testServer([fake.channel], { PUBLIC_URL: "https://app.parley.test" }, { postWebhook: post, webhookTimer: false })
+// Many agents and browsers sign in across this file; sign-in rate limits aren't what it tests, so none apply here.
+const unlimited = { hit: async () => 0, close: async () => {} }
+const { ctx, sql, base } = await testServer([fake.channel], { PUBLIC_URL: "https://app.parley.test" }, { postWebhook: post, webhookTimer: false, limiter: unlimited })
 const sessions = ctx.sessions
 
 async function linked(email: string, handle = "6591363557@s.whatsapp.net") {
@@ -53,7 +55,7 @@ test("a live message reaches the webhook, signed, with the chat and the account;
   reset()
   const { accountId, connectionId } = await linked("live@parley.test")
   const { webhook, secret } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/parley" })
-  assert.match(secret, /^whsec_[\w-]{43}$/)
+  assert.match(secret, /^whsec_[A-Za-z0-9+/]{32}$/, "the Standard Webhooks format: whsec_ and 24 bytes of base64")
   assert.equal(webhook.secretHint, secret.slice(-4))
 
   fake.simulator.deliver(connectionId, { id: "m1", threadId: "ana", from: "ana", text: "hi there" })
@@ -246,11 +248,11 @@ test("a webhook that's off gets nothing, and turning it off drops what was waiti
   assert.match(t.data.message.text, /test event from Parley/)
 })
 
-test("URLs: public http(s) only, no credentials, at most ten per account; secrets rotate", async () => {
+test("URLs: public http(s) only, at most ten per account; secrets rotate", async () => {
   const account = await store.upsertAccount(sql, { subject: "local:urls@parley.test", email: "urls@parley.test", name: "U", signedInWith: "local" })
   const { connectionId } = await sessions.connect(account.id, "fake-wa", { timezone: "UTC" })
   for (const bad of ["ftp://x.example.com", "https://localhost/x", "http://127.0.0.1:8080/x", "https://169.254.169.254/latest/meta-data", "https://10.0.0.5/x",
-    "https://[::1]/x", "https://[::ffff:127.0.0.1]/x", "https://db.internal/x", "https://user:pw@example.com/x", "not a url"]) {
+    "https://[::1]/x", "https://[::ffff:127.0.0.1]/x", "https://db.internal/x", "not a url"]) {
     await assert.rejects(ctx.webhooks.create(sql, account.id, { connectionId, url: bad }), /URL|url/, bad)
   }
   assert.throws(() => checkWebhookUrl("http://example.com/x", { allowHttp: false }), /must be https/)
@@ -386,6 +388,148 @@ test("a webhook can send a receiver's own key with every request: sealed at rest
   assert.equal(received.at(-1)!.headers.Authorization, undefined)
 })
 
+test("a URL's keys are masked when shown: query values, and path segments that look like a key", () => {
+  assert.equal(maskWebhookUrl("https://hooks.example.com/parley/webhook"), "https://hooks.example.com/parley/webhook", "nothing to hide")
+  assert.equal(maskWebhookUrl("https://example.com/"), "https://example.com/")
+  assert.equal(maskWebhookUrl("https://api.x.ai/routines/r_8f2c/callback"), "https://api.x.ai/routines/r_8f2c/callback")
+  assert.equal(maskWebhookUrl("https://n8n.example.com/webhook/in?token=s3cr3t-value-0042&debug"), "https://n8n.example.com/webhook/in?token=…0042&debug")
+  assert.equal(maskWebhookUrl("https://n8n.example.com/in?k=short"), "https://n8n.example.com/in?k=…")
+  assert.equal(maskWebhookUrl("https://hooks.slack.com/services/T0123ABCD/B0123ABCD/AbCdEfGh1234567890wxyz"), "https://hooks.slack.com/services/…/…/…wxyz")
+  assert.equal(maskWebhookUrl("https://discord.com/api/webhooks/123456789012345678/Abc-def_GHIjklMNOpqr"), "https://discord.com/api/webhooks/…5678/…Opqr")
+  assert.equal(maskWebhookUrl(maskWebhookUrl("https://n8n.example.com/in?token=s3cr3t-value-0042")), "https://n8n.example.com/in?token=…0042", "masking twice changes nothing")
+})
+
+test("a user:password@ URL becomes an Authorization: Basic header, and the URL loses it", () => {
+  const { url, authorization } = parseWebhookUrl("https://parley:p%40ss%3Aword@hooks.example.com/in", { allowHttp: false })
+  assert.equal(url, "https://hooks.example.com/in")
+  assert.equal(authorization, `Basic ${Buffer.from("parley:p@ss:word").toString("base64")}`)
+  assert.equal(parseWebhookUrl("https://hooks.example.com/in", { allowHttp: false }).authorization, null)
+})
+
+test("every request is also signed the Standard Webhooks way, which a receiver checks with the secret alone", async () => {
+  const body = JSON.stringify({ hello: "world" })
+  // The way the spec (and its libraries) verify: HMAC-SHA256 keyed with the base64-decoded secret.
+  const expected = (secret: string, id: string, t: number) =>
+    `v1,${createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64")).update(`${id}.${t}.${body}`).digest("base64")}`
+  const fresh = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+  assert.equal(await signStandardWebhook(fresh, "evt_1", 1_700_000_000, body), expected(fresh, "evt_1", 1_700_000_000))
+  // A secret made before the format changed (base64url) signs with the same bytes.
+  const old = "whsec_" + Buffer.from(Array.from({ length: 32 }, (_, i) => i * 7 + 251)).toString("base64url")
+  assert.equal(await signStandardWebhook(old, "evt_2", 1_700_000_000, body),
+    `v1,${createHmac("sha256", Buffer.from(old.slice(6), "base64url")).update(`evt_2.1700000000.${body}`).digest("base64")}`)
+})
+
+test("a webhook's URL is kept sealed: requests go to the whole URL, everything else sees it masked; older plain ones get sealed", async () => {
+  reset()
+  const email = "url-keys@parley.test"
+  const { accountId, connectionId: cid } = await linked(email)
+  const token = await agentToken(base, email, "Zap Agent")
+  const full = "https://hooks.example.com/catch/123/abcdef0123456789xyz?token=supersecretvalue1234"
+  const created = await callTool(base, token, "create_webhook", { url: full })
+  assert.equal(created.isError, false, JSON.stringify(created.result))
+  assert.equal(created.result.url, "https://hooks.example.com/catch/123/…9xyz?token=…1234")
+  const id = created.result.id
+  const [row] = await sql<Record<string, unknown>>(`select * from parley.webhook where id = $1`, [id])
+  assert.ok(!JSON.stringify(row).includes("supersecretvalue") && !JSON.stringify(row).includes("abcdef0123456789"), "not in the clear at rest")
+  assert.ok(!JSON.stringify((await callTool(base, token, "list_webhooks")).result).includes("supersecretvalue"))
+
+  // Requests go to the whole URL, carrying both signatures.
+  await ctx.webhooks.test(sql, accountId, id)
+  await flush()
+  const sent = received.at(-1)!
+  assert.equal(sent.url, full)
+  assert.ok(verifies(sent, created.result.secret))
+  assert.equal(sent.headers["webhook-id"], sent.body.id)
+  assert.equal(sent.headers["webhook-signature"],
+    `v1,${createHmac("sha256", Buffer.from(created.result.secret.slice(6), "base64")).update(`${sent.headers["webhook-id"]}.${sent.headers["webhook-timestamp"]}.${sent.raw}`).digest("base64")}`)
+  assert.ok(Math.abs(Number(sent.headers["webhook-timestamp"]) - Date.now() / 1000) < 60)
+
+  // The number's page shows it masked; saving the edit form with the URL left blank keeps the whole URL.
+  const cookie = (await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email }) })).headers.get("set-cookie")!.split(";")[0]!
+  const page = await (await fetch(`${base}/app/connections/${cid}`, { headers: { cookie } })).text()
+  assert.ok(page.includes("https://hooks.example.com/catch/123/…9xyz?token=…1234") && !page.includes("supersecretvalue"))
+  const saved = await fetch(`${base}/app/connections/${cid}/webhooks/${id}/update`, {
+    method: "POST", redirect: "manual", headers: { cookie }, body: new URLSearchParams([["url", ""], ["events", "message.received"], ["description", "kept"]]),
+  })
+  assert.equal(saved.status, 302)
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), full)
+
+  // A webhook from before URLs were sealed: shown masked straight away, still sent to, and sealed by the delivery loop.
+  await sql(`update parley.webhook set url = $2, url_sealed_version = null, url_sealed_key_id = null, url_sealed_iv = null, url_sealed = null where id = $1`, [id, full])
+  assert.equal((await ctx.webhooks.get(sql, accountId, id)).url, "https://hooks.example.com/catch/123/…9xyz?token=…1234")
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), full)
+  assert.ok((await ctx.webhooks.sealPlainUrls(sql)) >= 1)
+  const [after] = await sql<{ url: string; url_sealed: string | null }>(`select url, url_sealed from parley.webhook where id = $1`, [id])
+  assert.equal(after!.url, "https://hooks.example.com/catch/123/…9xyz?token=…1234")
+  assert.ok(after!.url_sealed)
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), full)
+})
+
+test("a user:password@ URL is sent as an Authorization header: not both at once, and a new one replaces it", async () => {
+  reset()
+  const email = "basic@parley.test"
+  const { accountId } = await linked(email)
+  const token = await agentToken(base, email, "Basic Agent")
+  const both = await callTool(base, token, "create_webhook", { url: "https://u:p@hooks.example.com/basic", headers: { Authorization: "Bearer other" } })
+  assert.equal(both.isError, true)
+  assert.match(String(both.result), /give one or the other/)
+
+  const created = await callTool(base, token, "create_webhook", { url: "https://parley:hunter2-long-password@hooks.example.com/basic", headers: { "X-Tenant": "acme" } })
+  assert.equal(created.isError, false, JSON.stringify(created.result))
+  assert.equal(created.result.url, "https://hooks.example.com/basic")
+  assert.deepEqual(created.result.headers.map((h: { name: string }) => h.name), ["X-Tenant", "Authorization"])
+  const id = created.result.id
+  await ctx.webhooks.test(sql, accountId, id)
+  await flush()
+  assert.equal(received.at(-1)!.url, "https://hooks.example.com/basic")
+  assert.equal(received.at(-1)!.headers.Authorization, `Basic ${Buffer.from("parley:hunter2-long-password").toString("base64")}`)
+
+  // A new URL with new credentials replaces the Authorization and keeps the other headers.
+  assert.equal((await callTool(base, token, "update_webhook", { webhook_id: id, url: "https://parley:new-pass@hooks.example.com/basic2" })).isError, false)
+  assert.deepEqual(await ctx.webhooks.headers(sql, accountId, id), { "X-Tenant": "acme", Authorization: `Basic ${Buffer.from("parley:new-pass").toString("base64")}` })
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), "https://hooks.example.com/basic2")
+
+  // The edit form re-posts the Authorization it keeps (value blank): new credentials in the URL replace it, not clash.
+  const cookie = (await fetch(`${base}/auth/dev`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email }) })).headers.get("set-cookie")!.split(";")[0]!
+  const cid = (await ctx.webhooks.get(sql, accountId, id)).connectionId
+  const form = (url: string, auth: string) => fetch(`${base}/app/connections/${cid}/webhooks/${id}/update`, {
+    method: "POST", redirect: "manual", headers: { cookie },
+    body: new URLSearchParams([["url", url], ["events", "message.received"], ["header_name", "X-Tenant"], ["header_value", ""], ["header_name", "Authorization"], ["header_value", auth]]),
+  })
+  assert.equal((await form("https://parley:third-pass@hooks.example.com/basic3", "")).status, 302)
+  assert.equal((await ctx.webhooks.headers(sql, accountId, id)).Authorization, `Basic ${Buffer.from("parley:third-pass").toString("base64")}`)
+  assert.equal((await form("https://parley:fourth@hooks.example.com/basic4", "Bearer typed-in")).status, 400, "a typed Authorization beside URL credentials is ambiguous")
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, id), "https://hooks.example.com/basic3", "and changes nothing")
+})
+
+test("the URL as Parley shows it (keys masked) can't be given back as the URL", async () => {
+  const email = "masked-back@parley.test"
+  const { accountId, connectionId } = await linked(email)
+  const token = await agentToken(base, email, "Copy Agent")
+  const { webhook } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/in?token=supersecretvalue1234" })
+  const listed = (await callTool(base, token, "list_webhooks")).result.webhooks[0]
+  assert.equal(listed.url, "https://hooks.example.com/in?token=…1234")
+  const back = await callTool(base, token, "update_webhook", { webhook_id: webhook.id, url: listed.url })
+  assert.equal(back.isError, true)
+  assert.match(String(back.result), /with its keys masked: give the whole URL/)
+  assert.equal(await ctx.webhooks.fullUrl(sql, accountId, webhook.id), "https://hooks.example.com/in?token=supersecretvalue1234")
+  await assert.rejects(ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/in?token=%E2%80%A61234" }), /keys masked/)
+})
+
+test("a test that's refused (401/403) says how to give the receiver its key", async () => {
+  reset()
+  const email = "refused@parley.test"
+  const { accountId, connectionId } = await linked(email)
+  const token = await agentToken(base, email, "Grok Bot")
+  const { webhook } = await ctx.webhooks.create(sql, accountId, { connectionId, url: "https://hooks.example.com/guarded" })
+  answers = [401]
+  const tested = callTool(base, token, "test_webhook", { webhook_id: webhook.id })
+  const loop = setInterval(() => void sessions.deliverWebhooks(), 100)
+  const result = await tested.finally(() => clearInterval(loop))
+  assert.equal(result.result.last_status, 401)
+  assert.match(result.result.note, /answered HTTP 401\. The receiver refused who's calling: .*update_webhook's headers/)
+})
+
 test("agents manage webhooks over MCP, and each number's page shows and configures them", async () => {
   reset()
   const email = "mcp-hooks@parley.test"
@@ -453,7 +597,7 @@ test("agents manage webhooks over MCP, and each number's page shows and configur
   const add = await fetch(at, { method: "POST", headers: { cookie }, body: new URLSearchParams([["url", "https://hooks.example.com/dash"], ["events", "message.received"], ["events", "reaction.added"]]) })
   assert.equal(add.status, 200)
   const added = await add.text()
-  const secret = added.match(/whsec_[\w-]{43}/)?.[0]
+  const secret = added.match(/whsec_[A-Za-z0-9+/]{32}/)?.[0]
   assert.ok(secret, "the new secret is shown")
   const mine = (await callTool(base, token, "list_webhooks")).result.webhooks.find((w: { url: string }) => w.url === "https://hooks.example.com/dash")
   assert.deepEqual(mine.events, ["message.received", "reaction.added"])
@@ -483,7 +627,7 @@ test("agents manage webhooks over MCP, and each number's page shows and configur
   assert.equal(received.at(-1)!.url, "https://hooks.example.com/dash2")
   assert.ok(verifies(received.at(-1)!, secret!))
   const rotatedPage = await (await form("rotate")).text()
-  const newSecret = rotatedPage.match(/whsec_[\w-]{43}/)?.[0]
+  const newSecret = rotatedPage.match(/whsec_[A-Za-z0-9+/]{32}/)?.[0]
   assert.ok(newSecret && newSecret !== secret)
   await form("test")
   await flush()

@@ -85,11 +85,23 @@ const PAYLOAD = {
   },
 }
 /** How a receiver checks a request is Parley's, said once wherever a secret is handed over. */
-const VERIFY = "Each request is a JSON POST with headers Parley-Event, Parley-Event-Id, Parley-Delivery-Id, Parley-Attempt and Parley-Signature: \"t=<unix seconds>,v1=<hex>\". To verify, compute HMAC-SHA256 with the secret (the whole whsec_… string) as the key over \"<t>.<raw request body>\", compare it to v1 in constant time, and reject a t more than 5 minutes old. Answer any 2xx within 10 seconds; anything else is retried (" + MAX_ATTEMPTS + " attempts in all: at once, after 30 seconds, after 5 minutes). The same event can arrive twice: dedupe on Parley-Event-Id."
+const VERIFY = "Each request is a JSON POST with headers Parley-Event, Parley-Event-Id, Parley-Delivery-Id, Parley-Attempt and Parley-Signature: \"t=<unix seconds>,v1=<hex>\". To verify, compute HMAC-SHA256 with the secret (the whole whsec_… string) as the key over \"<t>.<raw request body>\", compare it to v1 in constant time, and reject a t more than 5 minutes old. Each request is also signed the Standard Webhooks way (standardwebhooks.com), so its libraries verify it with the same secret: headers webhook-id (the event id), webhook-timestamp and webhook-signature \"v1,<base64 HMAC-SHA256 of '<id>.<timestamp>.<body>' keyed with the base64-decoded part after whsec_>\" (a secret with - or _ in it predates that format: rotate it for a library). Answer any 2xx within 10 seconds; anything else is retried (" + MAX_ATTEMPTS + " attempts in all: at once, after 30 seconds, after 5 minutes). The same event can arrive twice: dedupe on Parley-Event-Id."
 /** The custom headers input, the same for create and update. */
 const headersInput = z.record(z.string().max(100), z.string().max(2000)).optional()
-const HEADERS_DOC = `Headers of your own to send on every request, as { name: value }, for a receiver that checks who's calling: e.g. { "Authorization": "Bearer <key>" } or { "X-Api-Key": "<key>" }, exactly as the receiver's setup gives them. Sent alongside Parley's own headers and signature; kept sealed, and only each name and the value's last 4 characters are ever shown back. At most ${MAX_WEBHOOK_HEADERS}; Parley's own (Parley-*, Content-Type, User-Agent, Host…) can't be set.`
+const HEADERS_DOC = `Headers of your own to send on every request, as { name: value }, for a receiver that checks who's calling: e.g. { "Authorization": "Bearer <key>" } or { "X-Api-Key": "<key>" }, exactly as the receiver's setup gives them. Sent alongside Parley's own headers and signature; kept sealed, and only each name and the value's last 4 characters are ever shown back. At most ${MAX_WEBHOOK_HEADERS}; Parley's own (Parley-*, Webhook-*, Content-Type, User-Agent, Host…) can't be set.`
+const URL_DOC = "A public https URL (not a private, local or internal address). A key in it is fine (?token=…, or one in the path): the URL is kept sealed and shown back with its keys masked. user:password@ before the host is sent as an Authorization: Basic header instead."
 const toHeaders = (h: Record<string, string> | undefined) => (h === undefined ? undefined : Object.entries(h).map(([name, value]) => ({ name, value })))
+/** What a test or resend came to, said for the agent: delivered, failed and why (and what to do about a 401/403), or still waiting. */
+function outcomeNote(d: Delivery | undefined): string {
+  if (!d) return "The webhook was deleted."
+  if (d.status === "delivered") return `Delivered: the URL answered HTTP ${d.lastStatus}.`
+  if (!d.attempts) return "Still waiting to be sent. Check list_webhooks in a moment."
+  const retry = d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""
+  const auth = d.lastStatus === 401 || d.lastStatus === 403
+    ? " The receiver refused who's calling: if its setup gave you a key, add it with update_webhook's headers (e.g. { \"Authorization\": \"Bearer <key>\" }), or put it in the URL as the setup shows."
+    : ""
+  return `Not delivered: ${d.lastError ?? "unknown error"}.${auth}${retry}`
+}
 const EVENTS_DOC = WEBHOOK_EVENTS.map((e) => `${e} (${EVENT_TEXT[e]})`).join("; ")
 
 const FILE_LABEL: Record<string, string> = { audio: "voice-note", video: "video", document: "document", image: "photo", sticker: "sticker" }
@@ -787,7 +799,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "list_webhooks",
     {
       title: "List webhooks",
-      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's events, whether it's on, its last success and failure, and its latest deliveries (with include_payloads, the exact JSON body each sent: use it to debug a receiver). Also answers `payload_format`, what every request body looks like.",
+      description: "Webhooks (URLs Parley calls the moment a message, reaction or deletion happens on a linked number). Each belongs to one number (`account`, `connection_id`). Lists each one's URL (keys in it masked), events, the headers it sends (names only), whether it's on, its last success and failure, and its latest deliveries (with include_payloads, the exact JSON body each sent: use it to debug a receiver). Also answers `payload_format`, what every request body looks like.",
       inputSchema: {
         connection_id: filters.connection_id,
         deliveries: z.number().int().min(0).max(50).optional().describe("How many recent deliveries to list per webhook (default 5)."),
@@ -820,7 +832,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). If the receiver checks who's calling with a key of its own (an Authorization header or API key its setup gave you), pass it in headers. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
-        url: z.string().max(2000).describe("A public https URL (not a private, local or internal address)."),
+        url: z.string().max(2000).describe(URL_DOC),
         events: eventsInput.describe("Which events to send. Default: all of them."),
         description: z.string().max(200).optional().describe("What it's for, shown on the dashboard."),
         headers: headersInput.describe(HEADERS_DOC),
@@ -845,7 +857,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       description: "Change a webhook's URL, events, description or headers, turn it off or back on, or replace its signing secret (rotate_secret: the old one stops working at once and the new one is in the answer). Turning it off drops what it still had waiting.",
       inputSchema: {
         webhook_id: z.string(),
-        url: z.string().max(2000).optional(),
+        url: z.string().max(2000).optional().describe(`The new URL, whole. ${URL_DOC}`),
         events: eventsInput,
         description: z.string().max(200).optional(),
         enabled: z.boolean().optional(),
@@ -899,12 +911,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
           d = await ctx.webhooks.delivery(ctx.sql, userId, queued.id)
           if (!d || d.status === "delivered" || d.status === "failed" || (d.status === "pending" && d.attempts > 0)) break
         }
-        const out = deliveryOut(d ?? queued, { payload: true })
-        const note = !d ? "The webhook was deleted." : d.status === "delivered"
-          ? `Delivered: the URL answered HTTP ${d.lastStatus}.`
-          : d.attempts > 0 ? `Not delivered: ${d.lastError ?? "unknown error"}.${d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""}`
-          : "Still waiting to be sent. Check list_webhooks in a moment."
-        return json({ ...out, note })
+        return json({ ...deliveryOut(d ?? queued, { payload: true }), note: outcomeNote(d) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not test the webhook")
       }
@@ -928,11 +935,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
           d = await ctx.webhooks.delivery(ctx.sql, userId, queued.id)
           if (!d || d.status === "delivered" || d.status === "failed" || (d.status === "pending" && d.attempts > 0)) break
         }
-        const note = !d ? "The webhook was deleted." : d.status === "delivered"
-          ? `Delivered: the URL answered HTTP ${d.lastStatus}.`
-          : d.attempts > 0 ? `Not delivered: ${d.lastError ?? "unknown error"}.${d.status === "pending" ? ` Parley tries again at ${d.nextAttemptAt}.` : ""}`
-          : "Still waiting to be sent. Check list_webhooks in a moment."
-        return json({ ...deliveryOut(d ?? queued), resent_from: delivery_id, note })
+        return json({ ...deliveryOut(d ?? queued), resent_from: delivery_id, note: outcomeNote(d) })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not resend the delivery")
       }

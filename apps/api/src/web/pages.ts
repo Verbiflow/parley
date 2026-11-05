@@ -744,7 +744,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
         <small>added ${day(w.createdAt)} · ${esc(w.createdBy)} · <span class="nw">secret …${esc(w.secretHint)}</span>${w.headers.length ? ` · sends ${w.headers.map((h) => `<span class="hdl">${esc(h.name)}</span>${h.hint ? ` …${esc(h.hint)}` : ""}`).join(", ")}` : ""}</small>
         <details class="edit"><summary>edit</summary>
           <form method="post" action="${at}/${esc(w.id)}/update" class="addf" style="padding-top:0">
-            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" value="${esc(w.url)}" required></label>
+            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" placeholder="${esc(w.url)}" autocomplete="off" spellcheck="false"><small>Blank keeps it. Keys in it stay hidden.</small></label>
               <label class="field"><span>Description</span><input class="input" name="description" value="${esc(w.description ?? "")}" maxlength="200"></label></div>
             ${eventPicker(w.events)}
             ${headerFields(w.headers, true)}
@@ -786,7 +786,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
   const revealed = opts.revealed && hooks.get(opts.revealed.id)
   const secretNote = revealed ? `<div class="note reveal"><div class="secret">
       <b>${opts.revealed!.fresh ? "Your signing secret" : "Signing secret"} for ${esc(shortUrl(revealed.url))}</b>
-      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request.</p>
+      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request. It's also signed the Standard Webhooks way (<code>webhook-signature</code>), so its libraries verify it with this secret.</p>
       ${copyLine(opts.revealed!.secret)}
     </div></div>` : ""
   const none = !opts.webhooks.length
@@ -794,7 +794,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
   const addForm = opts.webhooks.length < MAX_WEBHOOKS ? `<details class="addwh"${none || opts.error ? " open" : ""}><summary class="btn ${none ? "" : "line "}sm">${icon("plus", 13)}${none ? "Configure a webhook" : "Add webhook"}</summary>
       <form method="post" action="${at}" class="addf">
         <div class="fields">
-          <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required></label>
+          <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required autocomplete="off" spellcheck="false"><small>A key in it is fine: it's kept sealed and shown masked.</small></label>
           <label class="field"><span>Description</span><input class="input" name="description" placeholder="CRM sync" maxlength="200"></label>
         </div>
         ${eventPicker(WEBHOOK_EVENTS)}

@@ -499,7 +499,8 @@ export function webRoutes(ctx: AppContext): Hono {
       switch (c.req.param("action")) {
         case "update": {
           const f = await c.req.formData()
-          await ctx.webhooks.update(ctx.sql, userId, id, { url: String(f.get("url") ?? ""), events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), headers: headersFrom(f, true) })
+          const url = String(f.get("url") ?? "").trim()
+          await ctx.webhooks.update(ctx.sql, userId, id, { url: url || undefined, events: f.getAll("events").map(String), description: String(f.get("description") ?? ""), headers: headersFrom(f, true) })
           return back("saved")
         }
         case "enable":
