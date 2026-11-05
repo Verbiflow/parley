@@ -1,0 +1,33 @@
+apps/api/test/webhooks.test.ts
+  s_1bda550d5e639c::t_36b29a2a66584c 320,421
+  s_1bda550d5e639c::t_f4b24c55328fa2 347-360
+  s_1bda550d5e639c::t_ac4e0b25784f8f 157-174,233-235,238-244,419-420,422-432
+apps/api/src/sessions/webhooks.ts
+  s_1bda550d5e639c::t_dbf1c5be2a1f9c 3-4,51-52,69,84,260-264,267,269,271-277,286-309
+README.md
+  s_1bda550d5e639c::t_f4b24c55328fa2 60
+apps/api/src/web/ui.ts
+  s_1bda550d5e639c::t_4ad1ad175ed6a7 374
+apps/api/src/web/pages.ts
+  s_1bda550d5e639c::t_4ad1ad175ed6a7 654-655,725-729,732,736-745,775
+apps/api/src/web/routes.ts
+  s_1bda550d5e639c::t_4ad1ad175ed6a7 198,466-481
+apps/api/src/mcp/server.ts
+  s_1bda550d5e639c::t_f4b24c55328fa2 60,63,65-86,786-791,793,801,803,816,829,882,896,908-935
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5bbd379669dd0ae79aea4674cda7afffb04ef6c2",
+  "prompts": {},
+  "sessions": {
+    "s_1bda550d5e639c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74b69549-cccf-49de-952f-06adb01bc06f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
