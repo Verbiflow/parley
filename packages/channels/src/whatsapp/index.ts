@@ -633,6 +633,9 @@ export const whatsappChannel: Channel = {
         } catch (e) {
           throw classify(e)
         } finally {
+          // Typing and sending can read as being online, and while the account is online the phone gets no
+          // notifications: go back to unavailable, as WhatsApp Desktop does in the background.
+          void sock.sendPresenceUpdate("unavailable").catch(() => {})
           // Sending moved the encryption sessions forward; save them before anything can restart us.
           if (saveTimer) saveNow()
         }

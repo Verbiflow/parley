@@ -3,6 +3,8 @@
  * history at link time (`supportCallLogHistory`) and surface it, plus calls made or taken on another device, as
  * `call-log.set`. (The same patch Hearth carries.)
  *
+ * It also keeps the account offline (see the socket.js edits), so the phone keeps getting notifications.
+ *
  * Baileys 7 does the rest itself: private-id <-> phone-number pairs (`lidPnMappings`, `lid-mapping.update`) and
  * history chunks sent inline. Those patches are gone.
  *
@@ -55,6 +57,22 @@ const edits: Array<{ file: string; find: string; insert: "before" | "after" | "r
     text:
       `    else if (action?.callLogAction?.callLogRecord) { // ${MARK}: a call made or taken on another device\n` +
       `        ev.emit('call-log.set', { records: [action.callLogAction.callLogRecord] });\n    }\n`,
+  },
+  // Keep the account offline so the phone keeps its notifications. Unpatched, every partial `creds.update` (most of
+  // them: keys, sessions, app state carry no `me`) reads as a name change and sends a presence with no type, which
+  // WhatsApp takes as "available": the number shows online and the phone stops getting pushes (Baileys#2553).
+  // Announce only a real new name, and as unavailable.
+  {
+    file: "lib/Socket/socket.js",
+    find: "        if (creds.me?.name !== name) {",
+    insert: "replace",
+    text: `        if (name && creds.me?.name !== name) { // ${MARK}: only a real new name`,
+  },
+  {
+    file: "lib/Socket/socket.js",
+    find: "                attrs: { name: name }",
+    insert: "replace",
+    text: `                attrs: { name: name.replace(/@/g, ''), type: 'unavailable' } // ${MARK}: never "available"`,
   },
 ]
 
