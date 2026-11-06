@@ -1,0 +1,45 @@
+packages/pacing/test/pacing.test.ts
+  s_4ddc9e013fdc6f::t_150fa2beccfe70 100-102,111
+apps/api/src/sessions/store.ts
+  s_4ddc9e013fdc6f::t_8fda933ee27c1f 18-19,35,41,50,52,166
+apps/api/src/mcp/server.ts
+  s_4ddc9e013fdc6f::t_8fda933ee27c1f 826
+packages/pacing/src/policy.ts
+  s_4ddc9e013fdc6f::t_b66414b4d24223 48-49,52,82
+apps/api/src/web/routes.ts
+  s_4ddc9e013fdc6f::t_8fda933ee27c1f 11,239-241,249
+packages/pacing/src/plan.ts
+  s_4ddc9e013fdc6f::t_b66414b4d24223 21-22,75
+packages/auth/migrations/0036_openers_per_minute.sql
+  s_4ddc9e013fdc6f::t_a884965915fb22 1-3
+apps/api/test/outbox.test.ts
+  s_4ddc9e013fdc6f::t_b760efbcc45da4 193,195-236
+  s_4ddc9e013fdc6f::t_150fa2beccfe70 34-37,39,43,175,192
+  s_4ddc9e013fdc6f::t_81c4775bf18f7d 194
+apps/api/src/sessions/outbox.ts
+  s_4ddc9e013fdc6f::t_461543f1ea9117 39-40,46,48,52,130-139,142,146,193-195,197-199,206,228-229,235-236,238,240-243,433-434,438-440,443,447-448,453-454,456
+apps/api/test/mcp-send.test.ts
+  s_4ddc9e013fdc6f::t_150fa2beccfe70 43,49
+apps/api/test/pages.test.ts
+  s_4ddc9e013fdc6f::t_cb28924b7e95b1 24,56,70
+  s_4ddc9e013fdc6f::t_150fa2beccfe70 86
+  s_4ddc9e013fdc6f::t_b760efbcc45da4 87
+apps/api/src/web/pages.ts
+  s_4ddc9e013fdc6f::t_8fda933ee27c1f 5,957-958,965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "505545f86cf3b5c04c31bef748bc2b57e5d7ae4c",
+  "prompts": {},
+  "sessions": {
+    "s_4ddc9e013fdc6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e9a185c3-6f33-4c94-8943-de44abe94390",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
