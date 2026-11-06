@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { store } from "@parley/auth"
 import { makeFakeChannel } from "@parley/channels/fake"
+import { setIgnored } from "../src/sessions/chats.ts"
 import { getOutbound } from "../src/sessions/outbox.ts"
 import { agentToken, callTool, testServer, waitUntil } from "./support.ts"
 
@@ -255,10 +256,10 @@ test("sending from a URL: the sessions service downloads it (videos past 16 MB a
   assert.equal(new TextDecoder().decode(out!.content.media!.data), "mp4-bytes")
 })
 
-test("load_history: asks the phone for the chat's last N, adds what Parley never had, fills in what it had without media, and returns them", async () => {
+test("load_history: asks the phone for the N before the oldest message Parley has, adds what it never had, fills in what it had without media, and each call goes further back", async () => {
   const { accountId, connectionId } = await linked("history@parley.test")
   const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
-  await assert.rejects(sessions.loadHistory(accountId, connectionId, "ana", 5), /no message in this chat yet/)
+  await assert.rejects(sessions.loadHistory(accountId, connectionId, "ana", 5), /no message in this chat to count back from/)
   // Stored by older code: a photo with no media info, then a reply.
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0) })
   fake.simulator.deliver(connectionId, { id: "t", threadId: "ana", from: "me", fromMe: true, text: "nice", at: at(5) })
@@ -266,8 +267,8 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
 
   const pending = sessions.loadHistory(accountId, connectionId, "ana", 4)
   const [req] = await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 1)
-  // The newest stored message is the anchor; the other three are asked for before it.
-  assert.deepEqual([req!.anchor.threadId, req!.anchor.messageId, req!.anchor.fromMe, req!.count], ["ana", "t", true, 3])
+  // As WhatsApp's own "get older messages": the oldest stored message is the anchor, and N are asked for before it.
+  assert.deepEqual([req!.anchor.threadId, req!.anchor.messageId, req!.anchor.fromMe, req!.count], ["ana", "p", false, 4])
 
   // The phone's answer: a message Parley never had, and the photo again, now with its attachment and a reaction.
   const reaction = { threadId: "ana", messageId: "p", from: "me", fromMe: true, emoji: "❤️", at: at(1) }
@@ -275,7 +276,8 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "late", thumbnail: "dGh1bWI=" }, reactions: [reaction] })
   const { answered, messages } = await pending
   assert.equal(answered, true)
-  assert.deepEqual(messages.map((m) => m.id), ["lost", "p", "t"])
+  // What came back, up to the anchor (not the chat's latest).
+  assert.deepEqual(messages.map((m) => m.id), ["lost", "p"])
   const p = messages.find((m) => m.id === "p")!
   assert.equal(p.media?.kind, "image")
   assert.deepEqual(p.reactions.map((r) => r.emoji), ["❤️"])
@@ -285,8 +287,50 @@ test("load_history: asks the phone for the chat's last N, adds what Parley never
   await new Promise((r) => setTimeout(r, 50))
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
 
+  // The next call counts back from the oldest message now stored, further back. Unanswered, it returns the latest.
+  const again = sessions.loadHistory(accountId, connectionId, "ana", 4)
+  const next = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === 2)).at(-1)!
+  assert.equal(next.anchor.messageId, "lost")
+  void again.catch(() => {})
+
   const other = await store.upsertAccount(sql, { subject: "local:nosy2@parley.test", email: "nosy2@parley.test", name: "N", signedInWith: "local" })
   await assert.rejects(sessions.loadHistory(other.id, connectionId, "ana", 5), /not your connection/)
+})
+
+test("an ignored chat's messages are kept privately: agents can't see, search, react in or send to it; turned back on, its history is all there", async () => {
+  const { accountId, connectionId } = await linked("private@parley.test")
+  const at = (m: number) => new Date(Date.parse("2026-11-04T01:00:00Z") + m * 60_000).toISOString()
+  fake.simulator.deliver(connectionId, { id: "g1", threadId: "team", from: "bo", text: "plans for sunday", at: at(0) })
+  await waitUntil(() => sessions.inbox(accountId, { limit: 10, chatId: "team" }), (m) => m.length === 1)
+  await setIgnored(sql, connectionId, ["team"], true)
+  // More arrives while it's ignored: kept, never shown.
+  fake.simulator.deliver(connectionId, { id: "g2", threadId: "team", from: "cy", text: "secret stuff", at: at(5) })
+  await waitUntil(async () => (await sql(`select 1 from parley.message where connection_id = $1 and chat_id = 'team'`, [connectionId])).length, (n) => n === 2)
+  assert.deepEqual(await sessions.inbox(accountId, { limit: 10, chatId: "team" }), [])
+  assert.deepEqual(await sessions.inbox(accountId, { limit: 10, search: { words: ["secret"] } }), [])
+  assert.ok(!(await sessions.inboxChats(accountId)).some((c) => c.id === "team"))
+  await assert.rejects(sessions.messages(accountId, connectionId, "team", { limit: 10 }), /no such synced chat/)
+  await assert.rejects(sessions.loadHistory(accountId, connectionId, "team", 10), /no such synced chat/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "team", text: "hi" }), /ignored this chat/)
+  await assert.rejects(sessions.enqueue(accountId, connectionId, { to: "team", text: "👍", reactTo: "g2" }), /ignored this chat/)
+
+  // Turned back on: everything is there, no fetching needed.
+  await setIgnored(sql, connectionId, ["team"], false)
+  assert.deepEqual((await sessions.inbox(accountId, { limit: 10, chatId: "team" })).map((m) => m.text), ["secret stuff", "plans for sunday"])
+  assert.equal((await sessions.chats(accountId, connectionId)).find((c) => c.id === "team")!.canLoadHistory, true)
+  // load_history counts back from the oldest stored message.
+  const before = fake.simulator.backfills(connectionId).length
+  void sessions.loadHistory(accountId, connectionId, "team", 10).catch(() => {})
+  const req = (await waitUntil(async () => fake.simulator.backfills(connectionId), (b) => b.length === before + 1)).at(-1)!
+  assert.deepEqual([req.anchor.messageId, req.count], ["g1", 10])
+})
+
+test("a chat that was never stored and has no bookmark says it can't load history yet", async () => {
+  const { accountId, connectionId } = await linked("nohistory@parley.test")
+  await sql(`update parley.chat set last_message_at = now() where connection_id = $1 and id = 'team'`, [connectionId])
+  const team = (await sessions.chats(accountId, connectionId)).find((c) => c.id === "team")!
+  assert.equal(team.canLoadHistory, false)
+  await assert.rejects(sessions.loadHistory(accountId, connectionId, "team", 5), /ignored when its messages came in/)
 })
 
 test("deleting a sent message for everyone: by its outbox id or its inbox id, paced, only the account's own and only for ~2 days", async () => {
@@ -299,7 +343,8 @@ test("deleting a sent message for everyone: by its outbox id or its inbox id, pa
   fake.simulator.deliver(connectionId, { id: "mine", threadId: "ana", from: "me", fromMe: true, text: "typo", at: new Date(Date.now() - hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "hers", threadId: "ana", from: "ana", text: "hi", at: at(-hour).toISOString() })
   fake.simulator.deliver(connectionId, { id: "old", threadId: "ana", from: "me", fromMe: true, text: "ages ago", at: at(-49 * hour).toISOString() })
-  fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: at(-2 * hour).toISOString() })
+  // "edge" is queued after that deletion took the real clock's slot, so its window has to outlast that slot, whatever today is.
+  fake.simulator.deliver(connectionId, { id: "edge", threadId: "ana", from: "me", fromMe: true, text: "aging", at: new Date(Date.now() - 2 * hour).toISOString() })
   await waitUntil(() => sessions.inbox(accountId, { limit: 10 }), (ms) => ms.length === 4)
   const dispatch = async (q: { message: { scheduledFor: string | null } }) => sessions.dispatchDue(new Date(Date.parse(q.message.scheduledFor!) + 1000))
 

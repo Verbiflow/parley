@@ -1,7 +1,8 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js"
+import { policyFor } from "@parley/pacing"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
-import { UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
+import { MAX_GAP_SECONDS, UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook, type WebhookHeader } from "../sessions/webhooks.ts"
 import {
@@ -552,7 +553,7 @@ export function outboxPage(opts: { user: Viewer; scheduled: Outbound[]; connecti
 // ---- Agents -------------------------------------------------------------------------------------------------------
 
 const TOOL_LABEL: Record<string, string> = {
-  read_inbox: "read your inbox", list_chats: "listed your chats", send_message: "queued a message", connect: "started linking a channel",
+  read_inbox: "read your inbox", list_chats: "listed your chats", search: "searched your chats", send_message: "queued a message", connect: "started linking a channel",
   connection_status: "checked a connection", list_connections: "listed connections", list_channels: "listed channels",
   send_availability: "checked when it can send", list_outbox: "read the outbox", cancel_message: "canceled a message",
   react_to_message: "queued a reaction", delete_message: "deleted a sent message", get_media: "opened a photo or file", message_status: "checked on a queued message",
@@ -916,7 +917,7 @@ const CHATS_CSS = `
 .chat .s{font-size:12.5px;color:var(--faint);margin-top:1px}
 .chat .when{font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap}
 .chat.off .t,.chat.off .glyph{opacity:.45}
-.chat .s.miss{color:var(--bad)}
+.chat .s.miss{color:var(--bad)}.chat .s.warn{color:var(--warn)}
 .ign{font:inherit;font-size:12.5px;font-weight:500;height:28px;padding:0 12px;border-radius:999px;border:0;background:var(--glass);box-shadow:var(--glass-ring);color:var(--text-2);cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease)}
 .ign:hover{color:var(--text);background:var(--glass-hi)}
 .chat.off .ign{background:color-mix(in srgb,var(--sand) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sand) 35%,transparent);color:var(--sand)}
@@ -943,7 +944,7 @@ const CHATS_CSS = `
 .empty .orb{margin-bottom:16px}
 `
 
-/** Today's sending, and this number's settings: how many messages a day, read receipts, typing. */
+/** Today's sending, and this number's settings: how many messages a day, the gap between them, read receipts, typing, active hours. */
 /** A switch in form `form` that saves it as soon as it's flipped. */
 const toggle = (form: string, name: string, on: boolean, label: string) =>
   `<label class="sw"><input type="checkbox" form="${form}" name="${name}" value="on"${on ? " checked" : ""} onchange="this.form.submit()">${label}</label>`
@@ -951,19 +952,24 @@ const toggle = (form: string, name: string, on: boolean, label: string) =>
 function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number): string {
   // The switches sit in the daily limit's row but belong to their own form (forms can't nest).
   const behave = `behave-${esc(conn.id)}`
+  const hours = `hours-${esc(conn.id)}`
+  const dflt = policyFor(conn.channel).gapSeconds
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
       <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required onchange="this.form.requestSubmit()"></label>
+      <label class="field lim" title="At least this many seconds between two sends, up to twice that at random. Empty keeps the default (${dflt.min}–${dflt.max}s)."><span>Gap between sends (s)</span><input class="input" name="gap_seconds" type="number" min="0" max="${MAX_GAP_SECONDS}" step="1" value="${conn.gapSeconds ?? ""}" placeholder="${dflt.min}–${dflt.max}" onchange="this.form.requestSubmit()"></label>
       <noscript><button class="btn line sm" type="submit">Save</button></noscript>
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}
         ${toggle(behave, "typing", conn.typing, "Typing")}
+        ${toggle(hours, "active_hours", conn.activeHours, "Active hours")}
         <noscript><button class="btn line sm" type="submit" form="${behave}">Save</button></noscript>
       </span>
     </form>
     <form method="post" action="/app/connections/${esc(conn.id)}/behaviour" id="${behave}" hidden></form>
+    <form method="post" action="/app/connections/${esc(conn.id)}/locale" id="${hours}" hidden><input type="hidden" name="hours_form" value="1"></form>
   </div>`
 }
 
@@ -972,6 +978,11 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
  * agents shouldn't see (people and groups, most recent first, like their phone). Each tap saves at once; filtering is
  * client-side.
  */
+/** Why a visible chat says "no history yet". */
+const NO_HISTORY = "Parley has no message from this chat to count back from (it was ignored while they came in), so agents can't load its earlier messages from your phone yet. They can as soon as a new message arrives in it."
+/** Asked before a chat is ignored: what goes, and what comes back if it's turned on again. */
+const IGNORE_CONFIRM = "Ignore {name}?\n\nAgents won't see this chat: they can't read it, search it, get its webhooks or send to it. Parley keeps its messages privately, so turning it back on brings its history back."
+
 export function chatsPage(opts: { user: Viewer; connection: Connection; chats: ChatRow[]; agentCount: number; saved: boolean; today: DailyUsage | null; queued: number; webhooks: WebhooksView }): string {
   const { connection: conn } = opts
   // Someone WhatsApp has only given a private id for, with no name or number yet, isn't listed: an "Unknown contact" row
@@ -999,9 +1010,13 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
     const sub = callLast ? `${c.kind === "group" ? "Group call" : callWord}${c.kind === "direct" && phoneOf(c.id) && c.name ? ` · ${phoneOf(c.id)}` : ""}`
       : c.lastCallAt ? `${base} · called ${ago(c.lastCallAt)}` : base
     const search = `${label} ${phoneOf(c.id)}`.toLowerCase()
-    return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-sub="${esc(sub)}" data-q="${esc(search)}">
+    // Active, visible, but Parley has no message from it to count back from (it was ignored while they came in):
+    // agents can't load its earlier history until a new message arrives. Say so, rather than let an agent come up empty.
+    const noHistory = c.synced && isRecent(c) && !callLast && c.canLoadHistory === false
+    const shown = noHistory ? `${sub} · no history yet` : sub
+    return `<div class="chat${c.synced ? "" : " off"}" data-id="${esc(c.id)}" data-kind="${c.kind}" data-recent="${isRecent(c) ? 1 : 0}" data-hist="${c.canLoadHistory === false ? 0 : 1}" data-sub="${esc(sub)}" data-q="${esc(search)}">
       ${c.kind === "group" ? `<span class="glyph" style="width:28px;height:28px">${icon("users", 13)}</span>` : glyph(label, 28, true)}
-      <div class="grow"><p class="t">${esc(label)}</p><p class="s${callLast && c.lastCallKind === "missed" ? " miss" : ""}">${c.synced ? esc(sub) : "ignored · agents never see it"}</p></div>
+      <div class="grow"><p class="t">${esc(label)}</p><p class="s${callLast && c.lastCallKind === "missed" ? " miss" : ""}${noHistory ? " warn" : ""}"${noHistory ? ` title="${esc(NO_HISTORY)}"` : ""}>${c.synced ? esc(shown) : "ignored · agents never see it"}</p></div>
       ${c.lastMessageAt ? `<span class="when">${ago(c.lastMessageAt)}</span>` : ""}
       <button type="button" class="ign">${c.synced ? "Ignore" : "Ignored"}</button>
     </div>`
@@ -1026,7 +1041,7 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
       ${sendingPrefs(conn, opts.today, opts.queued)}
       ${webhooksSection(conn.id, number || name, opts.webhooks)}
       <div class="sec-h chats-h"><span class="label">Chats</span></div>
-      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Ignore a chat and Parley deletes what it stored from it, and never keeps its messages.</p>
+      <p class="lede">Everything on ${esc(name)} syncs to your agents except what you ignore. Agents never see a chat you ignore: they can't read it, search it, get its webhooks or send to it. Parley keeps its messages privately, so if you turn it back on, its history is there.</p>
       ${chats.length ? `<div class="tools">
           <div class="search">${icon("search", 14)}<input class="input" id="q" type="search" placeholder="Search people and groups" autocomplete="off"></div>
           <div class="tags" id="tags">
@@ -1071,11 +1086,15 @@ export function chatsPage(opts: { user: Viewer; connection: Connection; chats: C
         // Ignore / un-ignore saves at once; only this chat changes on the server.
         let saving=0;
         list.addEventListener('click',async e=>{const b=e.target.closest('.ign');if(!b)return;const r=b.closest('.chat');const ignored=!r.classList.contains('off');
+          if(ignored&&!confirm(${JSON.stringify(IGNORE_CONFIRM)}.replace('{name}',r.querySelector('.t').textContent)))return;
           b.disabled=true;saving++;
           try{const res=await fetch('/app/connections/${esc(conn.id)}/chats/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chats:[r.dataset.id],ignored})});
             if(!res.ok)throw new Error(res.status);
             r.classList.toggle('off',ignored);b.textContent=ignored?'Ignored':'Ignore';
-            r.querySelector('.s').textContent=ignored?'ignored · agents never see it':r.dataset.sub;tally()}
+            const s=r.querySelector('.s'),fresh=!ignored&&r.dataset.hist==='0';
+            s.textContent=ignored?'ignored · agents never see it':fresh?r.dataset.sub+' · no history yet':r.dataset.sub;
+            s.classList.toggle('warn',fresh);s.title=fresh?${JSON.stringify(NO_HISTORY)}:'';
+            if(ignored)r.dataset.hist='1';tally()}
           catch(x){alert("Couldn't save that. Check your connection and try again.")}
           finally{saving--;b.disabled=false}});
         apply();

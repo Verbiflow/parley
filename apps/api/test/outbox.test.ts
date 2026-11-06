@@ -142,6 +142,54 @@ test("the daily limit counts every kind together; lowering it moves the overflow
   assert.equal((await availability(sql, accountId, connectionId, T0)).today.dailyLimit, 3)
 })
 
+test("active hours are off unless turned on for the number; switching them replans the queue", async () => {
+  const { accountId, connectionId } = await linked("hours@parley.test")
+  // 3 AM in Los Angeles: outside WhatsApp's 8:00–21:00 window.
+  const night = new Date("2026-11-03T11:00:00Z")
+  await sessions.setLocale(accountId, connectionId, { timezone: "America/Los_Angeles" }, night)
+  const m = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "late" }, night)
+  assert.equal(m.message.scheduledFor, night.toISOString())
+  assert.deepEqual(m.message.waits, [])
+
+  await sessions.setLocale(accountId, connectionId, { activeHours: true }, night)
+  const held = await getOutbound(sql, accountId, m.message.id)
+  assert.ok(Date.parse(held.scheduledFor!) >= Date.parse("2026-11-03T16:00:00Z"))
+  // Saving other settings leaves the switch alone.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 50 }, night)
+  assert.equal((await getOutbound(sql, accountId, m.message.id)).scheduledFor, held.scheduledFor)
+
+  await sessions.setLocale(accountId, connectionId, { activeHours: false }, night)
+  assert.equal((await getOutbound(sql, accountId, m.message.id)).scheduledFor, night.toISOString())
+})
+
+test("the gap between sends is the number's to set; empty goes back to the channel's default", async () => {
+  const { accountId, connectionId } = await linked("gap@parley.test")
+  const gapOf = async () => {
+    const a = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "a" }, T0)
+    const b = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "b", kind: "message" }, T0)
+    return (Date.parse(b.message.scheduledFor!) - Date.parse(a.message.scheduledFor!)) / 1000
+  }
+  const before = await gapOf()
+  assert.ok(before >= 30 && before <= 150, `default gap ${before}s`)
+
+  await sessions.setLocale(accountId, connectionId, { gapSeconds: 5 }, T0)
+  // The queue is laid out again on the new gap.
+  const queued = await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })
+  const times = queued.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
+  assert.ok((times[1]! - times[0]!) / 1000 <= 10, "replanned onto the shorter gap")
+  // Saving other settings leaves the gap alone.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 200 }, T0)
+  const last = times.at(-1)!
+  const next = await sessions.enqueue(accountId, connectionId, { to: "+15552001", text: "c", kind: "message" }, T0)
+  const after = (Date.parse(next.message.scheduledFor!) - last) / 1000
+  assert.ok(after >= 5 && after <= 10, `custom gap ${after}s`)
+
+  await sessions.setLocale(accountId, connectionId, { gapSeconds: null }, T0)
+  const restored = await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })
+  const spread = restored.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
+  for (let i = 1; i < spread.length; i++) assert.ok((spread[i]! - spread[i - 1]!) / 1000 >= 30)
+})
+
 test("typing is per message: off unless asked, and handed to the channel with the send", async () => {
   const { accountId, connectionId } = await linked("typing@parley.test")
   const plain = await sessions.enqueue(accountId, connectionId, { to: "+15551001", text: "no typing" }, T0)

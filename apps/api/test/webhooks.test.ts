@@ -170,6 +170,9 @@ test("media comes with what it is and an expiring download link", async () => {
   await flush()
   const resent = received[1]!
   assert.equal(resent.body.id, received[0]!.body.id, "the same event id")
+  assert.ok(Date.parse(received[0]!.body.sent_at), "every request says when it went")
+  assert.notEqual(resent.body.sent_at, received[0]!.body.sent_at, "a resend has its own sent_at")
+  assert.equal(resent.body.created_at, received[0]!.body.created_at, "created_at stays when it happened")
   assert.equal(resent.headers["parley-delivery-id"], again.id)
   assert.equal(resent.body.data.message.text, "look")
   assert.notEqual(resent.body.data.message.media.download_url, media.download_url, "a fresh link")

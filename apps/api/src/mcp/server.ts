@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { ACTIONS, isValidTimeZone } from "@parley/pacing"
+import { ACTIONS, isValidTimeZone, policyFor } from "@parley/pacing"
 import { z } from "zod"
 import type { AppContext } from "../context.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { getConnection } from "../sessions/store.ts"
-import { markRead, newByChat, newReactions, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
-import { OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
+import { historyAnchor, markRead, newByChat, newReactions, searchChats, type InboxFilter, type NewInChat, type StoredMessage } from "../sessions/chats.ts"
+import { MAX_GAP_SECONDS, OutboxError, availability, cancel, getOutbound, listOutbound, type Outbound, type Queued } from "../sessions/outbox.ts"
 import { MediaInputError, resolveMedia } from "./media.ts"
 import { signMediaLink } from "../media-link.ts"
 import { AccountError, accountLabel, findConnection, pickConnection } from "./accounts.ts"
@@ -24,6 +24,12 @@ const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSO
 const fail = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: message }] })
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const known = (e: unknown) => e instanceof ConnectError || e instanceof OutboxError || e instanceof MediaInputError || e instanceof AccountError || e instanceof WebhookError
+
+/** The gap a connection keeps between two sends, in seconds, and whether the person chose it. */
+function sendGap(channel: string, gapSeconds: number | null) {
+  const g = gapSeconds === null ? policyFor(channel).gapSeconds : { min: gapSeconds, max: gapSeconds * 2 }
+  return { min_seconds: g.min, max_seconds: g.max, custom: gapSeconds !== null }
+}
 
 const WAIT_TEXT: Record<string, string> = {
   paused: "the connection is paused",
@@ -67,7 +73,7 @@ const deliveryOut = (d: Delivery, opts: { payload?: boolean } = {}) => ({
  * and a whole example. Handed over with the secret (create_webhook) and on list_webhooks / test_webhook.
  */
 const PAYLOAD = {
-  envelope: "Every body: { id (the event id, same as the Parley-Event-Id header), type (the event, same as Parley-Event), created_at, connection: { id, channel, account (the number, e.g. \"+65 9136 3557\") }, data }.",
+  envelope: "Every body: { id (the event id, same as the Parley-Event-Id header), type (the event, same as Parley-Event), created_at (when it happened), sent_at (when this request went: each retry and resend has its own; the id stays the same), connection: { id, channel, account (the number, e.g. \"+65 9136 3557\") }, data }.",
   data: {
     "message.received / message.sent": "data.chat { id, name, kind: \"direct\" | \"group\" }, data.message { id, from (sender id, or \"me\"), from_me, text (the text, or a media caption / placeholder like \"[photo]\"), at, media? { kind, mimetype, file_name, size, width, height, seconds, download_url (expires in an hour), download_expires_at } }",
     "reaction.added / reaction.removed": "data.chat, data.reaction { from, from_me, emoji (\"\" when removed), previous_emoji, at }, data.message { id, from, from_me, text } (the message reacted to)",
@@ -142,6 +148,26 @@ function splitNews(list: NewInChat[], here?: { chatId: string; connectionId?: st
   return { this_chat: { chat_id: here.chatId, name: mine[0]?.name ?? null, messages, reactions }, other_chats: tally(list.filter((c) => !isHere(c))) }
 }
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
+
+/** A search's words: each "quoted phrase" stays whole, everything else splits on spaces. */
+export function searchWords(query: string): string[] {
+  const words: string[] = []
+  for (const [, phrase, word] of query.matchAll(/"([^"]*)"|(\S+)/g)) {
+    const w = (phrase ?? word ?? "").trim().replace(/\s+/g, " ")
+    if (w && !words.includes(w)) words.push(w.slice(0, 100))
+  }
+  return words.slice(0, 10)
+}
+/** A query that is a phone number (or part of one, at least 3 digits): its digits, to find the chat it names. */
+export const numberIn = (query: string) => (/^[\d\s+().-]+$/.test(query) && query.replace(/\D/g, "").length >= 3 ? query.replace(/\D/g, "") : undefined)
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+/** A search bound as an ISO time: a date alone is the start of that day (UTC), or with `end`, of the day after it. */
+export function bound(value: string, end = false): string {
+  if (!DAY.test(value)) return new Date(value).toISOString()
+  const d = new Date(`${value}T00:00:00.000Z`)
+  if (end) d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString()
+}
 
 /** What send_message, react_to_message and delete_message answer: the queued row, and when it goes out. */
 function queuedView(message: Queued, replayed: boolean) {
@@ -489,6 +515,62 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     }
   )
 
+  const WHEN = z.union([z.string().date(), z.string().datetime({ offset: true })])
+  server.registerTool(
+    "search",
+    {
+      title: "Search chats and messages",
+      description: "Search like WhatsApp's search bar, across all your connected accounts (or one, or one chat): `chats` whose name (or number) matches, and `messages` whose text matches, newest first. Every word in `query` must appear, in any order, case-insensitively and anywhere in a word (\"inv\" finds \"invoice\"); put a \"quoted phrase\" in quotes to keep it whole. A photo, video or document's caption counts as its text, and a document without one matches on its file name. Narrow it by date (`after`, `before`), by who sent it (`from_me`), to attachments (`media`), to messages with links (`links`), or to ones not yet read (`only_new`); filters work without a query too (e.g. every document in a chat last week). It searches what Parley has stored: everything in the chats the account holder didn't ignore since the account was linked, plus the history WhatsApp sent at linking and anything load_history fetched. Older messages that are only on the phone aren't found; load_history fetches a chat's older ones. Searching never marks anything read or sends read receipts. To read the conversation around a match, read_inbox with its chat_id and `before` (page back to it), or load_history.",
+      inputSchema: {
+        query: z.string().max(200).optional().describe("Words to find (all of them must appear). \"Quoted phrases\" match whole. A phone number finds that person's chat."),
+        ...filters,
+        chat_id: z.string().optional().describe("Only in this chat (chat_id from list_chats or an earlier result)."),
+        after: WHEN.optional().describe("Only messages sent on or after this: a date (\"2026-10-01\", that whole day included, UTC) or an ISO time."),
+        before: WHEN.optional().describe("Only messages sent before this: a date (\"2026-10-31\", that whole day included, UTC) or an ISO time. To page back, pass the `at` of the oldest match you have."),
+        from_me: z.boolean().optional().describe("true: only what the account holder sent. false: only what others sent. Omit for both."),
+        media: z.enum(["any", "image", "video", "audio", "document", "sticker"]).optional().describe("Only messages with an attachment: \"any\", or one kind (image = photos, audio = voice notes and audio)."),
+        links: z.boolean().optional().describe("Only messages with a link in them."),
+        only_new: z.boolean().optional().describe("Only messages from the other side not yet read."),
+        limit: z.number().int().min(1).max(100).optional().describe("How many messages (default 25)."),
+      },
+    },
+    async ({ query, channel, connection_id, chat_id, after, before, from_me, media, links, only_new, limit }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const words = searchWords(query ?? "")
+        if (!words.length && !after && !before && from_me === undefined && !media && !links && !only_new) {
+          return fail("give a `query`, or a filter (after, before, from_me, media, links, only_new): with neither, read_inbox lists recent messages")
+        }
+        const from = after ? bound(after) : undefined
+        const to = before ? bound(before, true) : undefined
+        if (from && to && from >= to) return fail("`after` must be earlier than `before`")
+        const where = { ...(await scope(userId, { channel, connection_id })), chatId: chat_id }
+        const max = limit ?? 25
+        const digits = query ? numberIn(query) : undefined
+        const [messages, chats, account] = await Promise.all([
+          ctx.sessions.inbox(userId, { ...where, limit: max, before: to, search: { words, after: from, media, links, fromMe: from_me, onlyNew: only_new } }),
+          // Matching chats are only worth listing for a search across chats by words or number, as WhatsApp lists them.
+          (words.length || digits) && !chat_id ? searchChats(ctx.sql, userId, { ...where, words, digits, limit: 20 }) : Promise.resolve([]),
+          labels(userId),
+        ])
+        const oldest = messages.at(-1)?.at
+        return json({
+          ...(words.length || digits ? {
+            chats: chats.map((c) => ({ channel: c.channel, connection_id: c.connectionId, account: account.get(c.connectionId) ?? null, chat_id: c.id, name: c.name, kind: c.kind, last_message_at: c.lastMessageAt })),
+          } : {}),
+          messages: messages.map((m) => ({
+            channel: m.channel, connection_id: m.connectionId, account: account.get(m.connectionId) ?? null, chat_id: m.chatId, chat_name: m.chatName, chat_kind: m.chatKind,
+            ...messageOut(m),
+          })),
+          ...(messages.length === max && oldest ? { more: `There may be more matches: search again with before: "${oldest}" for older ones.` } : {}),
+          ...(!messages.length && !chats.length ? { note: "Nothing matched in the messages Parley has stored. Older messages may only be on the phone: try load_history on the chat once. If it can't fetch them, ask the account holder to export the chat from WhatsApp (in the chat: ⋮ → Export chat, on the phone or WhatsApp Web) and share the file." } : {}),
+        })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not search")
+      }
+    }
+  )
+
   server.registerTool(
     "get_notifications",
     {
@@ -518,7 +600,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Send a message",
       description:
-        "Queue a message on a connected channel: text, or a photo, video, GIF, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: inside the account's local active hours, with gaps between sends, breaks after bursts, and daily limits that grow as a new account warms up. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
+        "Queue a message on a connected channel: text, or a photo, video, GIF, voice note or document (pass `media`; `text` is then its caption). Parley sends at a human pace to keep the account safe: with gaps between sends, breaks after bursts, and a daily limit; if the person turned on active hours for the number, only inside its local active hours. The reply says when it will go out (scheduled_for) and why it isn't sooner (waits). Replies in existing conversations go ahead of conversation openers that hit their limit.",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the \`to\` chat.`),
         to: z.string().describe("Recipient on the channel: a chat_id from list_chats, or a phone number for WhatsApp."),
@@ -562,11 +644,11 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "load_history",
     {
       title: "Load a chat's history",
-      description: "Get the last `count` messages of a chat from the account holder's phone, including ones Parley doesn't have (from before the account was linked, or that couldn't be read when they came in), with their attachments and reactions. Waits up to about 20 seconds for the phone, which must be online; returns the chat's last messages either way, and `answered` says whether the phone replied. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false — and then, by default, sends read receipts on WhatsApp too (see read_receipts).",
+      description: "Fetch a chat's older messages from the account holder's phone, as WhatsApp's own \"get older messages from your phone\" does: the `count` messages before the oldest one Parley has (e.g. from before the account was linked, or while the chat was ignored), with their attachments and reactions. Call it again to go further back, `count` at a time. Waits up to about 20 seconds for the phone, which must be online; `answered` says whether it replied. Answered, it returns the older messages it fetched; not, the chat's latest messages as Parley has them. Afterwards they're in read_inbox too. Like read_inbox, it says what's new since the chat was last read (`new_since_last_read`, `new: true`, `new_reactions`; older history fetched now isn't new) and marks what it returns as read unless mark_read is false — and then, by default, sends read receipts on WhatsApp too (see read_receipts).",
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} Left out, it's the account that has the chat.`),
         chat_id: z.string().describe("The chat (chat_id from list_chats or read_inbox)."),
-        count: z.number().int().min(1).max(50).optional().describe("How many of the latest messages (default 20, at most 50)."),
+        count: z.number().int().min(1).max(50).optional().describe("How many older messages to fetch (default 20, at most 50)."),
         mark_read: MARK_READ,
         read_receipts: READ_RECEIPTS,
       },
@@ -576,6 +658,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
       try {
         const conn = await pickConnection(ctx, userId, connection_id, { chatId: chat_id })
         const { answered, messages } = await ctx.sessions.loadHistory(userId, conn.id, chat_id, count ?? 20)
+        const oldest = answered ? undefined : await historyAnchor(ctx.sql, conn.id, chat_id).catch(() => undefined)
         const account = new Map([[conn.id, accountLabel(conn)]])
         const fresh = await newSince(userId, { connectionId: conn.id, chatId: chat_id }, account)
         const shownNew = messages.filter((m) => m.isNew).length
@@ -586,7 +669,10 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
           ...(receipts ? { read_receipts: receipts } : {}),
           ...(fresh.newReactionsOut.length ? { new_reactions: fresh.newReactionsOut } : {}),
           ...(fresh.summary.messages > shownNew ? { more_new: `${plural(fresh.summary.messages - shownNew, "new message")} didn't fit in \`count\`: read_inbox with this chat_id and a bigger limit shows them.` } : {}),
-          ...(answered ? {} : { note: "The phone didn't answer in time (it may be offline or asleep). These are the messages Parley already has; try again later." }),
+          ...(answered ? {} : {
+            history_available: false,
+            note: `Older history isn't available right now: the account holder's phone didn't send it (it may be offline, or WhatsApp on the phone may be declining history requests for a while; retrying soon rarely helps, so don't keep retrying). ${oldest ? `Parley's messages in this chat go back to ${oldest.at.slice(0, 10)}.` : ""} These are the latest messages Parley has. For anything older, tell the account holder Parley can't fetch it and ask them to export the chat from WhatsApp (in the chat: ⋮ → Export chat, on the phone or WhatsApp Web) and share the file.`.replace("  ", " "),
+          }),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not load the history")
@@ -721,13 +807,37 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
         return json({
           connection_id: conn.id, account: accountLabel(conn), timezone: connection.timezone, halted: connection.haltedReason,
           paused_until: connection.pausedUntil && connection.pausedUntil > new Date() ? connection.pausedUntil.toISOString() : null,
-          sent_today: today.sentToday, daily_limit: today.dailyLimit,
+          sent_today: today.sentToday, daily_limit: today.dailyLimit, gap: sendGap(connection.channel, connection.gapSeconds),
           actions: Object.fromEntries(Object.entries(actions).map(([k, a]) => [k, {
             can_send_now: a!.canSendNow, earliest_at: a!.earliestAt, waits: a!.waits, reason: a!.reason, used_today: a!.usedToday,
           }])),
         })
       } catch (e) {
         return fail(known(e) ? (e as Error).message : "could not read availability")
+      }
+    }
+  )
+
+  server.registerTool(
+    "set_send_gap",
+    {
+      title: "Set the gap between sends",
+      description:
+        `Set how long a connection waits between two sends: at least \`gap_seconds\`, up to twice that at random so it doesn't look scripted. 0 sends back to back; null goes back to the channel's default (WhatsApp 30–150s). Messages already queued are rescheduled on the new gap. A short gap makes the account look less human and raises the chance the platform restricts it, so change it only when the person asks. Openers to new contacts, breaks after bursts and the daily limit still apply.`,
+      inputSchema: {
+        connection_id: z.string().optional().describe(ACCOUNT_REF),
+        gap_seconds: z.number().int().min(0).max(MAX_GAP_SECONDS).nullable().describe(`Least seconds between two sends, 0–${MAX_GAP_SECONDS}; null for the channel's default.`),
+      },
+    },
+    async ({ connection_id, gap_seconds }, extra) => {
+      const { userId } = principalOf(extra)
+      try {
+        const conn = await pickConnection(ctx, userId, connection_id)
+        await ctx.sessions.setLocale(userId, conn.id, { gapSeconds: gap_seconds })
+        const { connection } = await availability(ctx.sql, userId, conn.id, new Date())
+        return json({ connection_id: conn.id, account: accountLabel(conn), gap: sendGap(connection.channel, connection.gapSeconds) })
+      } catch (e) {
+        return fail(known(e) ? (e as Error).message : "could not set the gap")
       }
     }
   )
@@ -829,7 +939,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "create_webhook",
     {
       title: "Create a webhook",
-      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). If the receiver checks who's calling with a key of its own (an Authorization header or API key its setup gave you), pass it in headers. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
+      description: `Have Parley POST to a URL the moment something happens on one linked number, instead of polling read_inbox. Each webhook belongs to one number; add one per number to hear from several. Events: ${EVENTS_DOC}. Only real, live changes are sent: never history, backfills, or a message seen twice; chats the account holder ignored never send. Each request is a signed JSON POST: { id, type, created_at, sent_at, connection: { id, channel, account }, data }; for messages the text is at data.message.text (the answer's \`payload_format\` has every event's shape and an example: build the receiver from it). If the receiver checks who's calling with a key of its own (an Authorization header or API key its setup gave you), pass it in headers. The answer carries the signing secret: keep it, it isn't shown again (update_webhook with rotate_secret makes a new one). The account holder sees and can change every webhook on that number's page on the Parley dashboard. At most ${MAX_WEBHOOKS} per number.`,
       inputSchema: {
         connection_id: z.string().optional().describe(`${ACCOUNT_REF} The webhook hears only from this number.`),
         url: z.string().max(2000).describe(URL_DOC),
@@ -922,7 +1032,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     "resend_webhook_delivery",
     {
       title: "Resend a webhook delivery",
-      description: "Send a past delivery's event again (delivery ids are in list_webhooks), e.g. after fixing a receiver. It goes as a new delivery to the same webhook with the same body and event id (a receiver that dedupes on Parley-Event-Id sees a repeat) and a fresh media download link. Waits up to about 10 seconds for the outcome. The webhook must be on (test events go either way).",
+      description: "Send a past delivery's event again (delivery ids are in list_webhooks), e.g. after fixing a receiver. It goes as a new delivery to the same webhook with the same body and event id (a receiver that dedupes on Parley-Event-Id sees a repeat; sent_at shows when this one went) and a fresh media download link. Waits up to about 10 seconds for the outcome. The webhook must be on (test events go either way).",
       inputSchema: { delivery_id: z.string() },
     },
     async ({ delivery_id }, extra) => {
