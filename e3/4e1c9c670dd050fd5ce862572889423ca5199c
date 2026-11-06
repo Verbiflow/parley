@@ -1,0 +1,26 @@
+scripts/patch-baileys.ts
+  s_491f6c16d9e9bc::t_0e84a7c91fc1fa 6-7
+  s_491f6c16d9e9bc::t_5eaa7d4aabb42d 61-76
+packages/channels/test/whatsapp-presence.test.ts
+  s_491f6c16d9e9bc::t_6e3b466b2a4e6f 1-18
+packages/auth/migrations/0032_secret_bytes.sql
+  s_491f6c16d9e9bc::t_b684634ee5f0f4 1-4
+packages/channels/src/whatsapp/index.ts
+  s_491f6c16d9e9bc::t_b2093cd194f692 636-638
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e34e1c9c670dd050fd5ce862572889423ca5199c",
+  "prompts": {},
+  "sessions": {
+    "s_491f6c16d9e9bc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5461959-67de-41ae-a3dd-8de4b924c0ec",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
