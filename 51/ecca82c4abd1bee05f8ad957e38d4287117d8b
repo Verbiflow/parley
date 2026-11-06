@@ -1,0 +1,29 @@
+Dockerfile
+  s_2790f3309f6211::t_feb4333c29cabd 1-17
+.dockerignore
+  s_2790f3309f6211::t_feb4333c29cabd 1-7
+apps/api/src/stdio.ts
+  s_2790f3309f6211::t_bb5578a455fc8a 1-27
+apps/api/src/app.ts
+  s_2790f3309f6211::t_a28235991f8b1a 115-118
+apps/api/test/oauth-mcp.test.ts
+  s_2790f3309f6211::t_9fe8e218f7a8f6 55-62
+glama.json
+  s_2790f3309f6211::t_3779391cebb30e 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "51ecca82c4abd1bee05f8ad957e38d4287117d8b",
+  "prompts": {},
+  "sessions": {
+    "s_2790f3309f6211": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c2f9d3da-a0ef-422f-a2bc-f42890299b19",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
