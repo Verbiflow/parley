@@ -31,6 +31,7 @@ test("connect → link → complete → connected → send; creds are sealed and
   // the user completes the link
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
 
   // send works on the live connection
   const sent = await sessions.send(account.id, connectionId, "+15550100", "hi")

@@ -18,6 +18,7 @@ async function linked(email: string) {
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   return { accountId: account.id, connectionId }
 }
 

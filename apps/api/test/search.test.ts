@@ -16,6 +16,7 @@ async function linked(email: string) {
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(connectionId, [
     { id: ANA, name: "Ana Lim", kind: "direct" },
     { id: "team@g.us", name: "Design Team", kind: "group" },

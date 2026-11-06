@@ -14,6 +14,7 @@ async function linked(email: string) {
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }, { id: "team", name: "Team", kind: "group" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 2)
   return { accountId: account.id, connectionId }
@@ -66,7 +67,7 @@ test("what's new since last read: counted per chat, flagged, marked read by read
 
   // The same reaction delivered again is old news; a changed one is new.
   fake.simulator.react(connectionId, [react("ana", "👍", 4)])
-  await new Promise((r) => setTimeout(r, 50))
+  await sessions.settled()
   assert.deepEqual((await chats()).by.ana, { messages: 0, reactions: 0 })
   fake.simulator.react(connectionId, [react("ana", "🎉", 5)])
   await waitUntil(chats, (c) => c.by.ana.reactions === 1)
@@ -205,6 +206,7 @@ test("read receipts: sent by default when reading marks read, skippable per call
   await waitUntil(() => sessions.status(accountId, second.connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(second.connectionId)
   await waitUntil(() => sessions.status(accountId, second.connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(second.connectionId, [{ id: "cy", name: "Cy", kind: "direct" }])
   fake.simulator.deliver(second.connectionId, { id: "s1", threadId: "cy", from: "cy", text: "hello", at: at(4) })
   await waitUntil(() => sessions.inbox(accountId, { limit: 10, connectionId: second.connectionId }), (ms) => ms.length === 1)

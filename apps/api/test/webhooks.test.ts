@@ -32,6 +32,7 @@ async function linked(email: string, handle = "6591363557@s.whatsapp.net") {
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId, handle)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }, { id: "team", name: "Team", kind: "group" }, { id: "quiet", name: "Quiet", kind: "direct" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 3)
   return { accountId: account.id, connectionId }
@@ -39,9 +40,11 @@ async function linked(email: string, handle = "6591363557@s.whatsapp.net") {
 
 /** Let the connection's queued events land, then run the delivery loop once (after any pass already in flight). */
 async function flush(now?: Date) {
-  await new Promise((r) => setTimeout(r, 60))
-  const first = await sessions.deliverWebhooks(now)
-  return first + await sessions.deliverWebhooks(now)
+  await sessions.settled()
+  // A millisecond on: Postgres stamps a delivery in microseconds, so one queued just now can read as a touch ahead of a JS Date.
+  const at = now ?? new Date(Date.now() + 1)
+  const first = await sessions.deliverWebhooks(at)
+  return first + await sessions.deliverWebhooks(at)
 }
 const reset = () => { received.length = 0; answers = [] }
 const pending = async (accountId: string) => (await ctx.webhooks.deliveries(sql, accountId, { limit: 100 })).filter((d) => d.status === "pending" || d.status === "sending")

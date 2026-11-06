@@ -33,6 +33,7 @@ async function linked(email: string, channel = "fake-wa", sim = fake.simulator) 
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   sim.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   sim.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }, { id: "team", name: "Team", kind: "group" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 2)
   return { accountId: account.id, connectionId }
@@ -128,6 +129,7 @@ test("MCP: read_inbox shows media and reactions, get_media returns a viewable im
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 1)
   fake.simulator.deliver(connectionId, { id: "m1", threadId: "ana", from: "ana", text: "[photo]", media: { ...photo, ref: "mcp-photo" } })
@@ -185,6 +187,7 @@ test("files of every kind: videos give their preview and a download link, text f
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   fake.simulator.announceChats(connectionId, [{ id: "ana", name: "Ana", kind: "direct" }])
   await waitUntil(() => sessions.chats(account.id, connectionId), (c) => c.length === 1)
   const thumb = Buffer.from("tiny-jpeg").toString("base64")
@@ -284,7 +287,7 @@ test("load_history: asks the phone for the N before the oldest message Parley ha
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
   // Seen once more without a preview: what's stored stays.
   fake.simulator.deliver(connectionId, { id: "p", threadId: "ana", from: "ana", text: "[photo]", at: at(0), media: { ...photo, ref: "later" } })
-  await new Promise((r) => setTimeout(r, 50))
+  await sessions.settled()
   assert.equal((await sessions.mediaInfo(accountId, connectionId, "ana", "p")).thumbnail, "dGh1bWI=")
 
   // The next call counts back from the oldest message now stored, further back. Unanswered, it returns the latest.
