@@ -22,6 +22,15 @@ const ctx = new Proxy({
   },
 })
 
+/** Tools that need no account or database, so they really run here (a registry's "try it" gets a real answer). */
+const LOCAL_TOOLS = new Set(["list_channels"])
+
 const server = buildMcpServer(ctx)
-server.server.setRequestHandler(CallToolRequestSchema, async () => ({ isError: true, content: [{ type: "text", text: NOTICE }] }))
+type Handler = (request: { params: { name: string } }, extra: unknown) => Promise<unknown>
+const handlers = (server.server as unknown as { _requestHandlers: Map<string, Handler> })._requestHandlers
+const realCall = handlers.get("tools/call")
+server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
+  realCall && LOCAL_TOOLS.has(request.params.name)
+    ? (realCall(request, extra) as never)
+    : { isError: true, content: [{ type: "text", text: NOTICE }] })
 await server.connect(new StdioServerTransport())
