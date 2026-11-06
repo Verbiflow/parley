@@ -15,6 +15,8 @@ export type Connection = {
   activeHours: boolean
   /** Least seconds between two sends (up to twice that at random); null keeps the channel's default. */
   gapSeconds: number | null
+  /** New contacts a minute the number may open a conversation with; null keeps the channel's default. */
+  openersPerMinute: number | null
   /**
    * How agents behave on this number, both on unless the person turns them off: reading a chat marks it read on the
    * channel too (blue ticks, if the number's own WhatsApp setting allows), and a message shows "typing…" first. An
@@ -30,13 +32,13 @@ export type Connection = {
  * many messages it may send a day, whether it keeps to active hours, and the gap between sends (null for the
  * channel's default; left out to keep it).
  */
-export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined }
+export type Locale = { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined; openersPerMinute?: number | null | undefined }
 
 type Row = {
   id: string; account_id: string; channel: string; status: ConnectionStatus; handle: string | null; display_name: string | null; created_at: Date; linked_at: Date | null; chats_chosen_at: Date | null
   history_started_at: Date | null; history_progress: number | null; history_done_at: Date | null
   timezone: string; country: string | null; halted_reason: string | null; paused_until: Date | null
-  daily_limit: number; active_hours: boolean; gap_seconds: number | null
+  daily_limit: number; active_hours: boolean; gap_seconds: number | null; openers_per_minute: number | null
   read_receipts: boolean; typing: boolean
   avatar: string | null
 }
@@ -45,9 +47,9 @@ const row = (r: Row): Connection => ({
   createdAt: r.created_at.toISOString(), linkedAt: r.linked_at ? r.linked_at.toISOString() : null, chatsChosen: r.chats_chosen_at !== null,
   history: { startedAt: r.history_started_at?.toISOString() ?? null, progress: r.history_progress ?? null, doneAt: r.history_done_at?.toISOString() ?? null },
   timezone: r.timezone, country: r.country, haltedReason: r.halted_reason, pausedUntil: r.paused_until && r.paused_until > new Date() ? r.paused_until.toISOString() : null,
-  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, openersPerMinute: r.openers_per_minute, readReceipts: r.read_receipts, typing: r.typing, avatar: r.avatar,
 })
-const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, active_hours, gap_seconds, read_receipts, typing, avatar"
+const COLUMNS = "id, account_id, channel, status, handle, display_name, created_at, linked_at, chats_chosen_at, history_started_at, history_progress, history_done_at, timezone, country, halted_reason, paused_until, daily_limit, active_hours, gap_seconds, openers_per_minute, read_receipts, typing, avatar"
 
 export async function createConnection(sql: Sql, accountId: string, channel: string, locale: Locale = {}): Promise<Connection> {
   const [r] = await sql<Row>(
@@ -161,7 +163,7 @@ export async function carryOver(sql: Sql, id: string, old: string[]): Promise<vo
   // zone too, unless this link was given one (a new link starts on UTC). What's queued stays with the old link.
   await sql(
     `update parley.connection n set
-       daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds,
+       daily_limit = o.daily_limit, active_hours = o.active_hours, gap_seconds = o.gap_seconds, openers_per_minute = o.openers_per_minute,
        read_receipts = o.read_receipts, typing = o.typing,
        timezone = case when n.timezone = 'UTC' then o.timezone else n.timezone end,
        country = coalesce(n.country, o.country), updated_at = now()

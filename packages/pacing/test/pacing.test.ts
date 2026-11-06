@@ -97,7 +97,9 @@ test("a day's quota spreads out instead of landing in the first hour", () => {
 })
 
 test("activity comes in bursts with breaks between them", () => {
-  const slots = fill(whatsapp, "message", 200, TUESDAY_10AM)
+  // Slow gaps, so 200 sends outlast several bursts (at WhatsApp's default few seconds they'd fit in one).
+  const slow: PacingPolicy = { ...whatsapp, gapSeconds: { min: 30, max: 150 } }
+  const slots = fill(slow, "message", 200, TUESDAY_10AM)
   let burstStart = slots[0]!.at.getTime()
   let breaks = 0
   for (let i = 1; i < slots.length; i++) {
@@ -106,7 +108,7 @@ test("activity comes in bursts with breaks between them", () => {
       breaks++
       burstStart = slots[i]!.at.getTime()
     } else {
-      assert.ok(slots[i]!.at.getTime() - burstStart <= whatsapp.burstMinutes.max * MINUTE + whatsapp.gapSeconds.max * 1000)
+      assert.ok(slots[i]!.at.getTime() - burstStart <= slow.burstMinutes.max * MINUTE + slow.gapSeconds.max * 1000)
     }
   }
   assert.ok(breaks > 3)

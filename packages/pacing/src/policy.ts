@@ -45,10 +45,11 @@ const WEEKDAYS = [1, 2, 3, 4, 5]
 export const POLICIES: Record<string, PacingPolicy> = {
   whatsapp: {
     activeHours: { start: 8, end: 21 }, activeDays: EVERY_DAY,
-    gapSeconds: { min: 30, max: 150 }, burstMinutes: { min: 20, max: 45 }, breakMinutes: { min: 10, max: 30 },
+    // Fast by default: a few seconds between sends, two new contacts a minute. Each number can slow down in its settings.
+    gapSeconds: { min: 1, max: 3 }, burstMinutes: { min: 20, max: 45 }, breakMinutes: { min: 10, max: 30 },
     actions: {
       message: { daily: 300, warmup: { start: 40, growth: 1.25 } },
-      first_message: { daily: 25, spacingMinutes: { min: 10, max: 30 }, warmup: { start: 3, growth: 1.2 } },
+      first_message: { daily: 25, spacingMinutes: { min: 0.5, max: 0.5 }, warmup: { start: 3, growth: 1.2 } },
     },
   },
   linkedin: {
@@ -78,7 +79,7 @@ export const POLICIES: Record<string, PacingPolicy> = {
   },
 }
 
-/** A channel without its own policy (a new integration, a test fake) gets WhatsApp's: conservative and every day. */
+/** A channel without its own policy (a new integration, a test fake) gets WhatsApp's. */
 export const policyFor = (channel: string): PacingPolicy => POLICIES[channel] ?? POLICIES.whatsapp!
 
 /** On LinkedIn a stranger is reached with a connection request; elsewhere opening a conversation is a first message. */

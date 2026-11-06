@@ -2,7 +2,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js"
 import { policyFor } from "@parley/pacing"
 import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
-import { MAX_GAP_SECONDS, UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
+import { MAX_GAP_SECONDS, MAX_OPENERS_PER_MINUTE, UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
 import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook, type WebhookHeader } from "../sessions/webhooks.ts"
 import {
@@ -954,12 +954,15 @@ function sendingPrefs(conn: Connection, today: DailyUsage | null, queued: number
   const behave = `behave-${esc(conn.id)}`
   const hours = `hours-${esc(conn.id)}`
   const dflt = policyFor(conn.channel).gapSeconds
+  const opening = policyFor(conn.channel).actions[conn.channel === "linkedin" ? "invite" : "first_message"]?.spacingMinutes
+  const dfltOpeners = opening ? Math.round((1 / opening.max) * 10) / 10 : null
   const used = today ? `<span class="m">${bar(today.sentToday, today.dailyLimit)}&nbsp;&nbsp;${today.sentToday}<span class="faint"> / ${today.dailyLimit} sent today</span></span>` : ""
   return `<div class="prefs">
     <div class="today">${used}${queued ? `<a href="/app/outbox">${queued} queued</a>` : `<span class="faint">nothing queued</span>`}</div>
     <form method="post" action="/app/connections/${esc(conn.id)}/locale" class="pf">
       <label class="field lim"><span>Daily sending limit</span><input class="input" name="daily_limit" type="number" min="1" max="1000" step="1" value="${conn.dailyLimit}" required onchange="this.form.requestSubmit()"></label>
       <label class="field lim" title="At least this many seconds between two sends, up to twice that at random. Empty keeps the default (${dflt.min}–${dflt.max}s)."><span>Gap between sends (s)</span><input class="input" name="gap_seconds" type="number" min="0" max="${MAX_GAP_SECONDS}" step="1" value="${conn.gapSeconds ?? ""}" placeholder="${dflt.min}–${dflt.max}" onchange="this.form.requestSubmit()"></label>
+      <label class="field lim" title="How many people who have never talked to this number it may message per minute. Replies and follow-ups in a chat aren't counted. Empty keeps the default${dfltOpeners ? ` (${dfltOpeners} a minute)` : ""}."><span>New contacts per minute</span><input class="input" name="openers_per_minute" type="number" min="1" max="${MAX_OPENERS_PER_MINUTE}" step="1" value="${conn.openersPerMinute ?? ""}" placeholder="${dfltOpeners ?? ""}" onchange="this.form.requestSubmit()"></label>
       <noscript><button class="btn line sm" type="submit">Save</button></noscript>
       <span class="sws">
         ${toggle(behave, "read_receipts", conn.readReceipts, "Read receipts")}

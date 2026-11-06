@@ -8,7 +8,7 @@ import { workosClient, redirectUri } from "./workos.ts"
 import { landingPage, dashboardPage, agentsPage, settingsPage, chatsPage, outboxPage, networkPage, activityPage, activityFeed, ACTIVITY_PER_PAGE, unfinishedLink, type ActivityFilter, type ConnectionSummary, type WebhooksView } from "./pages.ts"
 import { ConnectError } from "../sessions/actor.ts"
 import { setIgnored } from "../sessions/chats.ts"
-import { MAX_DAILY_LIMIT, MAX_GAP_SECONDS, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
+import { MAX_DAILY_LIMIT, MAX_GAP_SECONDS, MAX_OPENERS_PER_MINUTE, OutboxError, availability, cancel, getOutbound, listActivity, listOutbound, resume, type ActivityStatus } from "../sessions/outbox.ts"
 import { ExitError, PRESET_LIST } from "../sessions/exits.ts"
 import { carryOver, setBehaviour } from "../sessions/store.ts"
 import { WebhookError, moveWebhooks } from "../sessions/webhooks.ts"
@@ -236,6 +236,9 @@ export function webRoutes(ctx: AppContext): Hono {
     const gapField = form.get("gap_seconds")
     const gapText = gapField === null ? null : String(gapField).trim()
     const gap = gapText ? Number(gapText) : NaN
+    const openersField = form.get("openers_per_minute")
+    const openersText = openersField === null ? null : String(openersField).trim()
+    const openers = openersText ? Number(openersText) : NaN
     await ctx.sessions.setLocale(userId, c.req.param("id"), {
       timezone: isValidTimeZone(timezone) && timezone ? timezone : undefined,
       country: /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : undefined,
@@ -243,6 +246,7 @@ export function webRoutes(ctx: AppContext): Hono {
       // An unchecked box sends nothing, so the active-hours form says it carries the switch.
       activeHours: form.get("hours_form") === "1" ? form.get("active_hours") === "on" : undefined,
       gapSeconds: gapText === null ? undefined : gapText === "" ? null : Number.isInteger(gap) && gap >= 0 && gap <= MAX_GAP_SECONDS ? gap : undefined,
+      openersPerMinute: openersText === null ? undefined : openersText === "" ? null : Number.isInteger(openers) && openers >= 1 && openers <= MAX_OPENERS_PER_MINUTE ? openers : undefined,
     }).catch((e) => {
       if (!(e instanceof OutboxError)) throw e
     })

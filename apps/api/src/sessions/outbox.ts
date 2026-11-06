@@ -36,18 +36,20 @@ export type PacedConnection = {
   activeHours: boolean
   /** Least seconds between two sends (up to twice that at random); null keeps the channel's default. The person sets it. */
   gapSeconds: number | null
+  /** New contacts a minute: how often the account may open a conversation; null keeps the channel's default. The person sets it. */
+  openersPerMinute: number | null
 }
 
 type ConnRow = {
   id: string; account_id: string; channel: string; status: string; timezone: string; country: string | null
   paused_until: Date | null; action_pauses: Partial<Record<ActionKind, string>>; consecutive_rate_limits: number; halted_reason: string | null
-  daily_limit: number; active_hours: boolean; gap_seconds: number | null
+  daily_limit: number; active_hours: boolean; gap_seconds: number | null; openers_per_minute: number | null
 }
-const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit, active_hours, gap_seconds"
+const CONN_COLUMNS = "id, account_id, channel, status, timezone, country, paused_until, action_pauses, consecutive_rate_limits, halted_reason, daily_limit, active_hours, gap_seconds, openers_per_minute"
 const conn = (r: ConnRow): PacedConnection => ({
   id: r.id, accountId: r.account_id, channel: r.channel, status: r.status, timezone: r.timezone, country: r.country,
   pausedUntil: r.paused_until, actionPauses: r.action_pauses, consecutiveRateLimits: r.consecutive_rate_limits, haltedReason: r.halted_reason,
-  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds,
+  dailyLimit: r.daily_limit, activeHours: r.active_hours, gapSeconds: r.gap_seconds, openersPerMinute: r.openers_per_minute,
 })
 
 /**
@@ -125,16 +127,23 @@ type Context = { policy: PacingPolicy; slots: Slot[] }
 
 /** The one daily limit (`dailyLimit`) replaced the per-kind warmup ramp; pushback still pauses and backs off. */
 function pacingContext(c: PacedConnection, slots: Slot[]): Context {
-  const policy = policyFor(c.channel)
-  if (c.gapSeconds === null) return { policy, slots }
-  return { policy: { ...policy, gapSeconds: { min: c.gapSeconds, max: c.gapSeconds * 2 } }, slots }
+  let policy = policyFor(c.channel)
+  if (c.gapSeconds !== null) policy = { ...policy, gapSeconds: { min: c.gapSeconds, max: c.gapSeconds * 2 } }
+  if (c.openersPerMinute !== null) {
+    // Opening a conversation is a first message, or a connection request on LinkedIn.
+    const spacing = { min: 1 / c.openersPerMinute, max: 1 / c.openersPerMinute }
+    const actions = { ...policy.actions }
+    for (const k of ["first_message", "invite"] as const) if (actions[k]) actions[k] = { ...actions[k]!, spacingMinutes: spacing }
+    policy = { ...policy, actions }
+  }
+  return { policy, slots }
 }
 
-function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, notBefore?: Date | null): PlanResult {
+function plan(c: PacedConnection, ctx: Context, action: ActionKind, now: Date, notBefore?: Date | null, after?: Date | null): PlanResult {
   const pause = c.actionPauses[action] ? new Date(c.actionPauses[action]!) : null
   const pausedUntil = [c.pausedUntil, notBefore, pause].reduce<Date | null>((max, d) => (d && (!max || d > max) ? d : max), null)
   return planNext(
-    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, pausedIndefinitely: halted(c), dailyTotal: c.dailyLimit, activeHours: c.activeHours },
+    { policy: ctx.policy, timeZone: c.timezone, seed: c.id, now, reservations: ctx.slots, pausedUntil, after, pausedIndefinitely: halted(c), dailyTotal: c.dailyLimit, activeHours: c.activeHours },
     action
   )
 }
@@ -181,17 +190,20 @@ export async function enqueue(
       [c.id, req.to]
     )
     if (hidden?.yes) throw new OutboxError("forbidden", "the account holder ignored this chat in Parley, so agents can't send, react or delete in it")
-    const [known] = await sql<{ yes: boolean }>(
+    // A message queued behind one that's already going to this chat (an opener included) is part of that
+    // conversation, so it's paced as a reply and goes after it.
+    const [known] = await sql<{ yes: boolean; after: Date | null }>(
       `select exists (select 1 from parley.chat where connection_id = $1 and id = $2 and last_message_at is not null)
-           or exists (select 1 from parley.outbound where connection_id = $1 and chat_id = $2 and status = 'sent') as yes`,
-      [c.id, req.to]
+           or exists (select 1 from parley.outbound where connection_id = $1 and chat_id = $2 and status = any($3)) as yes,
+              (select max(scheduled_for) from parley.outbound where connection_id = $1 and chat_id = $2 and status = 'scheduled') as after`,
+      [c.id, req.to, SLOT_STATUSES]
     )
     // A reaction or a deletion is a reply in a conversation that's already going, whatever was asked.
     const kind = req.reactTo || req.unsend ? "message" : req.kind ?? defaultAction(c.channel, Boolean(known?.yes))
     if (!policyFor(c.channel).actions[kind]) throw new OutboxError("action_unsupported", `${c.channel} can't send a ${kind}`)
 
     const ctx = pacingContext(c, await loadSlots(sql, c.id, now))
-    const r = plan(c, ctx, kind, now, req.notBefore)
+    const r = plan(c, ctx, kind, now, req.notBefore, known?.after)
     if (!r.ok && r.reason !== "paused") throw new OutboxError(r.reason, r.reason === "no_capacity" ? `no capacity left for a ${kind} on this connection` : `${c.channel} can't send a ${kind}`)
     if (req.unsendBefore && r.ok && r.at > req.unsendBefore) {
       throw new OutboxError("too_late", `the account's next send slot (${r.at.toISOString()}) is past ${c.channel}'s limit for deleting that message (${req.unsendBefore.toISOString()})`)
@@ -213,17 +225,22 @@ export async function enqueue(
  * its clock: a send finishing, a pause, a resume, the connection coming back online.
  */
 export async function replan(sql: Sql, c: PacedConnection, now: Date): Promise<void> {
-  const queued = await sql<{ id: string; kind: ActionKind; not_before: Date | null }>(
-    `select id, kind, not_before from parley.outbound where connection_id = $1 and status = 'scheduled'
+  const queued = await sql<{ id: string; chat_id: string; kind: ActionKind; not_before: Date | null }>(
+    `select id, chat_id, kind, not_before from parley.outbound where connection_id = $1 and status = 'scheduled'
       order by scheduled_for asc nulls last, created_at asc`,
     [c.id]
   )
   if (!queued.length) return
   const ctx = pacingContext(c, await loadSlots(sql, c.id, now, { settledOnly: true }))
+  // Each chat's messages stay in the order they were queued, whatever their kinds.
+  const lastInChat = new Map<string, Date>()
   for (const m of queued) {
-    const r = plan(c, ctx, m.kind, now, m.not_before)
+    const r = plan(c, ctx, m.kind, now, m.not_before, lastInChat.get(m.chat_id))
     await sql(`update parley.outbound set scheduled_for = $2 where id = $1`, [m.id, r.ok ? r.at : null])
-    if (r.ok) ctx.slots.push({ at: r.at, action: m.kind })
+    if (r.ok) {
+      ctx.slots.push({ at: r.at, action: m.kind })
+      lastInChat.set(m.chat_id, r.at)
+    }
   }
 }
 
@@ -413,24 +430,30 @@ export async function resume(tx: Transactor, accountId: string, connectionId: st
 export const MAX_DAILY_LIMIT = 1000
 /** Longest gap a person can set between two sends. */
 export const MAX_GAP_SECONDS = 3600
+/** Most new contacts a person can let a number open a conversation with per minute. */
+export const MAX_OPENERS_PER_MINUTE = 60
 
 /**
  * Set where the account appears to live (its active hours, when on, follow this time zone), how many messages it may
- * send a day, whether it keeps to active hours, and the gap between sends (`gapSeconds`: null for the channel's
- * default, left out to keep it). The queue is laid out again, so a lower limit pushes the overflow to tomorrow and a
+ * send a day, whether it keeps to active hours, the gap between sends (`gapSeconds`) and how many new contacts it may
+ * open a conversation with per minute (`openersPerMinute`); for those two, null is the channel's default and left out
+ * keeps it. The queue is laid out again, so a lower limit pushes the overflow to tomorrow and a
  * higher one pulls it in; turning active hours off pulls overnight sends in; a shorter gap pulls the queue closer.
  */
-export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined }, now: Date): Promise<void> {
+export async function setLocale(tx: Transactor, accountId: string, connectionId: string, locale: { timezone?: string | undefined; country?: string | undefined; dailyLimit?: number | undefined; activeHours?: boolean | undefined; gapSeconds?: number | null | undefined; openersPerMinute?: number | null | undefined }, now: Date): Promise<void> {
   const limit = locale.dailyLimit !== undefined && Number.isInteger(locale.dailyLimit) && locale.dailyLimit >= 1 && locale.dailyLimit <= MAX_DAILY_LIMIT ? locale.dailyLimit : null
   const g = locale.gapSeconds
   const setGap = g === null || (Number.isInteger(g) && g! >= 0 && g! <= MAX_GAP_SECONDS)
+  const o = locale.openersPerMinute
+  const setOpeners = o === null || (Number.isInteger(o) && o! >= 1 && o! <= MAX_OPENERS_PER_MINUTE)
   await tx.transaction(async (sql) => {
     await owned(sql, accountId, connectionId, true)
     const [r] = await sql<ConnRow>(
       `update parley.connection set timezone = coalesce($2, timezone), country = coalesce($3, country), daily_limit = coalesce($4, daily_limit), active_hours = coalesce($5, active_hours),
-             gap_seconds = case when $6 then $7::int else gap_seconds end, updated_at = now()
+             gap_seconds = case when $6 then $7::int else gap_seconds end,
+             openers_per_minute = case when $8 then $9::int else openers_per_minute end, updated_at = now()
         where id = $1 returning ${CONN_COLUMNS}`,
-      [connectionId, locale.timezone ?? null, locale.country ?? null, limit, typeof locale.activeHours === "boolean" ? locale.activeHours : null, setGap, setGap ? g : null]
+      [connectionId, locale.timezone ?? null, locale.country ?? null, limit, typeof locale.activeHours === "boolean" ? locale.activeHours : null, setGap, setGap ? g : null, setOpeners, setOpeners ? o : null]
     )
     await replan(sql, conn(r!), now)
   })

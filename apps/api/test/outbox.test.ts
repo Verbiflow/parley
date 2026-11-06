@@ -31,15 +31,16 @@ test("a message to someone new goes out now; the next opener waits its spacing; 
   assert.deepEqual(fake.simulator.sent(connectionId).map((s) => s.to), ["+15550101"])
   assert.equal((await getOutbound(sql, accountId, first.message.id)).status, "sent")
 
-  const second = await sessions.enqueue(accountId, connectionId, { to: "+15550102", text: "hello" }, at(1))
-  const wait = (Date.parse(second.message.scheduledFor!) - T0.getTime()) / 60_000
-  assert.ok(wait >= 10, `opener spaced ${wait} min`)
+  // Two new contacts a minute by default.
+  const second = await sessions.enqueue(accountId, connectionId, { to: "+15550102", text: "hello" }, T0)
+  const wait = (Date.parse(second.message.scheduledFor!) - T0.getTime()) / 1000
+  assert.ok(wait >= 30, `opener spaced ${wait}s`)
   assert.ok(second.message.waits.includes("action_spacing"))
-  await sessions.dispatchDue(at(2))
+  await sessions.dispatchDue(new Date(T0.getTime() + 10_000))
   assert.equal(fake.simulator.sent(connectionId).length, 1)
 
   // Someone who already talked to us: a reply, not an opener, so it isn't stuck behind the spacing.
-  const reply = await sessions.enqueue(accountId, connectionId, { to: "+15550101", text: "following up" }, at(3))
+  const reply = await sessions.enqueue(accountId, connectionId, { to: "+15550101", text: "following up" }, T0)
   assert.equal(reply.message.kind, "message")
   assert.ok(Date.parse(reply.message.scheduledFor!) < Date.parse(second.message.scheduledFor!))
 
@@ -171,7 +172,7 @@ test("the gap between sends is the number's to set; empty goes back to the chann
     return (Date.parse(b.message.scheduledFor!) - Date.parse(a.message.scheduledFor!)) / 1000
   }
   const before = await gapOf()
-  assert.ok(before >= 30 && before <= 150, `default gap ${before}s`)
+  assert.ok(before >= 1 && before <= 3, `default gap ${before}s`)
 
   await sessions.setLocale(accountId, connectionId, { gapSeconds: 5 }, T0)
   // The queue is laid out again on the new gap.
@@ -188,7 +189,51 @@ test("the gap between sends is the number's to set; empty goes back to the chann
   await sessions.setLocale(accountId, connectionId, { gapSeconds: null }, T0)
   const restored = await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })
   const spread = restored.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
-  for (let i = 1; i < spread.length; i++) assert.ok((spread[i]! - spread[i - 1]!) / 1000 >= 30)
+  for (let i = 1; i < spread.length; i++) assert.ok((spread[i]! - spread[i - 1]!) / 1000 >= 1)
+})
+
+test("messages queued behind an opener to the same person are follow-ups: a few seconds apart, and after it", async () => {
+  const { accountId, connectionId } = await linked("followups@parley.test")
+  const msgs = []
+  for (const text of ["1", "2", "3", "4"]) msgs.push((await sessions.enqueue(accountId, connectionId, { to: "+15553001", text }, T0)).message)
+  assert.deepEqual(msgs.map((m) => m.kind), ["first_message", "message", "message", "message"])
+  const times = msgs.map((m) => Date.parse(m.scheduledFor!))
+  for (let i = 1; i < times.length; i++) {
+    const gap = (times[i]! - times[i - 1]!) / 1000
+    assert.ok(gap >= 1 && gap <= 3, `follow-up ${i} ${gap}s after the one before`)
+  }
+
+  // Held back behind its opener: when the opener waits on another contact's spacing, its follow-ups wait with it.
+  const later = (await sessions.enqueue(accountId, connectionId, { to: "+15553002", text: "a" }, T0)).message
+  const followUp = (await sessions.enqueue(accountId, connectionId, { to: "+15553002", text: "b" }, T0)).message
+  assert.equal(followUp.kind, "message")
+  assert.ok(Date.parse(followUp.scheduledFor!) > Date.parse(later.scheduledFor!))
+
+  // Laying the queue out again keeps each chat in order.
+  await sessions.setLocale(accountId, connectionId, { gapSeconds: 5 }, T0)
+  const after = new Map((await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })).map((m) => [m.id, Date.parse(m.scheduledFor!)]))
+  assert.ok(after.get(followUp.id)! > after.get(later.id)!)
+  for (let i = 1; i < msgs.length; i++) assert.ok(after.get(msgs[i]!.id)! > after.get(msgs[i - 1]!.id)!)
+})
+
+test("new contacts per minute is the number's to set; empty goes back to the channel's default", async () => {
+  const { accountId, connectionId } = await linked("openers@parley.test")
+  const spacing = async () => {
+    const queued = (await listOutbound(sql, accountId, { connectionId, status: "scheduled", limit: 50 })).filter((m) => m.kind === "first_message")
+    const t = queued.map((m) => Date.parse(m.scheduledFor!)).sort((x, y) => x - y)
+    return t.slice(1).map((x, i) => (x - t[i]!) / 1000)
+  }
+  for (const to of ["+15554001", "+15554002", "+15554003"]) await sessions.enqueue(accountId, connectionId, { to, text: "hi" }, T0)
+  for (const s of await spacing()) assert.ok(s >= 30 && s <= 33, `default opener spacing ${s}s`)
+
+  await sessions.setLocale(accountId, connectionId, { openersPerMinute: 1 }, T0)
+  for (const s of await spacing()) assert.ok(s >= 60 && s <= 63, `one a minute ${s}s`)
+  // Saving other settings leaves it alone.
+  await sessions.setLocale(accountId, connectionId, { dailyLimit: 200 }, T0)
+  for (const s of await spacing()) assert.ok(s >= 60 && s <= 63, `still one a minute ${s}s`)
+
+  await sessions.setLocale(accountId, connectionId, { openersPerMinute: null }, T0)
+  for (const s of await spacing()) assert.ok(s >= 30 && s <= 33, `back to default ${s}s`)
 })
 
 test("typing is per message: off unless asked, and handed to the channel with the send", async () => {

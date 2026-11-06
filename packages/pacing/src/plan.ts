@@ -18,6 +18,8 @@ export type PlanInput = {
   /** Every slot already taken: at least the trailing seven days and everything in the future. */
   reservations: Slot[]
   pausedUntil?: Date | null
+  /** Go strictly after this (the last message already queued to the same chat), so a chat's messages keep their order. */
+  after?: Date | null
   /** Paused until a person acts (a checkpoint, a ban, a relink). */
   pausedIndefinitely?: boolean
   /** Today's warmup allowance per action; the policy's daily limit when absent. */
@@ -70,6 +72,7 @@ export function planNext(input: PlanInput, action: ActionKind): PlanResult {
   const gapAfter = (ms: number) => between(policy.gapSeconds.min, policy.gapSeconds.max, seeded(seed, "gap", ms)) * 1000
 
   if (input.pausedUntil) pushTo(input.pausedUntil.getTime(), "paused")
+  if (input.after) pushTo(input.after.getTime() + 1, "queued")
   const lastSame = sameKind.at(-1)
   if (lastSame) {
     const ms = lastSame.at.getTime()

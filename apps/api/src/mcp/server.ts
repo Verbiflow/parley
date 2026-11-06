@@ -823,7 +823,7 @@ export function buildMcpServer(ctx: AppContext, origin?: string): McpServer {
     {
       title: "Set the gap between sends",
       description:
-        `Set how long a connection waits between two sends: at least \`gap_seconds\`, up to twice that at random so it doesn't look scripted. 0 sends back to back; null goes back to the channel's default (WhatsApp 30–150s). Messages already queued are rescheduled on the new gap. A short gap makes the account look less human and raises the chance the platform restricts it, so change it only when the person asks. Openers to new contacts, breaks after bursts and the daily limit still apply.`,
+        `Set how long a connection waits between two sends: at least \`gap_seconds\`, up to twice that at random so it doesn't look scripted. 0 sends back to back; null goes back to the channel's default (WhatsApp 1–3s). Messages already queued are rescheduled on the new gap. A short gap makes the account look less human and raises the chance the platform restricts it, so change it only when the person asks. Openers to new contacts, breaks after bursts and the daily limit still apply.`,
       inputSchema: {
         connection_id: z.string().optional().describe(ACCOUNT_REF),
         gap_seconds: z.number().int().min(0).max(MAX_GAP_SECONDS).nullable().describe(`Least seconds between two sends, 0–${MAX_GAP_SECONDS}; null for the channel's default.`),
