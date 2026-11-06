@@ -112,6 +112,10 @@ export function makeApp(ctx: AppContext): Hono {
     }
   })
 
+  // Glama's connector-ownership check: a public, unauthenticated file under the MCP endpoint's path.
+  app.get("/mcp/.well-known/glama.json", (c) =>
+    c.json({ $schema: "https://glama.ai/mcp/schemas/connector.json", claim: "glama_claim_J5bEhtQOBDtyWDYXbzCMYd1YPKVOelNC" }))
+
   app.all("/mcp", async (c) => {
     const base = ctx.config.publicUrl ?? new URL(c.req.url).origin
     const challenge = `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`
