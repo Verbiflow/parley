@@ -3,7 +3,7 @@
 Give your AI agent WhatsApp. Parley is an MCP server that lets Claude, Cursor, ChatGPT or any MCP client read your chats and send messages from your own number, at a human pace, with every message on record.
 
 [![Verbiflow/parley MCP server](https://glama.ai/mcp/servers/Verbiflow/parley/badges/score.svg)](https://glama.ai/mcp/servers/Verbiflow/parley)
-[![License: ELv2](https://img.shields.io/badge/license-Elastic--2.0-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [Website](https://itsparley.com) · [Get started](https://app.itsparley.com) · [Run it yourself](DEVELOPING.md)
 
