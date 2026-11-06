@@ -52,6 +52,14 @@ test("discovery metadata advertises the AS and protected resource", async () => 
   assert.deepEqual(pr.authorization_servers, [base])
 })
 
+test("the Glama connector claim is served publicly under /mcp", async () => {
+  const res = await fetch(`${base}/mcp/.well-known/glama.json`, { redirect: "manual" })
+  assert.equal(res.status, 200)
+  const body = await res.json() as { $schema: string; claim: string }
+  assert.equal(body.$schema, "https://glama.ai/mcp/schemas/connector.json")
+  assert.equal(body.claim, "glama_claim_J5bEhtQOBDtyWDYXbzCMYd1YPKVOelNC")
+})
+
 test("authorization-code + PKCE issues a bearer token; refresh rotates it", async () => {
   const { refreshToken, clientId } = await signIn("alice@parley.test")
   const refreshed = await fetch(`${base}/oauth/token`, {
