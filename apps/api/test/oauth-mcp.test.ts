@@ -5,7 +5,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { hashSecret, newSecret } from "@parley/auth"
 import { testServer } from "./support.ts"
 
-const { base } = await testServer()
+const INSPECTOR = "inspector-token-for-tests-0123456789abcdef"
+const { base } = await testServer(undefined, { MCP_INSPECTOR_TOKEN: INSPECTOR })
 
 const REDIRECT = "http://127.0.0.1:9999/callback"
 
@@ -122,4 +123,38 @@ test("MCP: a request with no bearer token is refused with WWW-Authenticate", asy
   })
   assert.equal(res.status, 401)
   assert.match(res.headers.get("www-authenticate") ?? "", /resource_metadata=/)
+})
+
+test("MCP: the inspector token lists tools without signing in", async () => {
+  const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${INSPECTOR}` } },
+  })
+  const client = new Client({ name: "glama-check", version: "0.0.0" })
+  await client.connect(transport)
+  try {
+    const tools = await client.listTools()
+    assert.ok(tools.tools.some((t) => t.name === "list_connections"))
+  } finally {
+    await transport.close()
+  }
+})
+
+test("MCP: the inspector token can't call a tool", async () => {
+  for (const body of [
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_connections", arguments: {} } },
+    [{ jsonrpc: "2.0", id: 1, method: "tools/list" }, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_connections", arguments: {} } }],
+  ]) {
+    const res = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${INSPECTOR}` },
+      body: JSON.stringify(body),
+    })
+    assert.equal(res.status, 403)
+  }
+  const wrong = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${INSPECTOR}x` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  })
+  assert.equal(wrong.status, 401)
 })

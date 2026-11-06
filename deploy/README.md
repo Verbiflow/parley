@@ -83,7 +83,8 @@ cd apps/api && npx wrangler tail
 | Artifacts | `s3://parley-prod-artifacts-535002857030/releases/` |
 
 The Worker's secrets (`wrangler secret put`) are copies of the same values in `parley/prod/app`: `SIGN_IN_KEY`,
-`CONNECTION_SIGNING_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `SESSIONS_SECRET`. Rotate in both places.
+`CONNECTION_SIGNING_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `SESSIONS_SECRET`. Rotate in both places. Optional: `MCP_INSPECTOR_TOKEN` (32+ chars), the
+static bearer Glama's health check sends from its connector Test Profile. It can only initialize and list tools.
 
 ## Scaling notes
 
