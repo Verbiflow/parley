@@ -21,6 +21,7 @@ test("two numbers on one account: agents pick one by number, or let the chat dec
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => Boolean(s.link))
     fake.simulator.completeLink(id, handle)
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => s.status === "connected")
+    await ctx.sessions.settled()
     return id
   }
   const work = await link(WORK)
@@ -78,6 +79,7 @@ test("linking a number that is already linked replaces the old link and keeps wh
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => Boolean(s.link))
     fake.simulator.completeLink(id, handle)
     await waitUntil(() => ctx.sessions.status(account.id, id), (s) => s.status === "connected")
+    await ctx.sessions.settled()
     return id
   }
   const first = await link("6591363557:7@s.whatsapp.net")

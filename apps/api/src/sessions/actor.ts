@@ -184,6 +184,7 @@ export class Sessions {
         if (now.getTime() - this.#prunedAt > WEBHOOK_PRUNE_MS) {
           this.#prunedAt = now.getTime()
           await pruneDeliveries(this.ctx.sql, now)
+          await this.webhooks.backfillUrls(this.ctx.sql)
         }
         return sent
       } finally {
@@ -191,6 +192,11 @@ export class Sessions {
       }
     })()
     return this.#delivering
+  }
+
+  /** Once every connection has worked through the events it's been handed so far. For tests: a status can flip before the event that flipped it is done. */
+  async settled(): Promise<void> {
+    await Promise.all([...this.#live.values()].map((entry) => entry.queue))
   }
 
   async stop(): Promise<void> {

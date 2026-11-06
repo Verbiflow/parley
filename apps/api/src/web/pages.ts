@@ -4,7 +4,7 @@ import type { Connection } from "../sessions/store.ts"
 import type { ChatRow } from "../sessions/chats.ts"
 import { MAX_GAP_SECONDS, UNSEND_WINDOW_MS, type ActivityEntry, type ActivityPage, type ActivityStatus, type DailyUsage, type Outbound } from "../sessions/outbox.ts"
 import type { Exit, Provider } from "../sessions/exits.ts"
-import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook } from "../sessions/webhooks.ts"
+import { EVENT_TEXT, MAX_ATTEMPTS, MAX_WEBHOOK_HEADERS, MAX_WEBHOOKS, WEBHOOK_EVENTS, type Delivery, type Webhook, type WebhookHeader } from "../sessions/webhooks.ts"
 import {
   CHANNELS, LOGO, agentMark, agentRow, ago, appShell, avatar, bar, channelMark, channelName, profileMark, clock, copyLine, day, empty, esc, glyph, icon,
   foldSection, orb, pageHead, pmark, section, shell, SHOW_NETWORK, soonMark, soonTip, stamp, status, until, type Tone, type Viewer,
@@ -672,6 +672,9 @@ const WEBHOOKS_CSS = `
 .plrow td{padding-top:4px}.plrow .term{margin:0;max-height:420px;overflow:auto}.plmeta{font-size:12px;margin-bottom:8px}.plmeta .mono{font-family:var(--mono)}
 .tbl tbody tr.plrow:hover{background:none}.tbl tr.dlrow{cursor:pointer}.tbl tr.dlrow[aria-expanded="true"]{background:var(--hover)}.tbl tr.dlrow[aria-expanded="true"] td{border-bottom-color:transparent}
 .health{font-size:12px;color:var(--faint);display:block;margin-top:6px;white-space:normal;max-width:260px}
+.hdrs{display:flex;flex-direction:column;gap:8px}.hdrs > span{font-size:12.5px;color:var(--muted)}.hdrs > small{font-size:12px;color:var(--faint)}
+.hdr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:8px}.hdr .input{height:34px}
+.hdl{font-family:var(--mono);font-size:11px;color:var(--text-2)}
 `
 
 const shortUrl = (u: string) => {
@@ -699,6 +702,25 @@ function deliveryResult(d: Delivery): string {
 const eventPicker = (on: readonly string[]) => `<div class="evpick">${WEBHOOK_EVENTS.map((e) =>
   `<label><input type="checkbox" name="events" value="${e}"${on.includes(e) ? " checked" : ""}><span><b>${e}</b><small>${esc(EVENT_TEXT[e])}</small></span></label>`).join("")}</div>`
 
+/**
+ * Rows for the headers a webhook sends of its own: name and value. Editing, a header it has shows its name with the
+ * value left blank (blank keeps it; clearing the name removes it), and a couple of empty rows add more.
+ */
+function headerFields(has: readonly WebhookHeader[], editing: boolean): string {
+  const row = (name: string, namePh: string, valuePh: string) => `<div class="hdr">
+      <input class="input mono" name="header_name" value="${esc(name)}" placeholder="${esc(namePh)}" maxlength="100" autocomplete="off" spellcheck="false" aria-label="Header name">
+      <input class="input mono" name="header_value" placeholder="${esc(valuePh)}" maxlength="2000" autocomplete="off" spellcheck="false" aria-label="Header value">
+    </div>`
+  const kept = has.map((h) => row(h.name, "", h.hint ? `unchanged (…${h.hint})` : "unchanged"))
+  // Only the first empty row carries the example, so the rest don't read as more of the same header.
+  const blank = Array.from({ length: Math.max(1, Math.min(2, MAX_WEBHOOK_HEADERS - has.length)) }, (_, i) =>
+    i === 0 && !has.length ? row("", "Authorization", "Bearer your-key") : row("", "Header", "Value"))
+  return `<div class="hdrs"><span>Headers <span class="faint">(optional)</span></span>
+      ${[...kept, ...blank].join("")}
+      <small>${editing && has.length ? "Leave a value blank to keep it; clear a name to remove that header. " : ""}For a receiver that wants a key of its own on every request. Sent with Parley's signature, kept sealed, never shown in full again.</small>
+    </div>`
+}
+
 /** What the account page's webhooks section shows besides the list: a secret to show, an error, a notice. */
 export type WebhooksView = {
   webhooks: Webhook[]; deliveries: Delivery[]
@@ -720,12 +742,13 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
       `<form method="post" action="${at}/${esc(w.id)}/${action}"${confirm ? ` data-confirm="${esc(confirm)}"` : ""}><button class="${cls}" type="submit">${label}</button></form>`
     return `<tr>
       <td><div class="whk"><span class="u">${esc(w.url)}</span>${w.description ? `<small>${esc(w.description)}</small>` : ""}<div class="evs">${w.events.length === WEBHOOK_EVENTS.length ? `<span class="ev">all events</span>` : w.events.map((e) => `<span class="ev">${esc(e)}</span>`).join("")}</div>
-        <small>added ${day(w.createdAt)} · ${esc(w.createdBy)} · <span class="nw">secret …${esc(w.secretHint)}</span></small>
+        <small>added ${day(w.createdAt)} · ${esc(w.createdBy)} · <span class="nw">secret …${esc(w.secretHint)}</span>${w.headers.length ? ` · sends ${w.headers.map((h) => `<span class="hdl">${esc(h.name)}</span>${h.hint ? ` …${esc(h.hint)}` : ""}`).join(", ")}` : ""}</small>
         <details class="edit"><summary>edit</summary>
           <form method="post" action="${at}/${esc(w.id)}/update" class="addf" style="padding-top:0">
-            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" value="${esc(w.url)}" required></label>
+            <div class="fields"><label class="field"><span>URL</span><input class="input mono" name="url" placeholder="${esc(w.url)}" autocomplete="off" spellcheck="false"><small>Blank keeps it. Keys in it stay hidden.</small></label>
               <label class="field"><span>Description</span><input class="input" name="description" value="${esc(w.description ?? "")}" maxlength="200"></label></div>
             ${eventPicker(w.events)}
+            ${headerFields(w.headers, true)}
             <div><button class="btn line sm" type="submit">Save</button></div>
           </form>
         </details></div></td>
@@ -764,7 +787,7 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
   const revealed = opts.revealed && hooks.get(opts.revealed.id)
   const secretNote = revealed ? `<div class="note reveal"><div class="secret">
       <b>${opts.revealed!.fresh ? "Your signing secret" : "Signing secret"} for ${esc(shortUrl(revealed.url))}</b>
-      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request.</p>
+      <p>${opts.revealed!.fresh ? "Copy it into your receiver now. " : ""}Every request carries a <code>Parley-Signature</code> header made with it; check it before trusting a request. It's also signed the Standard Webhooks way (<code>webhook-signature</code>), so its libraries verify it with this secret.</p>
       ${copyLine(opts.revealed!.secret)}
     </div></div>` : ""
   const none = !opts.webhooks.length
@@ -772,10 +795,11 @@ function webhooksSection(connId: string, name: string, opts: WebhooksView): stri
   const addForm = opts.webhooks.length < MAX_WEBHOOKS ? `<details class="addwh"${none || opts.error ? " open" : ""}><summary class="btn ${none ? "" : "line "}sm">${icon("plus", 13)}${none ? "Configure a webhook" : "Add webhook"}</summary>
       <form method="post" action="${at}" class="addf">
         <div class="fields">
-          <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required></label>
+          <label class="field"><span>URL</span><input class="input mono" name="url" type="url" placeholder="https://example.com/parley/webhook" required autocomplete="off" spellcheck="false"><small>A key in it is fine: it's kept sealed and shown masked.</small></label>
           <label class="field"><span>Description</span><input class="input" name="description" placeholder="CRM sync" maxlength="200"></label>
         </div>
         ${eventPicker(WEBHOOK_EVENTS)}
+        ${headerFields([], false)}
         <div><button class="btn" type="submit">Add webhook</button></div>
       </form></details>` : ""
 

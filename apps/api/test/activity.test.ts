@@ -22,6 +22,7 @@ test("the activity log lists every send with the agent that asked, filters and s
   await waitUntil(() => ctx.sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => ctx.sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await ctx.sessions.settled()
 
   // Far-off slots keep these queued whatever the time of day.
   const later = { connection_id: connectionId, not_before: "2099-01-01T12:00:00Z" }

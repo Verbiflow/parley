@@ -26,6 +26,7 @@ async function linked(email: string) {
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await sessions.settled()
   return { accountId: account.id, connectionId }
 }
 
@@ -263,7 +264,7 @@ test("an ignore made under a private id carries to the number once they're match
   assert.equal(row!.synced, false)
   // And a message to that number later is kept privately, never shown.
   fake.simulator.deliver(connectionId, { threadId: "6599990000@s.whatsapp.net", from: "x", text: "nope" })
-  await new Promise((r) => setTimeout(r, 100))
+  await sessions.settled()
   const [{ n }] = await sql<{ n: string }>(`select count(*)::text as n from parley.message where connection_id = $1`, [connectionId])
   assert.equal(n, "1")
   assert.deepEqual(await sessions.inbox(accountId, { limit: 10 }), [])

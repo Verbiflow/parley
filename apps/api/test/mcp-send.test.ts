@@ -17,6 +17,7 @@ test("agents queue sends over MCP, see when they go out, and find chats waiting 
   await waitUntil(() => ctx.sessions.status(account.id, connectionId), (s) => Boolean(s.link))
   fake.simulator.completeLink(connectionId)
   await waitUntil(() => ctx.sessions.status(account.id, connectionId), (s) => s.status === "connected")
+  await ctx.sessions.settled()
   const [conn] = (await callTool(base, token, "list_connections")).result.connections
   assert.deepEqual([conn.timezone, conn.country], ["Europe/London", "GB"])
 
