@@ -1,0 +1,28 @@
+deploy/README.md
+  s_de76a5aa98ed79::t_6cc6289d7b7a51 86-87
+packages/auth/src/config.ts
+  s_de76a5aa98ed79::t_e5bdf20ec251ab 38-39,56-57,106
+apps/api/wrangler.jsonc
+  s_de76a5aa98ed79::t_4f24de539e8103 33
+apps/api/src/app.ts
+  s_de76a5aa98ed79::t_32a7358858681a 14-20
+  s_de76a5aa98ed79::t_b52cda316ae628 132-148
+apps/api/test/oauth-mcp.test.ts
+  s_de76a5aa98ed79::t_ce293830754493 8-9,127-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1395819cd583ec5f6c5f656111b1aa5ad18b9591",
+  "prompts": {},
+  "sessions": {
+    "s_de76a5aa98ed79": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "560a7d5e-a349-47fa-b40f-6685941b0bad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Rishi Mahadevan <rishimahadevan@gmail.com>"
+    }
+  }
+}
