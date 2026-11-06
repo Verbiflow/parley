@@ -1,34 +1,41 @@
-# Parley
+# Parley: WhatsApp MCP server for AI agents
 
-Messaging infrastructure for agents. Parley lets your agents text people from your own accounts, at a human pace, with every message on record.
+Give your AI agent WhatsApp. Parley is an MCP server that lets Claude, Cursor, ChatGPT or any MCP client read your chats and send messages from your own number, at a human pace, with every message on record.
+
+[![Verbiflow/parley MCP server](https://glama.ai/mcp/servers/Verbiflow/parley/badges/score.svg)](https://glama.ai/mcp/servers/Verbiflow/parley)
+[![License: ELv2](https://img.shields.io/badge/license-Elastic--2.0-blue)](LICENSE)
 
 [Website](https://itsparley.com) · [Get started](https://app.itsparley.com) · [Run it yourself](DEVELOPING.md)
 
-![Parley's landing page: an agent asks Claude to send a deck, Parley holds the message for a natural gap, then it arrives in the chat](.github/assets/hero.jpg)
+<p align="center">
+  <img src=".github/assets/demo.gif" width="320" alt="An agent is asked to find caterers for an offsite and WhatsApp them. The message arrives in the caterer's WhatsApp, sent from the user's own number.">
+</p>
 
-You link an account once, the same way you'd add a new device. Any agent that speaks MCP can then read your conversations, reply, react and reach out. Parley doesn't send at machine speed. It queues each message and sends it when you plausibly would: inside your local hours, with gaps between messages, and under daily limits that start low on a new account.
+## Set up in 30 seconds
+
+**1. Add the MCP server** (one line):
+
+```sh
+claude mcp add --transport http parley https://app.itsparley.com/mcp
+```
+
+Any client that supports remote MCP servers takes the same URL, `https://app.itsparley.com/mcp`. That includes Claude, ChatGPT and Codex. For Cursor, put this in `~/.cursor/mcp.json`:
+
+```json
+{ "mcpServers": { "parley": { "url": "https://app.itsparley.com/mcp" } } }
+```
+
+**2. Scan the QR code.** Sign in once when your client asks. Then on your phone, open WhatsApp → *Linked devices* → *Link a device* and scan the code at [app.itsparley.com](https://app.itsparley.com). Your phone keeps working as normal.
+
+**3. Ask.** "Send Maya the Q4 deck and ask if Thursday at 3 still works." The agent calls `send_message`, and Parley sends it at the next natural slot.
+
+## Why Parley
+
+You link an account once, the same way you'd add a new device. Any agent that speaks MCP can then read your conversations, reply, react and reach out. Parley doesn't send at machine speed. It queues each message and sends it when you plausibly would: inside your local hours, with gaps between messages, and under daily limits that start low on a new account. You can link several numbers and choose which chats agents can see.
 
 WhatsApp is live. iMessage, Slack, LinkedIn and Gmail are next. They will use the same MCP tools, so an agent you set up today keeps working as channels arrive.
 
 > Early development. The MCP tools are stable enough to build on, but expect changes.
-
-## How it works
-
-1. **Connect an account.** Sign in at [app.itsparley.com](https://app.itsparley.com) and link WhatsApp by scanning a QR code from *Linked devices*. Your phone keeps working as normal. You can link several numbers and choose which chats agents can see.
-2. **Add Parley to your agent.** Paste `https://app.itsparley.com/mcp` into any client that supports remote MCP servers, then sign in once.
-3. **Ask.** "Send Maya the Q4 deck and ask if Thursday at 3 still works." The agent calls `send_message`, and Parley sends the message at the next natural slot.
-
-```sh
-# Claude Code
-claude mcp add --transport http parley https://app.itsparley.com/mcp
-```
-
-```json
-// Cursor: ~/.cursor/mcp.json
-{ "mcpServers": { "parley": { "url": "https://app.itsparley.com/mcp" } } }
-```
-
-Other clients that support remote MCP servers, such as Claude, ChatGPT and Codex, take the same URL.
 
 ## What your agent gets
 
@@ -91,3 +98,7 @@ In production, the app runs as a Cloudflare Worker at app.itsparley.com. The liv
 [Elastic License 2.0](LICENSE) (SPDX: `Elastic-2.0`). You can read, run and modify the code, and self-host it. You can't offer Parley to others as a hosted or managed service.
 
 Parley isn't affiliated with Meta, Apple, Google, Slack or LinkedIn.
+
+---
+
+If Parley is useful to you, a ⭐ helps other people building agents find it.
