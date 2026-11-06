@@ -35,6 +35,8 @@ const schema = z.object({
   PUBLIC_URL: z.string().url().optional(),
   WORKOS_CLIENT_ID: z.string().regex(/^client_\w+$/, "expected a WorkOS client ID, client_…").optional(),
   WORKOS_API_KEY: z.string().regex(/^sk_\w+$/, "expected a WorkOS API key, sk_…").optional(),
+  /** A static bearer for directory health checkers (Glama): it can only initialize and list tools, never call one. */
+  MCP_INSPECTOR_TOKEN: z.string().min(32, "expected at least 32 characters").optional(),
 })
 
 export type IdentityConfig = {
@@ -51,6 +53,8 @@ export type IdentityConfig = {
   tokenSeconds: number | undefined
   browserSessionSeconds: number
   workos: { clientId: string; apiKey: string } | undefined
+  /** Lets an unauthenticated-by-design checker see the tool list (see `MCP_INSPECTOR_TOKEN`). */
+  mcpInspectorToken: string | undefined
   /** A test sign-in that just asks for a name and email: local only. */
   localProvider: boolean
 }
@@ -99,6 +103,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): IdentityConfig
     tokenSeconds: s.CONNECTION_TOKEN_SECONDS,
     browserSessionSeconds: s.BROWSER_SESSION_SECONDS,
     workos: clientId && apiKey ? { clientId, apiKey } : undefined,
+    mcpInspectorToken: s.MCP_INSPECTOR_TOKEN,
     localProvider: local,
   }
 }

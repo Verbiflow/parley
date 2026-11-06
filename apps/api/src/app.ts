@@ -11,6 +11,13 @@ import { ConnectError } from "./sessions/actor.ts"
 import { isSessionEnded, recordAgentUse } from "./oauth/store.ts"
 import { LIMITS } from "./ratelimit.ts"
 import { verifyMediaLink } from "./media-link.ts"
+import { createHash, timingSafeEqual } from "node:crypto"
+
+/** What the inspector token may ask the MCP server: its description, never an action. */
+const INSPECTOR_METHODS = new Set(["initialize", "notifications/initialized", "ping", "tools/list", "prompts/list", "resources/list", "resources/templates/list"])
+
+const sameSecret = (given: string, expected: string) =>
+  timingSafeEqual(createHash("sha256").update(given).digest(), createHash("sha256").update(expected).digest())
 
 /**
  * The caller's address. Behind Cloudflare (production) that's `cf-connecting-ip`, which Cloudflare sets itself — the
@@ -121,6 +128,23 @@ export function makeApp(ctx: AppContext): Hono {
     const challenge = `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`
     const token = c.req.header("authorization")?.match(/^Bearer (.+)$/i)?.[1]
     if (!token) return c.json({ error: "unauthorized" }, 401, { "WWW-Authenticate": challenge })
+
+    // A directory's health checker (Glama) can't sign in, and user access tokens expire hourly, so it gets a static
+    // token that only sees the server's description: initialize, ping and the tool list. No principal, no tool calls.
+    if (ctx.config.mcpInspectorToken && sameSecret(token, ctx.config.mcpInspectorToken)) {
+      if (c.req.method !== "POST") return c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" })
+      const body = await c.req.raw.clone().json().catch(() => undefined)
+      const messages = Array.isArray(body) ? body : [body]
+      if (!messages.length || !messages.every((m) => typeof m?.method === "string" && INSPECTOR_METHODS.has(m.method))) {
+        return c.json({ error: "insufficient_scope", error_description: "the inspector token can only initialize and list tools" }, 403)
+      }
+      const wait = await ctx.limiter.hit("mcp:inspector", LIMITS.mcp.limit, LIMITS.mcp.windowSeconds)
+      if (wait) return tooMany(c, wait)
+      const server = buildMcpServer(ctx, base)
+      const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+      await server.connect(transport)
+      return transport.handleRequest(c.req.raw, { authInfo: { token: "inspector", clientId: "inspector", scopes: [], extra: {} } })
+    }
 
     let userId: string
     let sessionId: string

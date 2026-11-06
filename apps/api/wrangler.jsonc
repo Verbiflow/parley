@@ -30,5 +30,5 @@
     { "name": "RL_SIGNIN", "namespace_id": "7002", "simple": { "limit": 20, "period": 60 } },
     { "name": "RL_DASHBOARD", "namespace_id": "7003", "simple": { "limit": 60, "period": 60 } }
   ]
-  // Secrets (wrangler secret put): SIGN_IN_KEY, CONNECTION_SIGNING_KEY, WORKOS_CLIENT_ID, WORKOS_API_KEY, SESSIONS_SECRET
+  // Secrets (wrangler secret put): SIGN_IN_KEY, CONNECTION_SIGNING_KEY, WORKOS_CLIENT_ID, WORKOS_API_KEY, SESSIONS_SECRET, MCP_INSPECTOR_TOKEN (optional: Glama's health check)
 }
