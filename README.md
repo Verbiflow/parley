@@ -88,6 +88,6 @@ In production, the app runs as a Cloudflare Worker at app.itsparley.com. The liv
 
 ## License
 
-[Elastic License 2.0](LICENSE) (SPDX: `Elastic-2.0`). You can read, run and modify the code, and self-host it. You can't offer Parley to others as a hosted or managed service.
+[MIT](LICENSE).
 
 Parley isn't affiliated with Meta, Apple, Google, Slack or LinkedIn.
