@@ -8,7 +8,7 @@ Give your AI agent WhatsApp. Parley is an MCP server that lets Claude, Cursor, C
 [Website](https://itsparley.com) · [Get started](https://app.itsparley.com) · [Run it yourself](DEVELOPING.md)
 
 <p align="center">
-  <img src=".github/assets/demo.gif" width="320" alt="An agent is asked to find caterers for an offsite and WhatsApp them. The message arrives in the caterer's WhatsApp, sent from the user's own number.">
+  <img src=".github/assets/demo.webp" width="100%" alt="You ask your agent to find a caterer for an 80-person offsite and WhatsApp them for a quote. The agent picks Harbor Table, Parley holds the send for a natural moment, and the message arrives from your own number. The caterer replies with a price, and the agent reports back and asks whether to book.">
 </p>
 
 ## Set up in 30 seconds
